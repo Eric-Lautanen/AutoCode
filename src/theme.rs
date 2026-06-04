@@ -44,7 +44,6 @@ impl Palette {
     pub const TAB_ACCENT: Color32 = Color32::from_rgb(220, 140, 50);
     pub const ERROR: Color32 = Color32::from_rgb(210, 80, 80);
     pub const PURPLE: Color32 = Color32::from_rgb(160, 120, 220);
-
 }
 
 // -- apply() -- call once from AutocodeApp::new() -------------------------------

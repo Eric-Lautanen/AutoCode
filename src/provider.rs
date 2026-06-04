@@ -10,7 +10,7 @@ use std::{
     io::{BufRead, BufReader, Read, Write},
     net::TcpStream,
     sync::{
-        Arc,
+        Arc, OnceLock,
         mpsc::{self, Receiver, Sender},
     },
     time::Duration,
@@ -22,7 +22,13 @@ static COOKIE_JAR: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
 
 /// Returns the Cookie header value for a given host, or None if no cookie is stored.
 fn cookie_header(host: &str) -> Option<String> {
-    let jar = COOKIE_JAR.lock().ok()?;
+    let jar = match COOKIE_JAR.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            COOKIE_JAR.clear_poison();
+            poisoned.into_inner()
+        }
+    };
     let map = jar.as_ref()?;
     let cookie = map.get(host)?;
     debug_log!("provider: sending cookie for {}: {}", host, cookie);
@@ -61,9 +67,93 @@ fn store_cookies(host: &str, buffer: &[u8]) {
         return;
     }
 
-    if let Ok(mut jar) = COOKIE_JAR.lock() {
-        let map = jar.get_or_insert_with(HashMap::new);
-        map.insert(host.to_string(), new_cookies.join("; "));
+    let mut jar = match COOKIE_JAR.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            COOKIE_JAR.clear_poison();
+            poisoned.into_inner()
+        }
+    };
+    let map = jar.get_or_insert_with(HashMap::new);
+    map.insert(host.to_string(), new_cookies.join("; "));
+}
+
+use std::io;
+
+/// Std-only HTTP chunked-transfer decoder implementing `std::io::Read`.
+/// Wraps any `Read` and yields the decoded body bytes on-the-fly.
+struct ChunkedReader<R: Read> {
+    inner: R,
+    buf: Vec<u8>,
+    pos: usize,
+    ended: bool,
+}
+
+impl<R: Read> ChunkedReader<R> {
+    fn new(inner: R) -> Self {
+        Self {
+            inner,
+            buf: Vec::new(),
+            pos: 0,
+            ended: false,
+        }
+    }
+}
+
+impl<R: Read> Read for ChunkedReader<R> {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        if self.ended {
+            return Ok(0);
+        }
+        if self.pos < self.buf.len() {
+            let n = (self.buf.len() - self.pos).min(out.len());
+            out[..n].copy_from_slice(&self.buf[self.pos..self.pos + n]);
+            self.pos += n;
+            return Ok(n);
+        }
+        self.buf.clear();
+        self.pos = 0;
+
+        // Read chunk size line until \n
+        let mut size_line = Vec::new();
+        loop {
+            let mut b = [0u8; 1];
+            match self.inner.read_exact(&mut b) {
+                Ok(()) => {
+                    if b[0] == b'\n' {
+                        break;
+                    }
+                    if b[0] != b'\r' {
+                        size_line.push(b[0]);
+                    }
+                }
+                Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                    self.ended = true;
+                    return Ok(0);
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        let size_str = std::str::from_utf8(&size_line)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "chunk size"))?;
+        let size = usize::from_str_radix(size_str.trim(), 16)
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "chunk size"))?;
+        if size == 0 {
+            let mut trailing = [0u8; 2];
+            let _ = self.inner.read_exact(&mut trailing);
+            self.ended = true;
+            return Ok(0);
+        }
+        self.buf.resize(size, 0);
+        self.inner.read_exact(&mut self.buf)?;
+        self.pos = 0;
+        let mut trailing = [0u8; 2];
+        self.inner.read_exact(&mut trailing)?;
+
+        let n = size.min(out.len());
+        out[..n].copy_from_slice(&self.buf[..n]);
+        self.pos = n;
+        Ok(n)
     }
 }
 
@@ -572,6 +662,21 @@ fn tool_definitions() -> serde_json::Value {
     ])
 }
 
+fn tls_config() -> Arc<rustls::ClientConfig> {
+    static CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
+    CONFIG
+        .get_or_init(|| {
+            let root_store =
+                rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+            Arc::new(
+                rustls::ClientConfig::builder()
+                    .with_root_certificates(root_store)
+                    .with_no_client_auth(),
+            )
+        })
+        .clone()
+}
+
 // -- Client --------------------------------------------------------------------
 
 pub struct ProviderClient;
@@ -677,68 +782,98 @@ fn run_request(
     }
 }
 
+#[derive(serde::Serialize)]
+struct ReqMsg<'a> {
+    role: &'a str,
+    content: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_call_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_calls: Option<&'a serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_content: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache_control: Option<serde_json::Value>,
+}
+
+#[derive(serde::Serialize)]
+struct RequestBody<'a> {
+    model: &'a str,
+    messages: Vec<ReqMsg<'a>>,
+    temperature: f32,
+    max_tokens: u32,
+    stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<serde_json::Value>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        rename = "parallel_tool_calls"
+    )]
+    parallel_tool_calls: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<&'a str>,
+}
+
 fn build_request_body(
     req: &CompletionRequest,
     supports_cache: bool,
 ) -> Result<String, serde_json::Error> {
-    let messages: Vec<serde_json::Value> = req
+    let messages: Vec<ReqMsg> = req
         .messages
         .iter()
-        .map(|m| {
-            let mut obj = serde_json::json!({
-                "role": m.role,
-                "content": m.content
-            });
-            if let Some(id) = &m.tool_call_id {
-                obj["tool_call_id"] = serde_json::Value::String(id.clone());
-            }
-            if let Some(tc) = &m.tool_calls {
-                obj["tool_calls"] = tc.clone();
-            }
-            if m.cache_control && supports_cache {
-                obj["cache_control"] = serde_json::json!({"type": "ephemeral"});
-            }
-            if matches!(req.thinking_api, crate::state::ThinkingApi::DeepSeek) {
-                if let Some(rc) = &m.reasoning_content {
-                    obj["reasoning_content"] = serde_json::Value::String(rc.clone());
-                }
-            }
-            obj
+        .map(|m| ReqMsg {
+            role: &m.role,
+            content: &m.content,
+            tool_call_id: m.tool_call_id.as_deref(),
+            tool_calls: m.tool_calls.as_ref(),
+            reasoning_content: m.reasoning_content.as_deref(),
+            cache_control: if m.cache_control && supports_cache {
+                Some(serde_json::json!({"type": "ephemeral"}))
+            } else {
+                None
+            },
         })
         .collect();
 
-    let mut body = serde_json::json!({
-        "model": req.model,
-        "messages": messages,
-        "temperature": req.temperature,
-        "max_tokens": req.max_tokens,
-        "stream": req.stream
-    });
+    let mut body = RequestBody {
+        model: &req.model,
+        messages,
+        temperature: req.temperature,
+        max_tokens: req.max_tokens,
+        stream: req.stream,
+        tools: None,
+        tool_choice: None,
+        stream_options: None,
+        parallel_tool_calls: None,
+        thinking: None,
+        reasoning_effort: None,
+    };
 
-    // Thinking mode additions (DeepSeek / OpenAI specific).
     match &req.thinking_api {
         crate::state::ThinkingApi::DeepSeek if req.thinking_mode => {
-            body["thinking"] = serde_json::json!({"type": "enabled"});
-            body["reasoning_effort"] = serde_json::Value::String(req.reasoning_effort.clone());
-            // Drop temperature for DeepSeek thinking mode.
-            body.as_object_mut().and_then(|o| o.remove("temperature"));
+            body.thinking = Some(serde_json::json!({"type": "enabled"}));
+            body.reasoning_effort = Some(&req.reasoning_effort);
         }
         crate::state::ThinkingApi::OpenAI if req.thinking_mode => {
-            body["reasoning_effort"] = serde_json::Value::String(req.reasoning_effort.clone());
+            body.reasoning_effort = Some(&req.reasoning_effort);
         }
         _ => {}
     }
 
-    // Request accurate token usage in the final SSE chunk.
-    // Providers that don't support this simply ignore the field.
     if req.stream {
-        body["stream_options"] = serde_json::json!({"include_usage": true});
+        body.stream_options = Some(serde_json::json!({"include_usage": true}));
     }
 
     if req.tools {
-        body["tools"] = tool_definitions();
-        body["tool_choice"] = req.tool_choice.to_json();
-        body["parallel_tool_calls"] = serde_json::Value::Bool(req.parallel_tool_calls);
+        body.tools = Some(tool_definitions());
+        body.tool_choice = Some(req.tool_choice.to_json());
+        body.parallel_tool_calls = Some(req.parallel_tool_calls);
     }
 
     serde_json::to_string(&body)
@@ -803,13 +938,7 @@ fn send_https(
     stream.set_read_timeout(Some(Duration::from_secs(request_timeout_secs)))?;
     stream.set_write_timeout(Some(Duration::from_secs(request_timeout_secs)))?;
 
-    let root_store =
-        rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let config = Arc::new(
-        rustls::ClientConfig::builder()
-            .with_root_certificates(root_store)
-            .with_no_client_auth(),
-    );
+    let config = tls_config();
     let dns_name = rustls::pki_types::DnsName::try_from(conn.host.to_string())
         .map_err(|_| "invalid DNS name")?;
     let server_name = ServerName::DnsName(dns_name);
@@ -853,7 +982,7 @@ fn process_http_response<R: BufRead>(
     let mut retry_after_secs: Option<u64> = None;
     let mut is_chunked = false;
 
-    for line in reader.by_ref().lines().flatten() {
+    for line in reader.by_ref().lines().map_while(Result::ok) {
         if line.starts_with("HTTP/") {
             let mut parts = line.splitn(3, ' ');
             let _ = parts.next();
@@ -877,23 +1006,19 @@ fn process_http_response<R: BufRead>(
         }
     }
 
-    // Read remaining raw bytes. If chunked, decode first.
-    let mut raw_body = Vec::new();
-    if let Err(e) = reader.read_to_end(&mut raw_body) {
-        // Some providers (NVIDIA NIM) drop the TCP connection without a proper
-        // TLS close_notify.  Treat this as a clean EOF rather than an error.
-        if e.kind() != std::io::ErrorKind::UnexpectedEof {
+    if status_code >= 400 {
+        let mut raw_body = Vec::new();
+        if let Err(e) = reader.read_to_end(&mut raw_body)
+            && e.kind() != std::io::ErrorKind::UnexpectedEof
+        {
             return Err(e.into());
         }
-    }
-    let body_bytes = if is_chunked {
-        decode_chunked(&raw_body)
-    } else {
-        raw_body
-    };
-    let body_str = String::from_utf8_lossy(&body_bytes).to_string();
-
-    if status_code >= 400 {
+        let body_bytes = if is_chunked {
+            decode_chunked(&raw_body)
+        } else {
+            raw_body
+        };
+        let body_str = String::from_utf8_lossy(&body_bytes).to_string();
         let api_msg = serde_json::from_str::<serde_json::Value>(&body_str)
             .ok()
             .and_then(|v| {
@@ -908,7 +1033,6 @@ fn process_http_response<R: BufRead>(
         let body_retry_after_ms: Option<u64> = serde_json::from_str::<serde_json::Value>(&body_str)
             .ok()
             .and_then(|v| v["error"]["retry_after_ms"].as_u64());
-
         let mut msg = format!("[{}] {} ({})", model, status_text, status_code);
         if let Some(detail) = api_msg {
             msg.push_str(&format!(" — {}", detail));
@@ -926,13 +1050,27 @@ fn process_http_response<R: BufRead>(
     }
 
     if stream {
-        let cursor = std::io::Cursor::new(body_bytes);
-        let buf_reader = std::io::BufReader::new(cursor);
-        let mut lines = buf_reader.lines();
-        parse_sse_stream(&mut lines, &tx)?;
+        if is_chunked {
+            let chunked = ChunkedReader::new(reader);
+            let buf_reader = std::io::BufReader::new(chunked);
+            parse_sse_stream_from_reader(buf_reader, &tx)?;
+        } else {
+            parse_sse_stream_from_reader(reader, &tx)?;
+        }
     } else {
-        let parts: Vec<&str> = body_str.splitn(2, "\n\n").collect();
-        if let Some(v) = serde_json::from_str::<serde_json::Value>(body_str.trim()).ok() {
+        let mut raw_body = Vec::new();
+        if let Err(e) = reader.read_to_end(&mut raw_body)
+            && e.kind() != std::io::ErrorKind::UnexpectedEof
+        {
+            return Err(e.into());
+        }
+        let body_bytes = if is_chunked {
+            decode_chunked(&raw_body)
+        } else {
+            raw_body
+        };
+        let body_str = String::from_utf8_lossy(&body_bytes).to_string();
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(body_str.trim()) {
             if let Some(text) = v["choices"][0]["message"]["content"].as_str() {
                 let _ = tx.send(ProviderEvent::Delta(text.to_string()));
             }
@@ -942,35 +1080,20 @@ fn process_http_response<R: BufRead>(
                 prompt_tokens: p,
                 completion_tokens: c,
             });
-        } else if let Some(v) = parts.get(1) {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(v.trim()) {
-                if let Some(text) = v["choices"][0]["message"]["content"].as_str() {
-                    let _ = tx.send(ProviderEvent::Delta(text.to_string()));
-                }
-                let p = v["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as usize;
-                let c = v["usage"]["completion_tokens"].as_u64().unwrap_or(0) as usize;
-                let _ = tx.send(ProviderEvent::Done {
-                    prompt_tokens: p,
-                    completion_tokens: c,
-                });
-            }
         }
     }
     Ok(())
 }
 
-// -- SSE stream parser ---------------------------------------------------------
-
-fn parse_sse_stream<R: BufRead>(
-    lines: &mut std::io::Lines<R>,
+fn parse_sse_stream_from_reader<R: BufRead>(
+    reader: R,
     tx: &Sender<ProviderEvent>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut lines = reader.lines();
     let mut tool_acc: std::collections::HashMap<usize, (String, String, String)> =
         std::collections::HashMap::new();
-
     let mut content_count = 0u32;
     let mut reasoning_count = 0u32;
-
     let mut prompt_tokens = 0usize;
     let mut completion_tokens = 0usize;
     let mut saw_data_line = false;
@@ -979,13 +1102,12 @@ fn parse_sse_stream<R: BufRead>(
     let mut raw_buf = String::new();
     let mut line_count = 0u32;
 
-    for line in lines.by_ref() {
+    for line in &mut lines {
         let line = match line {
             Ok(l) => l,
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
             Err(e) => return Err(e.into()),
         };
-
         line_count += 1;
         if line_count <= 10 {
             debug_log!(
@@ -994,30 +1116,24 @@ fn parse_sse_stream<R: BufRead>(
                 &line[..line.len().min(120)]
             );
         }
-
         if line.starts_with(':') {
             continue;
         }
-
         if !line.starts_with("data: ") {
             raw_buf.push_str(&line);
             raw_buf.push('\n');
             continue;
         }
-
         saw_data_line = true;
         let data = line["data: ".len()..].trim();
-
         if data == "[DONE]" {
             saw_finish = true;
             break;
         }
-
         let v = match serde_json::from_str::<serde_json::Value>(data) {
             Ok(v) => v,
             Err(_) => continue,
         };
-
         if let (Some(p), Some(c)) = (
             v["usage"]["prompt_tokens"].as_u64(),
             v["usage"]["completion_tokens"].as_u64(),
@@ -1025,12 +1141,8 @@ fn parse_sse_stream<R: BufRead>(
             prompt_tokens = p as usize;
             completion_tokens = c as usize;
         }
-
         let delta = &v["choices"][0]["delta"];
-
-        if let Some(text) = delta["content"].as_str()
-            && !text.is_empty()
-        {
+        if let Some(text) = delta["content"].as_str().filter(|s| !s.is_empty()) {
             if content_count < 3 {
                 debug_log!(
                     "provider::sse content_chunk[{}]: {:?}",
@@ -1043,9 +1155,9 @@ fn parse_sse_stream<R: BufRead>(
                 return Err("channel closed".into());
             }
         }
-
-        if let Some(reasoning) = delta["reasoning_content"].as_str()
-            && !reasoning.is_empty()
+        if let Some(reasoning) = delta["reasoning_content"]
+            .as_str()
+            .filter(|s| !s.is_empty())
         {
             if reasoning_count < 3 {
                 debug_log!(
@@ -1062,14 +1174,12 @@ fn parse_sse_stream<R: BufRead>(
                 return Err("channel closed".into());
             }
         }
-
         if let Some(tc_arr) = delta["tool_calls"].as_array() {
             for tc in tc_arr {
                 let idx = tc["index"].as_u64().unwrap_or(0) as usize;
                 let entry = tool_acc
                     .entry(idx)
                     .or_insert_with(|| (String::new(), String::new(), String::new()));
-
                 if let Some(id) = tc["id"].as_str() {
                     entry.0 = id.to_string();
                 }
@@ -1081,9 +1191,6 @@ fn parse_sse_stream<R: BufRead>(
                 }
             }
         }
-
-        // Some providers (e.g. NVIDIA NIM) send tool calls in the
-        // non-streaming `message.tool_calls` field instead of `delta.tool_calls`.
         if let Some(tc_arr) = v["choices"][0]["message"]["tool_calls"].as_array() {
             for (idx, tc) in tc_arr.iter().enumerate() {
                 let id = tc["id"].as_str().unwrap_or("").to_string();
@@ -1097,7 +1204,6 @@ fn parse_sse_stream<R: BufRead>(
                 }
             }
         }
-
         if let Some(reason) = v["choices"][0]["finish_reason"].as_str() {
             if reason == "tool_calls" {
                 let mut indices: Vec<usize> = tool_acc.keys().cloned().collect();
@@ -1157,7 +1263,6 @@ fn parse_sse_stream<R: BufRead>(
                     .or_else(|| v["error"].as_str())
                     .map(|s| s.to_string())
             });
-
         if let Some(msg) = api_msg {
             let _ = tx.send(ProviderEvent::Error(msg));
             return Ok(());
@@ -1172,7 +1277,7 @@ fn parse_sse_stream<R: BufRead>(
 
     if !saw_finish && saw_data_line {
         let _ = tx.send(ProviderEvent::Error(
-            "Connection lost mid-stream -- response may be truncated".to_string(),
+            "Connection lost mid-stream — response may be truncated".to_string(),
         ));
         return Ok(());
     }
@@ -1191,69 +1296,6 @@ fn parse_sse_stream<R: BufRead>(
             completion_tokens,
         });
     }
-    Ok(())
-}
-
-#[allow(dead_code)]
-fn process_non_stream_body(
-    body: &str,
-    tx: &Sender<ProviderEvent>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let v = match serde_json::from_str::<serde_json::Value>(body) {
-        Ok(v) => v,
-        Err(_) => {
-            let preview: String = body.trim().chars().take(300).collect();
-            let _ = tx.send(ProviderEvent::Error(format!(
-                "Non-JSON response from provider: {}",
-                preview
-            )));
-            return Ok(());
-        }
-    };
-
-    if let Some(err) = v["error"]["message"].as_str() {
-        let kind = v["error"]["type"].as_str().unwrap_or("");
-        let code = v["error"]["code"].as_str().unwrap_or("");
-        let full = match (kind, code) {
-            ("", "") => err.to_string(),
-            (k, "") => format!("{} ({})", err, k),
-            ("", c) => format!("{} [{}]", err, c),
-            (k, c) => format!("{} ({}) [{}]", err, k, c),
-        };
-        let _ = tx.send(ProviderEvent::Error(full));
-        return Ok(());
-    }
-
-    let msg = &v["choices"][0]["message"];
-
-    if let Some(tc_arr) = msg["tool_calls"].as_array() {
-        for tc in tc_arr {
-            let id = tc["id"].as_str().unwrap_or("").to_string();
-            let name = tc["function"]["name"].as_str().unwrap_or("").to_string();
-            let args = tc["function"]["arguments"]
-                .as_str()
-                .unwrap_or("{}")
-                .to_string();
-            let _ = tx.send(ProviderEvent::ToolCall(ToolCall {
-                id,
-                name,
-                arguments: args,
-            }));
-        }
-    }
-
-    if let Some(content) = msg["content"].as_str()
-        && !content.is_empty()
-    {
-        let _ = tx.send(ProviderEvent::Delta(content.to_string()));
-    }
-
-    let p = v["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as usize;
-    let c = v["usage"]["completion_tokens"].as_u64().unwrap_or(0) as usize;
-    let _ = tx.send(ProviderEvent::Done {
-        prompt_tokens: p,
-        completion_tokens: c,
-    });
     Ok(())
 }
 
@@ -1289,13 +1331,7 @@ pub fn fetch_models(provider: &ApiProvider) -> Vec<String> {
         );
 
         if use_tls {
-            let root_store =
-                rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-            let config = Arc::new(
-                rustls::ClientConfig::builder()
-                    .with_root_certificates(root_store)
-                    .with_no_client_auth(),
-            );
+            let config = tls_config();
             let dns_name = rustls::pki_types::DnsName::try_from(host.clone())
                 .map_err(|_| "invalid DNS name")?;
             let server_name = ServerName::DnsName(dns_name);
@@ -1417,13 +1453,7 @@ pub fn native_get(url: &str, timeout_secs: u64, max_bytes: usize) -> Result<Vec<
     );
 
     if use_tls {
-        let root_store =
-            rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        let config = Arc::new(
-            rustls::ClientConfig::builder()
-                .with_root_certificates(root_store)
-                .with_no_client_auth(),
-        );
+        let config = tls_config();
         let dns_name = rustls::pki_types::DnsName::try_from(host.clone())
             .map_err(|_| "invalid DNS name".to_string())?;
         let server_name = ServerName::DnsName(dns_name);

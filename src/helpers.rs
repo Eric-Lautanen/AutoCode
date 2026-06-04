@@ -13,7 +13,7 @@ static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub fn generate_id() -> String {
     let ts = unix_now();
-    let ctr = ID_COUNTER.update(Ordering::Relaxed, Ordering::Relaxed, |v| v + 1);
+    let ctr = ID_COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("{:x}{:04x}", ts, ctr & 0xffff)
 }
 
@@ -824,7 +824,9 @@ fn myers_align(content_slice: &[&str], old_lines: &[&str], max_gap: usize) -> Ve
         dp[curr][0] = 0.0;
         trace[curr][0] = Vec::new();
 
-        let j_start = if i > max_gap + 1 { i - max_gap - 1 } else { 1 }.max(1).min(n);
+        let j_start = if i > max_gap + 1 { i - max_gap - 1 } else { 1 }
+            .max(1)
+            .min(n);
         let j_end = (i + max_gap + 1).min(n);
 
         for j in j_start..=j_end {
@@ -1252,6 +1254,10 @@ pub fn default_max_retries() -> u8 {
 }
 pub fn default_max_retry_wait() -> u64 {
     900
+}
+
+pub fn default_max_session_messages() -> usize {
+    200
 }
 
 // -- Todo parsing from tool args -----------------------------------------------

@@ -31,15 +31,25 @@ pub static TEMP_FILES: std::sync::OnceLock<std::sync::Mutex<Vec<std::path::PathB
 
 pub fn track_temp_file(path: std::path::PathBuf) {
     let lock = TEMP_FILES.get_or_init(|| std::sync::Mutex::new(Vec::new()));
-    if let Ok(mut v) = lock.lock() {
-        v.push(path);
-    }
+    let mut v = match lock.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            lock.clear_poison();
+            poisoned.into_inner()
+        }
+    };
+    v.push(path);
 }
 
 pub fn untrack_temp_file(path: &std::path::Path) {
-    if let Some(lock) = TEMP_FILES.get()
-        && let Ok(mut v) = lock.lock()
-    {
+    if let Some(lock) = TEMP_FILES.get() {
+        let mut v = match lock.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                lock.clear_poison();
+                poisoned.into_inner()
+            }
+        };
         v.retain(|p| p != path);
     }
 }
@@ -177,9 +187,7 @@ impl eframe::App for AutocodeApp {
         if self.state.sampling_target.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
             self.state.sampling_activated_frame += 1;
-            if self.state.sampling_activated_frame > 2
-                && ui.input(|i| i.pointer.any_click())
-            {
+            if self.state.sampling_activated_frame > 2 && ui.input(|i| i.pointer.any_click()) {
                 let color = crate::ui_helpers::sample_screen_pixel();
                 let field = self.state.sampling_target.take();
                 self.state.sampling_activated_frame = 0;
@@ -256,22 +264,20 @@ impl eframe::App for AutocodeApp {
     }
 
     fn auto_save_interval(&self) -> std::time::Duration {
-        let msg_count: usize = self.state.sessions.iter().map(|s| s.messages.len()).sum();
-        if msg_count > 200 {
-            std::time::Duration::from_secs(60)
-        } else if msg_count > 50 {
-            std::time::Duration::from_secs(30)
-        } else {
-            std::time::Duration::from_secs(10)
-        }
+        std::time::Duration::from_secs(10)
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.runtime.drain();
 
-        if let Some(lock) = crate::app::TEMP_FILES.get()
-            && let Ok(mut temp_files) = lock.lock()
-        {
+        if let Some(lock) = crate::app::TEMP_FILES.get() {
+            let mut temp_files = match lock.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    lock.clear_poison();
+                    poisoned.into_inner()
+                }
+            };
             for path in temp_files.drain(..) {
                 let _ = std::fs::remove_file(path);
             }

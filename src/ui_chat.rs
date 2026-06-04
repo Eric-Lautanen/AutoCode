@@ -31,7 +31,11 @@ pub fn design() -> DesignSettings {
 // -- Live theme colors from design settings ------------------------------------
 
 fn rgb(c: [f32; 3]) -> Color32 {
-    Color32::from_rgb((c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8)
+    Color32::from_rgb(
+        (c[0] * 255.0) as u8,
+        (c[1] * 255.0) as u8,
+        (c[2] * 255.0) as u8,
+    )
 }
 
 pub struct ThemeColors {
@@ -179,7 +183,9 @@ pub fn show(
                     d.get_persisted::<egui::scroll_area::State>(sa_id)
                         .unwrap_or_default()
                 });
-                panel_state.scroll_offsets.insert(prev.clone(), sid.offset.y);
+                panel_state
+                    .scroll_offsets
+                    .insert(prev.clone(), sid.offset.y);
             }
             // Restore offset for the session we're entering.
             if let Some(ref next) = state.active_session_id {
@@ -261,8 +267,8 @@ pub fn show(
                 }
 
                 if is_live_session {
-                    let has_streaming = !runtime.pending_response.is_empty()
-                        || !runtime.live_shell_buf.is_empty();
+                    let has_streaming =
+                        !runtime.pending_response.is_empty() || !runtime.live_shell_buf.is_empty();
 
                     if runtime.is_busy() && !has_streaming {
                         show_waiting_bubble(ui, &runtime.status, chat_w);
@@ -354,6 +360,15 @@ fn show_session_tabs(
                     .map(|s| (s.id.clone(), s.label.clone()))
                     .collect();
 
+                // Prune stale scroll offsets before rendering tabs
+                {
+                    let valid_ids: std::collections::HashSet<String> =
+                        state.sessions.iter().map(|s| s.id.clone()).collect();
+                    panel_state
+                        .scroll_offsets
+                        .retain(|id, _| valid_ids.contains(id));
+                }
+
                 for (id, label) in sessions {
                     let active = state.active_session_id.as_deref() == Some(&id);
                     Frame::NONE
@@ -377,11 +392,13 @@ fn show_session_tabs(
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 4.0;
                                 let tab_resp = ui.add(
-                                    egui::Button::new(
-                                        RichText::new(&label).size(11.5).color(
-                                            if active { Palette::TAB_ACCENT } else { theme().text_muted },
-                                        ),
-                                    )
+                                    egui::Button::new(RichText::new(&label).size(11.5).color(
+                                        if active {
+                                            Palette::TAB_ACCENT
+                                        } else {
+                                            theme().text_muted
+                                        },
+                                    ))
                                     .fill(Color32::TRANSPARENT)
                                     .stroke(egui::Stroke::NONE),
                                 );
@@ -654,7 +671,10 @@ fn render_structured_tool_result(
             let path = meta.file_path.as_deref().unwrap_or("file");
             let lines = meta.line_count.unwrap_or(0);
             let bytes = meta.byte_count.unwrap_or(0);
-            let header = format!("[File] read_entire_file {} — {} lines, {} bytes", path, lines, bytes);
+            let header = format!(
+                "[File] read_entire_file {} — {} lines, {} bytes",
+                path, lines, bytes
+            );
             ui.label(
                 RichText::new(header)
                     .size(12.0)
@@ -755,7 +775,7 @@ fn render_structured_tool_result(
             let body = ui_helpers::get_tool_body(msg);
             let display = strip_exit_code_trailer(&body);
             ui.push_id(format!("shell_{}", msg.timestamp), |ui| {
-                render_shell_terminal(ui, &display);
+                render_shell_terminal(ui, display);
             });
         }
         "list_dir" => {
@@ -982,11 +1002,11 @@ fn render_unified_diff(ui: &mut egui::Ui, old: &str, new: &str) {
     for (start, end) in &change_runs {
         let hs = start.saturating_sub(CONTEXT);
         let he = (*end + CONTEXT).min(line_data.len());
-        if let Some((_ps, pe)) = hunks.last_mut() {
-            if hs <= *pe {
-                *pe = he.max(*pe);
-                continue;
-            }
+        if let Some((_ps, pe)) = hunks.last_mut()
+            && hs <= *pe
+        {
+            *pe = he.max(*pe);
+            continue;
         }
         hunks.push((hs, he));
     }
@@ -1065,9 +1085,7 @@ fn render_unified_diff(ui: &mut egui::Ui, old: &str, new: &str) {
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
-                            .small_button(
-                                RichText::new("Copy").size(9.0).color(theme().text_muted),
-                            )
+                            .small_button(RichText::new("Copy").size(9.0).color(theme().text_muted))
                             .on_hover_text("Copy diff to clipboard")
                             .clicked()
                         {
@@ -1185,16 +1203,16 @@ struct DiffLine<'a> {
 fn lcs_diff_lines<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<DiffLine<'a>> {
     let n = old.len();
     let m = new.len();
+    let mut table = vec![0u16; (n + 1) * (m + 1)];
+    let idx = |i: usize, j: usize| i * (m + 1) + j;
 
-    let mut table = vec![vec![0u16; m + 1]; n + 1];
     for i in 0..n {
-        let oi = old[i];
         for j in 0..m {
-            if oi == new[j] {
-                table[i + 1][j + 1] = table[i][j] + 1;
+            table[idx(i + 1, j + 1)] = if old[i] == new[j] {
+                table[idx(i, j)] + 1
             } else {
-                table[i + 1][j + 1] = table[i][j + 1].max(table[i + 1][j]);
-            }
+                table[idx(i, j + 1)].max(table[idx(i + 1, j)])
+            };
         }
     }
 
@@ -1210,7 +1228,7 @@ fn lcs_diff_lines<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<DiffLine<'a>> {
             });
             i -= 1;
             j -= 1;
-        } else if j > 0 && (i == 0 || table[i][j - 1] >= table[i - 1][j]) {
+        } else if j > 0 && (i == 0 || table[idx(i, j - 1)] >= table[idx(i - 1, j)]) {
             result.push(DiffLine {
                 prefix: '+',
                 text: new[j - 1],
@@ -1487,9 +1505,7 @@ fn render_code_block_impl(ui: &mut egui::Ui, lang: &str, code: &str, _streaming:
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
-                            .small_button(
-                                RichText::new("Copy").size(9.0).color(theme().text_muted),
-                            )
+                            .small_button(RichText::new("Copy").size(9.0).color(theme().text_muted))
                             .on_hover_text("Copy to clipboard")
                             .clicked()
                         {
@@ -1851,17 +1867,16 @@ fn show_input_row(
                                 "Thinking not supported by this API"
                             })
                             .clicked()
+                            && let Some(p) = state.providers.get_mut(&provider_key)
                         {
-                            if let Some(p) = state.providers.get_mut(&provider_key) {
-                                p.thinking_mode = !p.thinking_mode;
-                            }
+                            p.thinking_mode = !p.thinking_mode;
                         }
 
                         // Reasoning effort selector (always visible, greyed if unsupported/off)
                         let effort_enabled = thinking_supported && thinking;
                         let effort_label = {
                             let mut c = effort.clone();
-                            if c.len() >= 1 {
+                            if !c.is_empty() {
                                 let (first, rest) = c.split_at(1);
                                 c = format!("{}{}", first.to_uppercase(), rest);
                             }
@@ -1894,7 +1909,7 @@ fn show_input_row(
                             for label in &available_efforts {
                                 let display = {
                                     let mut c = label.clone();
-                                    if c.len() >= 1 {
+                                    if !c.is_empty() {
                                         let (first, rest) = c.split_at(1);
                                         c = format!("{}{}", first.to_uppercase(), rest);
                                     }
@@ -2108,9 +2123,7 @@ fn render_shell_terminal(ui: &mut egui::Ui, code: &str) {
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
-                            .small_button(
-                                RichText::new("Copy").size(9.0).color(theme().text_muted),
-                            )
+                            .small_button(RichText::new("Copy").size(9.0).color(theme().text_muted))
                             .on_hover_text("Copy full output")
                             .clicked()
                         {

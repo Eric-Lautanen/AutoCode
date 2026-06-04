@@ -377,10 +377,10 @@ fn search_file_for_pattern(
     results: &mut Vec<String>,
 ) {
     // Skip files larger than 1 MB.
-    if let Ok(meta) = fsutil::metadata(path) {
-        if meta.len() > 1024 * 1024 {
-            return;
-        }
+    if let Ok(meta) = fsutil::metadata(path)
+        && meta.len() > 1024 * 1024
+    {
+        return;
     }
 
     let content = match fsutil::read_to_string(path) {

@@ -263,7 +263,6 @@ pub struct ApiProvider {
 
     #[serde(default = "crate::helpers::default_max_output_tokens_thinking")]
     pub max_output_tokens_thinking: u32,
-
 }
 
 impl ApiProvider {
@@ -381,18 +380,14 @@ pub struct ChatMessage {
 
 impl ChatMessage {
     pub fn new(role: Role, content: impl Into<String>) -> Self {
-        let content: String = content
-            .into()
-            .chars()
-            .filter(|c| {
-                let u = *c as u32;
-                // Keep ASCII printable (32-126), newline (10), tab (9), and
-                // Latin-1 Supplement (160-255). Strip everything else --
-                // arrows, dingbats, math symbols, emoji, etc. -- since egui's
-                // built-in fonts cannot render them.
+        let mut content: String = content.into();
+        // Tool and system output is usually ASCII-safe; skip expensive filter.
+        if !matches!(role, Role::Tool | Role::System) {
+            content.retain(|c| {
+                let u = c as u32;
                 (32..=126).contains(&u) || u == 10 || u == 9 || (160..=255).contains(&u)
-            })
-            .collect();
+            });
+        }
         let token_count = crate::helpers::estimate_tokens(&content);
         Self {
             role,
@@ -786,6 +781,10 @@ pub struct AppState {
     /// Upper bound on total back-off wait time (seconds) across all retries.
     #[serde(default = "crate::helpers::default_max_retry_wait")]
     pub max_retry_wait_secs: u64,
+
+    /// Maximum messages kept in a single session before pruning.
+    #[serde(default = "crate::helpers::default_max_session_messages")]
+    pub max_session_messages: usize,
 }
 
 use std::collections::{HashMap, HashSet};
@@ -832,6 +831,7 @@ impl Default for AppState {
             shell_timeout_max_secs: crate::helpers::default_shell_timeout_max(),
             max_retries: crate::helpers::default_max_retries(),
             max_retry_wait_secs: crate::helpers::default_max_retry_wait(),
+            max_session_messages: crate::helpers::default_max_session_messages(),
         }
     }
 }
@@ -899,7 +899,6 @@ impl AppState {
         self.active_session_id = Some(sess.id.clone());
         self.sessions.push(sess);
     }
-
 }
 
 pub const DEFAULT_SYSTEM_PROMPT: &str = "\

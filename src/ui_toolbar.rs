@@ -6,8 +6,7 @@ use egui::{Align, Frame, Layout, Margin, RichText, Sense, Stroke, StrokeKind, Ve
 
 use crate::{
     chat::{self, ChatRuntime},
-    helpers,
-    session,
+    helpers, session,
     state::{AppState, Project},
     theme::Palette,
     ui_helpers,
@@ -101,9 +100,9 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtime: &mut ChatRuntime) 
                 // -- Right-side actions --------------------------------
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     // Settings (lights up when settings window is open).
-                    let settings_open: bool = ui.ctx().data_mut(|d| {
-                        d.get_temp(egui::Id::new("settings_open")).unwrap_or(false)
-                    });
+                    let settings_open: bool = ui
+                        .ctx()
+                        .data_mut(|d| d.get_temp(egui::Id::new("settings_open")).unwrap_or(false));
                     if lit_btn(ui, "Settings", settings_open).clicked() {
                         ui.ctx().data_mut(|d| {
                             let open: bool =
@@ -228,7 +227,11 @@ fn lit_btn(ui: &mut egui::Ui, label: &str, lit: bool) -> egui::Response {
         .fill(egui::Color32::TRANSPARENT)
         .stroke(egui::Stroke::new(
             1.0,
-            if lit { Palette::ACCENT } else { Palette::BORDER },
+            if lit {
+                Palette::ACCENT
+            } else {
+                Palette::BORDER
+            },
         )),
     )
 }

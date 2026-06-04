@@ -33,15 +33,60 @@ pub fn ensure_session(state: &mut AppState) -> bool {
     false
 }
 
+/// Prune old messages from the middle of a session, keeping system prompt
+/// and the most recent context intact.
+pub fn prune_session_messages(session: &mut crate::state::Session, max_messages: usize) {
+    if session.messages.len() <= max_messages {
+        return;
+    }
+    let has_system = session
+        .messages
+        .first()
+        .is_some_and(|m| m.role == crate::state::Role::System);
+    let keep_head = if has_system { 1 } else { 0 };
+    let keep_tail = 40usize;
+    let tail_start = session.messages.len().saturating_sub(keep_tail);
+
+    if tail_start <= keep_head + 10 {
+        session.messages.truncate(max_messages);
+        return;
+    }
+
+    let mut prune_idx = tail_start;
+    while prune_idx > keep_head + 10 {
+        if session.messages[prune_idx].role == crate::state::Role::User {
+            break;
+        }
+        prune_idx -= 1;
+    }
+
+    let mut new_messages = Vec::with_capacity(max_messages);
+    new_messages.extend_from_slice(&session.messages[..keep_head]);
+    new_messages.push(crate::state::ChatMessage::new(
+        crate::state::Role::System,
+        format!(
+            "[{} earlier messages omitted for brevity]",
+            prune_idx - keep_head
+        ),
+    ));
+    new_messages.extend_from_slice(&session.messages[prune_idx..]);
+    session.messages = new_messages;
+}
+
 /// Build the messages list for an API request.
 /// Filters out Error-role messages (display-only) and converts
 /// to ApiMessage format. Cache_control is sent only when the
 /// specific model supports it (per-model flag from the manifest).
-pub fn prepare_request_messages(state: &AppState) -> Vec<ApiMessage> {
+pub fn prepare_request_messages(state: &mut AppState) -> Vec<ApiMessage> {
     let supports_cache = state
         .active_provider()
         .map(|p| crate::state::model_or_safe(&p.kind, &p.model).supports_cache_control)
         .unwrap_or(false);
+
+    let max_msgs = state.max_session_messages;
+    if let Some(sess) = state.active_session_mut() {
+        prune_session_messages(sess, max_msgs);
+    }
 
     state
         .active_session()
@@ -69,4 +114,5 @@ pub fn delete_session(state: &mut AppState, id: &str) {
     if state.active_session_id.as_deref() == Some(id) {
         state.active_session_id = state.sessions.last().map(|s| s.id.clone());
     }
+    state.expanded_dirs.retain(|d| !d.starts_with(id));
 }

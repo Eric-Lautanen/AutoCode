@@ -3,7 +3,7 @@
 
 use scraper::{Html, Selector};
 use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex, OnceLock};
 use std::time::Instant;
 
 static SEARCH_CACHE: LazyLock<Mutex<HashMap<String, (Instant, String)>>> =
@@ -17,8 +17,15 @@ pub fn search_cache_get(key: &str) -> Option<String> {
     cache.get(key).map(|(_, v)| v.clone())
 }
 
+const CACHE_MAX_ENTRIES: usize = 500;
+
 pub fn search_cache_set(key: &str, value: &str) {
     if let Ok(mut cache) = SEARCH_CACHE.lock() {
+        if cache.len() >= CACHE_MAX_ENTRIES
+            && let Some(k) = cache.keys().next().cloned()
+        {
+            cache.remove(&k);
+        }
         let expiry = Instant::now() + std::time::Duration::from_secs(CACHE_TTL_SECS);
         cache.insert(key.to_string(), (expiry, value.to_string()));
     }
@@ -90,24 +97,21 @@ pub fn extract_ddg_results(html: &str, max_results: usize) -> String {
     let mut count = 0;
 
     // DDG result containers
-    let Ok(result_sel) = Selector::parse(".result__body") else {
-        return String::new();
-    };
-    let Ok(url_sel) = Selector::parse(".result__a") else {
-        return String::new();
-    };
-    let Ok(snippet_sel) = Selector::parse(".result__snippet") else {
-        return String::new();
-    };
+    static RESULT_SEL: OnceLock<Selector> = OnceLock::new();
+    static URL_SEL: OnceLock<Selector> = OnceLock::new();
+    static SNIPPET_SEL: OnceLock<Selector> = OnceLock::new();
+    let result_sel = RESULT_SEL.get_or_init(|| Selector::parse(".result__body").unwrap());
+    let url_sel = URL_SEL.get_or_init(|| Selector::parse(".result__a").unwrap());
+    let snippet_sel = SNIPPET_SEL.get_or_init(|| Selector::parse(".result__snippet").unwrap());
 
-    for result in doc.select(&result_sel) {
+    for result in doc.select(result_sel) {
         if count >= max_results {
             break;
         }
 
         // Extract actual URL from DDG's redirect link: //duckduckgo.com/l/?uddg=ENCODED_URL
         let raw_url = result
-            .select(&url_sel)
+            .select(url_sel)
             .next()
             .and_then(|a| a.value().attr("href"))
             .unwrap_or("");
@@ -134,7 +138,7 @@ pub fn extract_ddg_results(html: &str, max_results: usize) -> String {
         }
 
         let snippet: String = result
-            .select(&snippet_sel)
+            .select(snippet_sel)
             .next()
             .map(|e| e.text().collect::<Vec<_>>().join(" ").trim().to_string())
             .unwrap_or_default();

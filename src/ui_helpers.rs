@@ -443,7 +443,7 @@ pub fn sample_screen_pixel() -> Option<[f32; 3]> {
             if color == 0xFFFFFFFF {
                 return None;
             }
-            let r = ((color >> 0) & 0xFF) as f32 / 255.0;
+            let r = (color & 0xFF) as f32 / 255.0;
             let g = ((color >> 8) & 0xFF) as f32 / 255.0;
             let b = ((color >> 16) & 0xFF) as f32 / 255.0;
             Some([r, g, b])

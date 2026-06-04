@@ -121,8 +121,7 @@ pub fn show_window(ctx: &egui::Context, state: &mut AppState, settings: &mut Set
                                     crate::helpers::default_stream_idle_timeout();
                                 state.request_timeout_secs =
                                     crate::helpers::default_request_timeout();
-                                state.tool_timeout_secs =
-                                    crate::helpers::default_tool_timeout();
+                                state.tool_timeout_secs = crate::helpers::default_tool_timeout();
                                 state.shell_timeout_secs = crate::helpers::default_shell_timeout();
                                 state.shell_timeout_max_secs =
                                     crate::helpers::default_shell_timeout_max();
@@ -384,10 +383,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                             let mut model = p.model.clone();
                             let input_w = ui.available_width() - 100.0;
                             if ui
-                                .add(
-                                    TextEdit::singleline(&mut model)
-                                        .desired_width(input_w),
-                                )
+                                .add(TextEdit::singleline(&mut model).desired_width(input_w))
                                 .changed()
                             {
                                 p.model = model;
@@ -422,13 +418,16 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                     .width(ui.available_width())
                                     .show_ui(ui, |ui| {
                                         for m in models.iter() {
-                                            if ui.selectable_label(*m == current_model, m).clicked() {
+                                            if ui.selectable_label(*m == current_model, m).clicked()
+                                            {
                                                 p.model = m.clone();
                                             }
                                         }
                                     });
                                 if let Some(status) = settings.fetch_status.get(&key) {
-                                    ui.label(RichText::new(status).size(10.0).color(Palette::TEXT_MUTED));
+                                    ui.label(
+                                        RichText::new(status).size(10.0).color(Palette::TEXT_MUTED),
+                                    );
                                 }
                             });
                             ui.end_row();
@@ -572,7 +571,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                         });
                         ui.end_row();
                     });
-                });
+            });
 
         ui.add_space(8.0);
     }
@@ -1194,8 +1193,11 @@ fn show_about(ui: &mut egui::Ui, state: &mut AppState) {
     ui_helpers::section_heading(ui, "System Information");
     ui.add_space(4.0);
 
-    ui.checkbox(&mut state.debug_mode, "Debug hover (show widget IDs on hover)")
-        .on_hover_text("Shows widget ID, rect, and state info when you hover over UI elements.");
+    ui.checkbox(
+        &mut state.debug_mode,
+        "Debug hover (show widget IDs on hover)",
+    )
+    .on_hover_text("Shows widget ID, rect, and state info when you hover over UI elements.");
     ui.add_space(4.0);
     ui.checkbox(&mut state.inspection_open, "Inspection overlay (show all widget bounds)")
         .on_hover_text("Paints red bounding boxes around every widget and opens the inspection panel. The fancy one.");
@@ -1287,7 +1289,11 @@ fn dropper_btn(ui: &mut egui::Ui, target: &mut Option<String>, field_name: &str)
 }
 
 /// Write a sampled color into the correct DesignSettings field.
-pub fn apply_sampled_color(design: &mut crate::state::DesignSettings, field: &str, color: [f32; 3]) {
+pub fn apply_sampled_color(
+    design: &mut crate::state::DesignSettings,
+    field: &str,
+    color: [f32; 3],
+) {
     match field {
         "user_bubble_fill" => design.user_bubble_fill = color,
         "user_bubble_stroke" => design.user_bubble_stroke = color,

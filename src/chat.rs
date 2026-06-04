@@ -107,14 +107,17 @@ fn context_usage_info(state: &AppState) -> (usize, usize, usize) {
         .active_provider()
         .map(|p| p.max_context_tokens as usize)
         .unwrap_or(128_000);
-    let used = state.active_session().map(|s| {
-        if s.actual_tokens_used > 0 {
-            s.actual_tokens_used
-        } else {
-            s.token_count()
-        }
-    }).unwrap_or(0);
-    let pct = if max == 0 { 0 } else { (used * 100) / max };
+    let used = state
+        .active_session()
+        .map(|s| {
+            if s.actual_tokens_used > 0 {
+                s.actual_tokens_used
+            } else {
+                s.token_count()
+            }
+        })
+        .unwrap_or(0);
+    let pct = (used * 100).checked_div(max).unwrap_or(0);
     (used, max, pct.min(100))
 }
 
@@ -142,11 +145,11 @@ fn shorten_err(msg: &str) -> String {
 }
 
 fn push_to_session(state: &mut AppState, session_id: Option<&str>, msg: ChatMessage) {
-    if let Some(sid) = session_id {
-        if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
-            sess.total_tokens_used += msg.token_count;
-            sess.messages.push(msg);
-        }
+    if let Some(sid) = session_id
+        && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
+    {
+        sess.total_tokens_used += msg.token_count;
+        sess.messages.push(msg);
     }
 }
 
@@ -155,11 +158,7 @@ fn push_runtime(state: &mut AppState, runtime: &ChatRuntime, msg: ChatMessage) {
     push_to_session(state, runtime.active_session_id.as_deref(), msg);
 }
 
-fn push_tool_results_to_state(
-    state: &mut AppState,
-    runtime: &ChatRuntime,
-    results: &[ToolResult],
-) {
+fn push_tool_results_to_state(state: &mut AppState, runtime: &ChatRuntime, results: &[ToolResult]) {
     let sess_id = runtime.active_session_id.as_deref();
     for tr in results {
         let mut msg = ChatMessage::new(Role::Tool, tr.content.clone());
@@ -316,9 +315,7 @@ impl Default for ChatRuntime {
 
 impl ChatRuntime {
     pub fn is_busy(&self) -> bool {
-        self.stream_rx.is_some()
-            || self.tool_rx.is_some()
-            || self.live_shell_rx.is_some()
+        self.stream_rx.is_some() || self.tool_rx.is_some() || self.live_shell_rx.is_some()
     }
 
     pub fn drain(&mut self) {
@@ -353,11 +350,11 @@ impl ChatRuntime {
         self.recovery_attempts = 0;
         self.recovery_after = None;
 
-        // Release heap memory back to the OS after large string operations.
-        self.pending_response.shrink_to(256);
-        self.reasoning_buf.shrink_to(256);
-        self.partial_response_backup.shrink_to(256);
-        self.live_shell_buf.shrink_to(256);
+        // Force deallocation of large buffers
+        self.pending_response = String::new();
+        self.reasoning_buf = String::new();
+        self.partial_response_backup = String::new();
+        self.live_shell_buf = String::new();
     }
 }
 
@@ -380,6 +377,18 @@ fn kill_process(pid: u32) {
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
         let _ = cmd.output();
+
+        for _ in 0..10 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let check = std::process::Command::new("tasklist")
+                .args(["/FI", &format!("PID eq {}", pid), "/NH"])
+                .output();
+            if let Ok(out) = check
+                && !String::from_utf8_lossy(&out.stdout).contains(&pid.to_string())
+            {
+                break;
+            }
+        }
     } else {
         let _ = std::process::Command::new("kill")
             .args(["-9", &pid.to_string()])
@@ -401,7 +410,11 @@ pub fn send_message(state: &mut AppState, runtime: &mut ChatRuntime, text: Strin
     session::ensure_session(state);
     let sid = state.active_session_id.clone();
     // Clear stale error messages from the session so the user starts fresh.
-    if let Some(sess) = state.sessions.iter_mut().find(|s| Some(&s.id) == sid.as_ref()) {
+    if let Some(sess) = state
+        .sessions
+        .iter_mut()
+        .find(|s| Some(&s.id) == sid.as_ref())
+    {
         sess.messages.retain(|m| m.role != Role::Error);
     }
     push_to_session(state, sid.as_deref(), ChatMessage::new(Role::User, text));
@@ -605,7 +618,10 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 // Clear error messages now that we've recovered.
                 if was_recovering {
                     let sid = runtime.active_session_id.clone();
-                    if let Some(sess) = state.sessions.iter_mut().find(|s| Some(&s.id) == sid.as_ref())
+                    if let Some(sess) = state
+                        .sessions
+                        .iter_mut()
+                        .find(|s| Some(&s.id) == sid.as_ref())
                     {
                         sess.messages.retain(|m| m.role != Role::Error);
                     }
@@ -742,13 +758,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
             // Permanent errors (auth, content filter, invalid model) are not
             // retryable and should be shown to the user immediately.
             let max_retries = state.max_retries;
-            let wall_elapsed = runtime
-                .request_start
-                .map(|t| t.elapsed().as_secs())
-                .unwrap_or(0);
-            let should_retry = is_transient_error(&err_msg)
-                && runtime.retry_count < max_retries
-                && wall_elapsed < state.max_retry_wait_secs;
+            let should_retry = is_transient_error(&err_msg) && runtime.retry_count < max_retries;
             if should_retry {
                 runtime.retry_count += 1;
                 debug_log!(
@@ -762,7 +772,10 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 let backoff_secs = (1u64 << (runtime.retry_count - 1).min(9)).min(300);
                 runtime.status = format!(
                     "{} — retrying ({}/{}) in {}s...",
-                    shorten_err(&err_msg), runtime.retry_count, max_retries, backoff_secs
+                    shorten_err(&err_msg),
+                    runtime.retry_count,
+                    max_retries,
+                    backoff_secs
                 );
                 std::thread::sleep(std::time::Duration::from_secs(backoff_secs));
                 start_completion(state, runtime);
@@ -772,23 +785,29 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 // agent auto-resumes when the provider comes back online.
                 // Never gives up — backoff grows to ~32 min and stays there.
                 runtime.recovery_attempts += 1;
-                let backoff_secs = (30u64 * (1u64 << (runtime.recovery_attempts - 1).min(4))).min(300);
-                runtime.recovery_after = Some(
-                    std::time::Instant::now() + std::time::Duration::from_secs(backoff_secs),
-                );
+                let backoff_secs =
+                    (30u64 * (1u64 << (runtime.recovery_attempts - 1).min(4))).min(300);
+                runtime.recovery_after =
+                    Some(std::time::Instant::now() + std::time::Duration::from_secs(backoff_secs));
                 runtime.retry_count = 0;
                 runtime.stream_drop_retries = 0;
                 runtime.status = format!(
                     "Recovering — attempt {} in {}s...",
                     runtime.recovery_attempts, backoff_secs
                 );
-                push_runtime(state, runtime, ChatMessage::new(
-                    Role::Error,
-                    format!(
-                        "⚠ Provider error (attempt {}): {} — retrying in {}s",
-                        runtime.recovery_attempts, shorten_err(&err_msg), backoff_secs
+                push_runtime(
+                    state,
+                    runtime,
+                    ChatMessage::new(
+                        Role::Error,
+                        format!(
+                            "⚠ Provider error (attempt {}): {} — retrying in {}s",
+                            runtime.recovery_attempts,
+                            shorten_err(&err_msg),
+                            backoff_secs
+                        ),
                     ),
-                ));
+                );
             } else {
                 // The provider rejected the request because the conversation
                 // has an assistant tool_calls message with no matching Tool
@@ -797,7 +816,10 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     || err_msg.contains("tool_calls")
                         && err_msg.contains("must be followed by tool messages");
                 if orphaned {
-                    debug_log!("chat: orphaned tool_calls detected, stripping and retrying: {}", err_msg);
+                    debug_log!(
+                        "chat: orphaned tool_calls detected, stripping and retrying: {}",
+                        err_msg
+                    );
                     runtime.retry_count = 0;
                     runtime.status =
                         "Orphaned tool calls detected -- removing and retrying...".to_string();
@@ -808,9 +830,8 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                             if sess.messages[i].role == Role::Assistant
                                 && sess.messages[i].tool_calls.is_some()
                             {
-                                let has_results = sess.messages[i + 1..]
-                                    .iter()
-                                    .any(|m| m.role == Role::Tool);
+                                let has_results =
+                                    sess.messages[i + 1..].iter().any(|m| m.role == Role::Tool);
                                 if !has_results {
                                     sess.messages.remove(i);
                                 }
@@ -824,13 +845,17 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     runtime.retry_count = 0;
                     runtime.partial_response_backup.clear();
                     runtime.stream_drop_retries = 0;
-                    push_runtime(state, runtime, ChatMessage::new(
-                        Role::Error,
-                        format!(
-                            "Provider error (gave up after {} retries): {}",
-                            max_retries, err_msg
+                    push_runtime(
+                        state,
+                        runtime,
+                        ChatMessage::new(
+                            Role::Error,
+                            format!(
+                                "Provider error (gave up after {} retries): {}",
+                                max_retries, err_msg
+                            ),
                         ),
-                    ));
+                    );
                 }
             }
             return true;
@@ -911,13 +936,17 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                         start_completion(state, runtime);
                     } else {
                         runtime.retry_count = 0;
-                        push_runtime(state, runtime, ChatMessage::new(
-                            Role::Error,
-                            format!(
-                                "Provider returned invalid tool calls (gave up after {} retries).",
-                                max_retries
+                        push_runtime(
+                            state,
+                            runtime,
+                            ChatMessage::new(
+                                Role::Error,
+                                format!(
+                                    "Provider returned invalid tool calls (gave up after {} retries).",
+                                    max_retries
+                                ),
                             ),
-                        ));
+                        );
                     }
                     return true;
                 } else {
@@ -936,7 +965,11 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                         let max_chain = state.max_retries.max(5);
                         if runtime.continuation_chain < max_chain {
                             runtime.continuation_chain += 1;
-                            push_runtime(state, runtime, ChatMessage::new(Role::User, "continue".to_string()));
+                            push_runtime(
+                                state,
+                                runtime,
+                                ChatMessage::new(Role::User, "continue".to_string()),
+                            );
                             start_completion(state, runtime);
                         }
                     }
@@ -1118,7 +1151,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                         results
                     }));
                     let results = match result {
-        Ok(results) => {
+                        Ok(results) => {
                             debug_log!("chat: tool-exec finished ok, {} results", results.len());
                             results
                         }
@@ -1184,13 +1217,17 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     runtime.retry_count = 0;
                     runtime.partial_response_backup.clear();
                     runtime.stream_drop_retries = 0;
-                    push_runtime(state, runtime, ChatMessage::new(
-                        Role::Error,
-                        format!(
-                            "Provider returned empty response (gave up after {} retries).",
-                            max_retries
+                    push_runtime(
+                        state,
+                        runtime,
+                        ChatMessage::new(
+                            Role::Error,
+                            format!(
+                                "Provider returned empty response (gave up after {} retries).",
+                                max_retries
+                            ),
                         ),
-                    ));
+                    );
                 }
                 return true;
             }
@@ -1219,7 +1256,11 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 let max_chain = state.max_retries.max(5);
                 if runtime.continuation_chain < max_chain {
                     runtime.continuation_chain += 1;
-                    push_runtime(state, runtime, ChatMessage::new(Role::User, "continue".to_string()));
+                    push_runtime(
+                        state,
+                        runtime,
+                        ChatMessage::new(Role::User, "continue".to_string()),
+                    );
                     start_completion(state, runtime);
                 }
             }
@@ -1248,7 +1289,9 @@ fn poll_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 if has_handoff && state.handoff_enabled {
                     handle_handoff(state, runtime);
                 // Only start next completion if shell calls are also done.
-                } else if runtime.live_shell_rx.is_none() && runtime.pending_tool_remaining.is_empty() {
+                } else if runtime.live_shell_rx.is_none()
+                    && runtime.pending_tool_remaining.is_empty()
+                {
                     start_completion(state, runtime);
                 }
             } else {
@@ -1436,9 +1479,8 @@ fn poll_live_shell(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
 }
 
 fn poll_network(runtime: &mut ChatRuntime) -> bool {
-    let is_streaming = runtime.stream_rx.is_some()
-        || runtime.tool_rx.is_some()
-        || runtime.live_shell_rx.is_some();
+    let is_streaming =
+        runtime.stream_rx.is_some() || runtime.tool_rx.is_some() || runtime.live_shell_rx.is_some();
 
     if is_streaming && !runtime.net_status.active {
         runtime.net_status.active = true;
@@ -1599,11 +1641,10 @@ fn build_tool_meta(tc: &ToolCall, result: &str, duration_ms: u64) -> ToolMeta {
             let total_lines: usize = result
                 .split("\n---\n")
                 .flat_map(|section| {
-                    let body = section
+                    section
                         .lines()
                         .skip(1) // skip the "path:" line
-                        .collect::<Vec<_>>();
-                    body
+                        .collect::<Vec<_>>()
                 })
                 .filter(|l| !l.starts_with("[..."))
                 .count();
@@ -1900,12 +1941,7 @@ fn execute_tool_with_cache(
                         total_bytes
                     );
                     for (i, line) in all_lines.iter().enumerate() {
-                        out.push_str(&format!(
-                            "{:>width$} | {}\n",
-                            i + 1,
-                            line,
-                            width = width
-                        ));
+                        out.push_str(&format!("{:>width$} | {}\n", i + 1, line, width = width));
                     }
                     out
                 }
@@ -2310,13 +2346,18 @@ fn execute_tool_with_cache(
                 .count();
             let total = items.len();
             let all_pending = items.iter().all(|i| i.status == TodoStatus::Pending);
-            let all_terminal = items.iter().all(|i| {
-                i.status == TodoStatus::Completed || i.status == TodoStatus::Cancelled
-            });
+            let all_terminal = items
+                .iter()
+                .all(|i| i.status == TodoStatus::Completed || i.status == TodoStatus::Cancelled);
             if all_pending || all_terminal {
                 format!(
                     "Task list updated: \"{}\" -- {}/{} complete | Context: {}/{} tokens ({}%)",
-                    title, done, total, ctx_used, ctx_max, (ctx_used * 100 / ctx_max.max(1)).min(100),
+                    title,
+                    done,
+                    total,
+                    ctx_used,
+                    ctx_max,
+                    (ctx_used * 100 / ctx_max.max(1)).min(100),
                 )
             } else {
                 format!(
@@ -2334,15 +2375,15 @@ fn execute_tool_with_cache(
             let search_path = Some(
                 args["path"]
                     .as_str()
-                    .map(|p| helpers::resolve_path_cached(p, project_root, path_cache, allow_escape))
+                    .map(|p| {
+                        helpers::resolve_path_cached(p, project_root, path_cache, allow_escape)
+                    })
                     .unwrap_or_else(|| std::path::PathBuf::from(&project_root)),
             );
-            if let Some(ref sp) = search_path {
-                if helpers::is_blocked_path(sp) {
-                    return helpers::blocked_error(
-                        args["path"].as_str().unwrap_or(&project_root),
-                    );
-                }
+            if let Some(ref sp) = search_path
+                && helpers::is_blocked_path(sp)
+            {
+                return helpers::blocked_error(args["path"].as_str().unwrap_or(project_root));
             }
             let results = crate::explorer::glob_files(search_path.as_deref(), pattern);
             if results.is_empty() {
@@ -2380,20 +2421,15 @@ fn auto_execute(state: &mut AppState, runtime: &mut ChatRuntime, response: &str,
     let files = shell::extract_files(response);
     if !files.is_empty() {
         let written = shell::write_extracted_files(root, &files, allow_escape);
-        push_runtime(state, runtime, ChatMessage::new(
-            Role::Tool,
-            format!("Files written: {}", written.join(", ")),
-        ));
+        push_runtime(
+            state,
+            runtime,
+            ChatMessage::new(Role::Tool, format!("Files written: {}", written.join(", "))),
+        );
     }
 
-    let commands = shell::extract_commands(response);
-    for cmd in commands {
-        let (task, rx) = shell::run_command_in_dir(&cmd, Some(root));
-        let task_id = task.id.clone();
-        let pid = task.pid.unwrap_or(0);
-        state.shell_tasks.push(task);
-        runtime.running_tasks.push((task_id, rx, pid));
-    }
+    // Do not implicitly execute shell commands from raw markdown text.
+    // The assistant must use the formal `run_shell` tool call.
 }
 
 // -- Shell task polling --------------------------------------------------------
@@ -2413,12 +2449,13 @@ fn poll_shell_tasks(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     repaint = true;
                 }
                 Ok(ShellEvent::Done { exit_code }) => {
-                    let (output, command) = if let Some(t) = state.shell_tasks.iter_mut().find(|t| t.id == *task_id) {
-                        t.status = ShellStatus::Done { exit_code };
-                        (t.output.clone(), t.command.clone())
-                    } else {
-                        (String::new(), String::new())
-                    };
+                    let (output, command) =
+                        if let Some(t) = state.shell_tasks.iter_mut().find(|t| t.id == *task_id) {
+                            t.status = ShellStatus::Done { exit_code };
+                            (t.output.clone(), t.command.clone())
+                        } else {
+                            (String::new(), String::new())
+                        };
                     if !output.is_empty() && still_owns_session(runtime, state) {
                         let msg = ChatMessage::new(
                             Role::Tool,
@@ -2443,6 +2480,11 @@ fn poll_shell_tasks(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    if let Some(t) = state.shell_tasks.iter_mut().find(|t| {
+                        t.id == *task_id && matches!(t.status, crate::state::ShellStatus::Running)
+                    }) {
+                        t.status = crate::state::ShellStatus::Failed("channel disconnected".into());
+                    }
                     completed.push(task_id.clone());
                     break;
                 }
@@ -2454,9 +2496,7 @@ fn poll_shell_tasks(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
         runtime
             .running_tasks
             .retain(|(id, _, _)| !completed.contains(id));
-        if still_owns_session(runtime, state)
-            && runtime.stream_rx.is_none()
-        {
+        if still_owns_session(runtime, state) && runtime.stream_rx.is_none() {
             start_completion(state, runtime);
         } else if !still_owns_session(runtime, state) {
             runtime.drain();

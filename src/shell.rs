@@ -177,42 +177,6 @@ fn run_command_inner(
     }
 }
 
-/// Parse AI output looking for shell commands in triple-backtick blocks
-/// labelled `bash` or `sh` or `shell`. Returns all commands found.
-pub fn extract_commands(text: &str) -> Vec<String> {
-    let mut commands = Vec::new();
-    let mut in_block = false;
-    let mut current = String::new();
-    let mut is_shell = false;
-
-    for line in text.lines() {
-        if !in_block {
-            let lower = line.trim().to_lowercase();
-            if lower.starts_with("```bash")
-                || lower.starts_with("```sh")
-                || lower.starts_with("```shell")
-                || lower.starts_with("```zsh")
-            {
-                in_block = true;
-                is_shell = true;
-                current = String::new();
-            }
-        } else if line.trim() == "```" {
-            if is_shell && !current.trim().is_empty() {
-                commands.push(current.trim().to_string());
-            }
-            in_block = false;
-            is_shell = false;
-            current = String::new();
-        } else {
-            current.push_str(line);
-            current.push('\n');
-        }
-    }
-
-    commands
-}
-
 /// Known language tags that should NOT be treated as filenames.
 const KNOWN_LANG_TAGS: &[&str] = &[
     "rust",
