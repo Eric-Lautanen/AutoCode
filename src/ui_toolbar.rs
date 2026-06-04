@@ -1,0 +1,247 @@
+// ui_toolbar.rs -- Top toolbar.
+// Project picker * Provider/model picker * Token budget meter * Action buttons.
+// Design: single horizontal strip, uses egui Visuals for colours, minimal chrome.
+
+use egui::{Align, Frame, Layout, Margin, RichText, Sense, Stroke, StrokeKind, Vec2};
+
+use crate::{
+    chat::{self, ChatRuntime},
+    helpers,
+    session,
+    state::{AppState, Project},
+    theme::Palette,
+    ui_helpers,
+};
+
+pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtime: &mut ChatRuntime) {
+    Frame::NONE
+        .fill(Palette::BG_BASE)
+        .inner_margin(Margin {
+            left: 12,
+            right: 8,
+            top: 4,
+            bottom: 4,
+        })
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                // -- Project picker ------------------------------------
+                let proj_label = state
+                    .active_project()
+                    .map(|p| p.name.clone())
+                    .unwrap_or_else(|| "No Project".into());
+
+                egui::ComboBox::from_id_salt("project_picker")
+                    .selected_text(
+                        RichText::new(&proj_label)
+                            .size(12.0)
+                            .color(Palette::TEXT_SECONDARY),
+                    )
+                    .show_ui(ui, |ui| {
+                        let projects: Vec<Project> = state.projects.clone();
+                        for p in &projects {
+                            let selected = state.active_project_id.as_deref() == Some(&p.id);
+                            if ui.selectable_label(selected, &p.name).clicked() {
+                                state.active_project_id = Some(p.id.clone());
+                                session::ensure_session(state);
+                            }
+                        }
+                        ui.separator();
+                        if ui.button("New Project...").clicked() {
+                            let current_dir = std::env::current_dir()
+                                .map(|p| p.to_string_lossy().to_string())
+                                .unwrap_or_else(|_| ".".to_string());
+                            ui.ctx().data_mut(|d| {
+                                d.insert_temp(egui::Id::new("open_new_project"), true);
+                                d.insert_temp(
+                                    egui::Id::new("new_project_dialog_path"),
+                                    current_dir,
+                                );
+                            });
+                        }
+                    });
+
+                ui_helpers::toolbar_separator(ui);
+
+                // -- Provider / model pill -----------------------------
+                let active_model = state
+                    .active_provider()
+                    .map(|p| p.model.chars().take(28).collect::<String>())
+                    .unwrap_or_default();
+                let prov_display = if active_model.is_empty() {
+                    state.active_provider.clone()
+                } else {
+                    format!("{} -- {}", state.active_provider, active_model)
+                };
+
+                egui::ComboBox::from_id_salt("provider_picker")
+                    .selected_text(
+                        RichText::new(&prov_display)
+                            .size(11.0)
+                            .color(Palette::TEXT_MUTED),
+                    )
+                    .show_ui(ui, |ui| {
+                        let keys: Vec<String> = state.providers.keys().cloned().collect();
+                        for key in keys {
+                            let sel = state.active_provider == key;
+                            if ui.selectable_label(sel, &key).clicked() {
+                                state.active_provider = key;
+                            }
+                        }
+                    });
+
+                ui_helpers::toolbar_separator(ui);
+
+                // -- Context budget meter ------------------------------
+                let frac = helpers::budget_fraction(state).clamp(0.0, 1.0);
+                show_token_meter(ui, state, frac);
+
+                // -- Network status indicator -------------------------
+                show_network_status(ui, &mut runtime.net_status);
+
+                // -- Right-side actions --------------------------------
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    // Settings (lights up when settings window is open).
+                    let settings_open: bool = ui.ctx().data_mut(|d| {
+                        d.get_temp(egui::Id::new("settings_open")).unwrap_or(false)
+                    });
+                    if lit_btn(ui, "Settings", settings_open).clicked() {
+                        ui.ctx().data_mut(|d| {
+                            let open: bool =
+                                d.get_temp(egui::Id::new("settings_open")).unwrap_or(false);
+                            d.insert_temp(egui::Id::new("settings_open"), !open);
+                        });
+                    }
+
+                    // New session (momentary, no persistent state).
+                    if lit_btn(ui, "+ Session", false).clicked() {
+                        chat::abort_for_session(runtime, "");
+                        state.new_session();
+                        session::ensure_session(state);
+                    }
+
+                    // Explorer toggle (lights up when explorer is open).
+                    if lit_btn(ui, "Files", state.show_explorer).clicked() {
+                        state.show_explorer = !state.show_explorer;
+                    }
+
+                    // Handoff toggle (lights up when enabled).
+                    show_handoff_toggle(ui, state);
+                });
+            });
+        });
+}
+
+fn show_token_meter(ui: &mut egui::Ui, state: &AppState, frac: f32) {
+    let meter_w = 88.0;
+    let meter_h = 6.0;
+
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(meter_w, meter_h), Sense::hover());
+    let painter = ui.painter();
+
+    // Track.
+    painter.rect_filled(rect, 3.0, Palette::BG_SURFACE);
+
+    // Fill.
+    let fill_color = if frac > 0.85 {
+        Palette::ERROR
+    } else if frac > 0.65 {
+        Palette::WARNING
+    } else {
+        Palette::SUCCESS
+    };
+    let fill_rect =
+        egui::Rect::from_min_size(rect.min, Vec2::new(rect.width() * frac, rect.height()));
+    painter.rect_filled(fill_rect, 3.0, fill_color);
+
+    // Outline.
+    painter.rect_stroke(
+        rect,
+        3.0,
+        Stroke::new(1.0, Palette::BORDER),
+        StrokeKind::Outside,
+    );
+
+    resp.on_hover_text(format!("{:.0}% context used", frac * 100.0));
+
+    ui.add_space(4.0);
+    ui.label(
+        RichText::new(helpers::usage_display(state))
+            .size(10.0)
+            .color(Palette::TEXT_MUTED),
+    );
+}
+
+fn show_network_status(ui: &mut egui::Ui, net: &mut crate::chat::NetworkStatus) {
+    let (dot, dot_color) = net.blink_dot();
+    let byte_str = net.format_bytes();
+
+    let show = net.active || !byte_str.is_empty();
+
+    ui_helpers::toolbar_separator(ui);
+
+    let dot_color = if show { dot_color } else { Palette::BG_BASE };
+    let dot_text = RichText::new(dot.to_string())
+        .size(10.0)
+        .color(dot_color)
+        .monospace();
+    let dot_resp = ui.add_sized(
+        egui::Vec2::new(14.0, 20.0),
+        egui::Label::new(dot_text).sense(egui::Sense::hover()),
+    );
+    if dot_resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+
+    if show {
+        if net.active {
+            let tip = match net.idle_secs {
+                Some(s) => format!(
+                    "Stream idle: {}s\nStall timeout at your Stream Idle setting (Settings)",
+                    s
+                ),
+                None => "Waiting for response...".to_string(),
+            };
+            dot_resp.on_hover_text(tip);
+        } else if net.stalled {
+            dot_resp.on_hover_text("Connection stalled");
+        }
+    }
+
+    if !byte_str.is_empty() {
+        ui.label(RichText::new(byte_str).size(10.0).color(if net.stalled {
+            Palette::ERROR
+        } else {
+            Palette::TEXT_MUTED
+        }));
+    } else {
+        ui.label(RichText::new(" ").size(10.0));
+    }
+}
+
+fn lit_btn(ui: &mut egui::Ui, label: &str, lit: bool) -> egui::Response {
+    ui.add(
+        egui::Button::new(RichText::new(label).size(12.0).color(if lit {
+            Palette::ACCENT
+        } else {
+            Palette::TEXT_MUTED
+        }))
+        .fill(egui::Color32::TRANSPARENT)
+        .stroke(egui::Stroke::new(
+            1.0,
+            if lit { Palette::ACCENT } else { Palette::BORDER },
+        )),
+    )
+}
+
+fn show_handoff_toggle(ui: &mut egui::Ui, state: &mut AppState) {
+    let enabled = state.handoff_enabled;
+    let resp = lit_btn(ui, "Handoff", enabled);
+    if resp.clicked() {
+        state.handoff_enabled = !enabled;
+    }
+    resp.on_hover_text(if enabled {
+        "Handoff enabled — agent can call `handoff` to start a fresh session"
+    } else {
+        "Handoff disabled — context will fill until manual intervention"
+    });
+}

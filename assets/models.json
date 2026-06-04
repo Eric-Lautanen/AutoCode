@@ -1,0 +1,55 @@
+{
+  "providers": {
+    "openrouter": {
+      "label": "OpenRouter",
+      "base_url": "https://openrouter.ai/api/v1",
+      "supports_cache_control": true,
+      "supports_parallel_tool_calls": true,
+      "default_model": "meta-llama/llama-3.1-70b-instruct",
+      "models": {
+        "meta-llama/llama-3.1-70b-instruct": { "context_window": 128000, "max_output_tokens": 16384, "thinking_api": "openai", "reasoning_efforts": ["low", "medium", "high"], "supports_cache_control": true },
+        "anthropic/claude-sonnet-4": { "context_window": 200000, "max_output_tokens": 16384, "max_output_tokens_thinking": 32768, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": true },
+        "deepseek/deepseek-v4-pro": { "context_window": 163840, "max_output_tokens": 16384, "max_output_tokens_thinking": 32768, "thinking_api": "deepseek", "reasoning_efforts": ["high", "max"], "supports_cache_control": true },
+        "deepseek/deepseek-v4-flash": { "context_window": 163840, "max_output_tokens": 16384, "max_output_tokens_thinking": 32768, "thinking_api": "deepseek", "reasoning_efforts": ["high", "max"], "supports_cache_control": true },
+        "openai/gpt-5": { "context_window": 128000, "max_output_tokens": 16384, "thinking_api": "openai", "reasoning_efforts": ["low", "medium", "high"], "supports_cache_control": true }
+      }
+    },
+    "nvidia-nim": {
+      "label": "NVIDIA NIM",
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "supports_cache_control": false,
+      "supports_parallel_tool_calls": false,
+      "default_model": "meta/llama-3.1-70b-instruct",
+      "models": {
+        "meta/llama-3.1-70b-instruct": { "context_window": 128000, "max_output_tokens": 16384, "thinking_api": "off", "reasoning_efforts": [], "supports_cache_control": false }
+      }
+    },
+    "openai-compatible": {
+      "label": "OpenAI-Compatible",
+      "base_url": "https://api.openai.com/v1",
+      "supports_cache_control": true,
+      "supports_parallel_tool_calls": true,
+      "default_model": "gpt-4o",
+      "models": {
+        "gpt-4o": { "context_window": 128000, "max_output_tokens": 16384, "thinking_api": "openai", "reasoning_efforts": ["low", "medium", "high"], "supports_cache_control": true }
+      }
+    },
+    "opencode-go": {
+      "label": "OpenCode Go",
+      "base_url": "https://opencode.ai/go/v1",
+      "supports_cache_control": true,
+      "supports_parallel_tool_calls": true,
+      "default_model": "kimi-k2.6",
+      "models": {
+        "kimi-k2.6": { "context_window": 131072, "max_output_tokens": 16384, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": false },
+        "kimi-k2.5": { "context_window": 131072, "max_output_tokens": 16384, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": false },
+        "deepseek-v4-pro": { "context_window": 163840, "max_output_tokens": 16384, "max_output_tokens_thinking": 32768, "thinking_api": "deepseek", "reasoning_efforts": ["high", "max"], "supports_cache_control": true },
+        "deepseek-v4-flash": { "context_window": 163840, "max_output_tokens": 16384, "max_output_tokens_thinking": 32768, "thinking_api": "deepseek", "reasoning_efforts": ["high", "max"], "supports_cache_control": true },
+        "glm-5": { "context_window": 131072, "max_output_tokens": 16384, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": true },
+        "glm-5.1": { "context_window": 131072, "max_output_tokens": 16384, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": true },
+        "mimo-v2.5": { "context_window": 131072, "max_output_tokens": 16384, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": true },
+        "mimo-v2.5-pro": { "context_window": 131072, "max_output_tokens": 16384, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": true }
+      }
+    }
+  }
+}

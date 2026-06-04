@@ -1,0 +1,18 @@
+# Rust
+/target
+**/target
+/srcBak
+**/srcBak
+
+# Build artifacts
+*.pdb
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

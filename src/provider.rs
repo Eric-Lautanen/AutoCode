@@ -1,0 +1,1512 @@
+// provider.rs -- HTTP API client for AI providers.
+// Uses only std::net + manual HTTP/HTTPS via a thin blocking wrapper.
+// To avoid a heavy async runtime we spawn threads and use channels.
+
+use crate::debug_log;
+
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::{
+    io::{BufRead, BufReader, Read, Write},
+    net::TcpStream,
+    sync::{
+        Arc,
+        mpsc::{self, Receiver, Sender},
+    },
+    time::Duration,
+};
+
+/// Global cookie jar: hostname → "NAME=VALUE" cookie string.
+/// Persisted across calls so DDG doesn't treat each request as a new session.
+static COOKIE_JAR: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+
+/// Returns the Cookie header value for a given host, or None if no cookie is stored.
+fn cookie_header(host: &str) -> Option<String> {
+    let jar = COOKIE_JAR.lock().ok()?;
+    let map = jar.as_ref()?;
+    let cookie = map.get(host)?;
+    debug_log!("provider: sending cookie for {}: {}", host, cookie);
+    Some(format!("Cookie: {}\r\n", cookie))
+}
+
+/// Parse and store Set-Cookie headers from the raw HTTP response (including headers).
+/// Returns the updated header_str with any trailing whitespace cleaned.
+fn store_cookies(host: &str, buffer: &[u8]) {
+    let header_end = buffer
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .unwrap_or(buffer.len());
+    let header_section = &buffer[..header_end];
+    let header_str = String::from_utf8_lossy(header_section);
+
+    let mut new_cookies: Vec<String> = Vec::new();
+    for line in header_str.lines() {
+        let lower = line.to_ascii_lowercase();
+        if let Some(val) = lower.strip_prefix("set-cookie:") {
+            // Extract NAME=VALUE before the first semicolon or end
+            let cookie_val = val
+                .trim()
+                .split(';')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if !cookie_val.is_empty() {
+                new_cookies.push(cookie_val);
+            }
+        }
+    }
+
+    if new_cookies.is_empty() {
+        return;
+    }
+
+    if let Ok(mut jar) = COOKIE_JAR.lock() {
+        let map = jar.get_or_insert_with(HashMap::new);
+        map.insert(host.to_string(), new_cookies.join("; "));
+    }
+}
+
+use rustls::pki_types::ServerName;
+
+use crate::state::{ApiProvider, ChatMessage};
+
+// -- Request / Response types --------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct CompletionRequest {
+    pub messages: Vec<ApiMessage>,
+    pub model: String,
+    pub temperature: f32,
+    pub max_tokens: u32,
+    pub stream: bool,
+    pub tools: bool,
+    pub tool_choice: ToolChoice,
+    pub parallel_tool_calls: bool,
+    pub request_timeout_secs: u64,
+    pub thinking_mode: bool,
+    pub reasoning_effort: String,
+    pub thinking_api: crate::state::ThinkingApi,
+}
+
+#[derive(Debug, Clone, Default)]
+pub enum ToolChoice {
+    #[default]
+    Auto,
+    #[allow(dead_code)]
+    None,
+    #[allow(dead_code)]
+    Required,
+}
+
+impl ToolChoice {
+    fn to_json(&self) -> serde_json::Value {
+        match self {
+            Self::Auto => serde_json::Value::String("auto".into()),
+            Self::None => serde_json::Value::String("none".into()),
+            Self::Required => serde_json::json!({"type": "required"}),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ApiMessage {
+    pub role: String,
+    pub content: String,
+    pub tool_call_id: Option<String>,
+    pub tool_calls: Option<serde_json::Value>,
+    pub cache_control: bool,
+    pub reasoning_content: Option<String>,
+}
+
+impl ApiMessage {
+    pub fn user(content: impl Into<String>) -> Self {
+        Self {
+            role: "user".into(),
+            content: content.into(),
+            tool_call_id: None,
+            tool_calls: None,
+            cache_control: false,
+            reasoning_content: None,
+        }
+    }
+}
+
+impl From<&ChatMessage> for ApiMessage {
+    fn from(m: &ChatMessage) -> Self {
+        Self {
+            role: m.role.label().to_string(),
+            content: m.content.clone(),
+            tool_call_id: m.tool_call_id.clone(),
+            tool_calls: m.tool_calls.clone(),
+            cache_control: false,
+            reasoning_content: m.reasoning_content.clone(),
+        }
+    }
+}
+
+/// A tool call requested by the model.
+#[derive(Debug, Clone)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
+}
+
+#[derive(Debug)]
+pub enum ProviderEvent {
+    Delta(String),
+    /// Internal model reasoning (e.g. extended thinking). Stored separately
+    /// so the UI can display it in a collapsible section and it doesn't pollute
+    /// the main response text or consume context budget on subsequent turns.
+    Reasoning(String),
+    ToolCall(ToolCall),
+    Done {
+        prompt_tokens: usize,
+        completion_tokens: usize,
+    },
+    Error(String),
+}
+
+// -- Tool definitions (sent to the API) ---------------------------------------
+
+fn tool_definitions() -> serde_json::Value {
+    let grep_note = crate::sysinfo::grep_note();
+    let grep_desc = if grep_note.is_empty() {
+        "Fast code search via ripgrep. Returns matching file paths with line numbers. Supports regex, glob filtering. Respects .gitignore.".to_string()
+    } else {
+        format!(
+            "Fast code search via ripgrep. Returns matching file paths with line numbers. Supports regex, glob filtering. Respects .gitignore. [!] {}",
+            grep_note
+        )
+    };
+
+    let shell_note = crate::sysinfo::shell_tools_note();
+    let shell_desc = format!(
+        "Run a shell command. Returns stdout, stderr, exit code. Use ONLY for: builds, tests, git, cargo/npm, listing directories, finding filenames. NEVER use for reading file contents, searching code, or generating diffs — use the dedicated read_file/read_files, grep, and patch_file tools instead (they handle encoding, line numbers, whitespace, and fuzzy matching correctly). {}",
+        shell_note
+    );
+
+    serde_json::json!([
+        {
+            "type": "function",
+            "function": {
+                "name": "run_shell",
+                "strict": true,
+                "description": shell_desc,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "Shell command. Windows: cmd /C. Unix: sh -c. e.g. 'cargo build'"
+                        },
+                        "cwd": {
+                            "type": "string",
+                            "description": "Working directory. Defaults to project root."
+                        },
+                        "timeout_secs": {
+                            "type": "integer",
+                            "description": "Timeout in seconds (default 120, max 600)."
+                        }
+                    },
+                    "required": ["command"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "strict": true,
+                "description": "Read a file. Returns numbered lines with total line/byte counts. Use offset+limit for large files. For multiple files use read_files.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "File path (absolute or relative to project)."
+                        },
+                        "offset": {
+                            "type": "integer",
+                            "description": "1-based line to start from (default 1)."
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Max lines to return (default 2000)."
+                        }
+                    },
+                    "required": ["path"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "read_files",
+                "strict": true,
+                "description": "Read multiple files at once. Always use this instead of repeated read_file calls. Returns content labelled by path.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "paths": {
+                            "type": "array",
+                            "items": { "type": "string" },
+                            "description": "File paths to read (max 10)."
+                        }
+                    },
+                    "required": ["paths"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "read_entire_file",
+                "strict": true,
+                "description": "Read an ENTIRE file without truncation. Returns ALL lines with line numbers. Use SPARINGLY — only when patch_file keeps failing or you need the full picture for correctness (e.g. mismatched delimiters, odd encoding). Prefer read_file with offset/limit for normal use.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "File path (absolute or relative to project)."
+                        },
+                        "entire": {
+                            "type": "boolean",
+                            "description": "Must be set to true to use this tool."
+                        }
+                    },
+                    "required": ["path", "entire"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "write_file",
+                "strict": true,
+                "description": "Write a file (overwrites). Creates parent directories. For small edits prefer patch_file.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "File path (absolute or relative)."
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "Complete file content."
+                        }
+                    },
+                    "required": ["path", "content"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_dir",
+                "strict": true,
+                "description": "List a directory. Returns names (trailing / for dirs). Respects .gitignore.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Directory path. Defaults to project root."
+                        }
+                    },
+                    "required": ["path"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "delete_file",
+                "strict": true,
+                "description": "Delete a file or empty directory. Irreversible.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Path to delete."
+                        }
+                    },
+                    "required": ["path"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "rename_file",
+                "strict": true,
+                "description": "Move/rename a file or directory. Creates destination parent dirs.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "from": { "type": "string", "description": "Source path. Must exist." },
+                        "to": { "type": "string", "description": "Destination path." }
+                    },
+                    "required": ["from", "to"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "create_dir",
+                "strict": true,
+                "description": "Create a directory (mkdir -p). No-op if exists.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "Directory path to create." }
+                    },
+                    "required": ["path"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "grep",
+                "strict": true,
+                "description": grep_desc,
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": {
+                            "type": "string",
+                            "description": "Search pattern (literal or regex). e.g. 'fn main', 'TODO'"
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "Directory or file to search. Defaults to project root."
+                        },
+                        "file_glob": {
+                            "type": "string",
+                            "description": "Glob filter e.g. '*.rs'. Defaults to all files."
+                        },
+                        "case_sensitive": {
+                            "type": "boolean",
+                            "description": "Case sensitive? Default true."
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Max matches (default 50, max 200)."
+                        }
+                    },
+                    "required": ["pattern"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "patch_file",
+                "strict": true,
+                "description": "Surgical find-and-replace file edit. Handles whitespace/CRLF/tab differences and fuzzy-matches similar lines. Fails on ambiguous matches. Prefer over write_file for small edits.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "File to patch." },
+                        "old_text": {
+                            "type": "string",
+                            "description": "Text to replace. Copy exact lines from read_file output (line numbers auto-stripped)."
+                        },
+                        "new_text": {
+                            "type": "string",
+                            "description": "Replacement text. Empty to delete."
+                        },
+                        "replace_all": {
+                            "type": "boolean",
+                            "description": "Replace all occurrences (default: first only)."
+                        }
+                    },
+                    "required": ["path", "old_text", "new_text"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "web_search",
+                "strict": true,
+                "description": "Search the web. Returns plain-text result summaries with URLs. Use fetch_url to read full pages.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query. Be specific. e.g. 'rust reqwest async POST'"
+                        },
+                        "num_results": {
+                            "type": "integer",
+                            "description": "Results to return (1-10, default 5)."
+                        }
+                    },
+                    "required": ["query"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "fetch_url",
+                "strict": true,
+                "description": "Fetch a URL's text content. HTML is auto-stripped. Use after web_search.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "description": "Full URL. e.g. 'https://docs.rs/tokio'"
+                        },
+                        "max_bytes": {
+                            "type": "integer",
+                            "description": "Max bytes to return (default 32768, max 131072)."
+                        }
+                    },
+                    "required": ["url"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "todo_list",
+                "strict": true,
+                "description": "Create/update a visible task list. Use for multi-step tasks. Send complete list each call. Mark 'completed' immediately.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "title": { "type": "string", "description": "Short title (max 35 chars)." },
+                        "items": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "id": { "type": "string", "description": "Stable id e.g. '1','2'." },
+                                    "content": { "type": "string", "description": "Short step description." },
+                                    "status": {
+                                        "type": "string",
+                                        "enum": ["pending", "in_progress", "completed", "cancelled"],
+                                        "description": "Current status."
+                                    },
+                                    "priority": {
+                                        "type": "string",
+                                        "enum": ["high", "medium", "low"],
+                                        "description": "Priority (default 'medium')."
+                                    }
+                                },
+                                "required": ["id", "content", "status"],
+                                "additionalProperties": false
+                            },
+                            "description": "All items. Send complete list each call."
+                        }
+                    },
+                    "required": ["title", "items"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "glob",
+                "strict": true,
+                "description": "Find files matching a glob pattern. Walks the project tree. Returns relative paths sorted alphabetically.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": {
+                            "type": "string",
+                            "description": "Glob pattern. Supports * (any chars except /), ** (any directory depth), ? (single char). e.g. '**/*.rs', 'src/**/*.rs', '*.toml'"
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "Directory to search in. Defaults to project root."
+                        }
+                    },
+                    "required": ["pattern"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "handoff",
+                "strict": true,
+                "description": "Signal that the current session should end and a fresh session should start. Call this after saving RESUME.md and any other handoff files via write_file. The next session will begin by reading RESUME.md to continue the work.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "reason": {
+                            "type": "string",
+                            "description": "Why the handoff is needed (e.g. 'context nearly full', 'task milestone complete')."
+                        }
+                    },
+                    "required": ["reason"],
+                    "additionalProperties": false
+                }
+            }
+        },
+    ])
+}
+
+// -- Client --------------------------------------------------------------------
+
+pub struct ProviderClient;
+
+impl ProviderClient {
+    pub fn complete(provider: ApiProvider, request: CompletionRequest) -> Receiver<ProviderEvent> {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            debug_log!("provider: outer-thread start");
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_request_once(provider, request, tx);
+            }));
+            debug_log!("provider: outer-thread exit");
+        });
+        rx
+    }
+}
+
+// -- Request wrapper (single-shot, retry is handled by chat.rs outer layer) ------
+
+fn run_request_once(provider: ApiProvider, request: CompletionRequest, tx: Sender<ProviderEvent>) {
+    debug_log!("provider: run_request_once start");
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_request(provider, request, tx.clone())
+    }));
+    match result {
+        Ok(Err(e)) => {
+            debug_log!("provider: run_request_once error: {}", e);
+            let _ = tx.send(ProviderEvent::Error(e.to_string()));
+        }
+        Err(panic_info) => {
+            let msg = format!(
+                "Internal error (panic): {}",
+                crate::debug::panic_msg(&panic_info)
+            );
+            debug_log!("provider: run_request_once PANIC: {}", msg);
+            let _ = tx.send(ProviderEvent::Error(msg));
+        }
+        _ => {
+            debug_log!("provider: run_request_once ok");
+        }
+    }
+}
+
+// -- HTTP request execution ----------------------------------------------------
+
+struct HttpConn<'a> {
+    host: &'a str,
+    port: u16,
+    path: &'a str,
+}
+
+fn run_request(
+    provider: ApiProvider,
+    req: CompletionRequest,
+    tx: Sender<ProviderEvent>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    debug_log!(
+        "provider::run_request: url={} model={} thinking={} api={:?}",
+        provider.base_url,
+        req.model,
+        req.thinking_mode,
+        req.thinking_api
+    );
+    let body = build_request_body(&req, provider.kind.supports_cache_control())?;
+    let url = format!(
+        "{}/chat/completions",
+        provider.base_url.trim_end_matches('/')
+    );
+
+    let (host, path, port, use_tls) = parse_url(&url)?;
+
+    if use_tls {
+        let conn = HttpConn {
+            host: &host,
+            port,
+            path: &path,
+        };
+        send_https(
+            &conn,
+            provider.api_key.as_str(),
+            &body,
+            req.stream,
+            &req.model,
+            tx,
+            req.request_timeout_secs,
+        )
+    } else {
+        let conn = HttpConn {
+            host: &host,
+            port,
+            path: &path,
+        };
+        send_http(
+            conn,
+            provider.api_key.as_str(),
+            &body,
+            req.stream,
+            &req.model,
+            tx,
+            req.request_timeout_secs,
+        )
+    }
+}
+
+fn build_request_body(
+    req: &CompletionRequest,
+    supports_cache: bool,
+) -> Result<String, serde_json::Error> {
+    let messages: Vec<serde_json::Value> = req
+        .messages
+        .iter()
+        .map(|m| {
+            let mut obj = serde_json::json!({
+                "role": m.role,
+                "content": m.content
+            });
+            if let Some(id) = &m.tool_call_id {
+                obj["tool_call_id"] = serde_json::Value::String(id.clone());
+            }
+            if let Some(tc) = &m.tool_calls {
+                obj["tool_calls"] = tc.clone();
+            }
+            if m.cache_control && supports_cache {
+                obj["cache_control"] = serde_json::json!({"type": "ephemeral"});
+            }
+            if matches!(req.thinking_api, crate::state::ThinkingApi::DeepSeek) {
+                if let Some(rc) = &m.reasoning_content {
+                    obj["reasoning_content"] = serde_json::Value::String(rc.clone());
+                }
+            }
+            obj
+        })
+        .collect();
+
+    let mut body = serde_json::json!({
+        "model": req.model,
+        "messages": messages,
+        "temperature": req.temperature,
+        "max_tokens": req.max_tokens,
+        "stream": req.stream
+    });
+
+    // Thinking mode additions (DeepSeek / OpenAI specific).
+    match &req.thinking_api {
+        crate::state::ThinkingApi::DeepSeek if req.thinking_mode => {
+            body["thinking"] = serde_json::json!({"type": "enabled"});
+            body["reasoning_effort"] = serde_json::Value::String(req.reasoning_effort.clone());
+            // Drop temperature for DeepSeek thinking mode.
+            body.as_object_mut().and_then(|o| o.remove("temperature"));
+        }
+        crate::state::ThinkingApi::OpenAI if req.thinking_mode => {
+            body["reasoning_effort"] = serde_json::Value::String(req.reasoning_effort.clone());
+        }
+        _ => {}
+    }
+
+    // Request accurate token usage in the final SSE chunk.
+    // Providers that don't support this simply ignore the field.
+    if req.stream {
+        body["stream_options"] = serde_json::json!({"include_usage": true});
+    }
+
+    if req.tools {
+        body["tools"] = tool_definitions();
+        body["tool_choice"] = req.tool_choice.to_json();
+        body["parallel_tool_calls"] = serde_json::Value::Bool(req.parallel_tool_calls);
+    }
+
+    serde_json::to_string(&body)
+}
+
+fn parse_url(
+    url: &str,
+) -> Result<(String, String, u16, bool), Box<dyn std::error::Error + Send + Sync>> {
+    let use_tls = url.starts_with("https://");
+    let stripped = url
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    let (hostport, path) = stripped.split_once('/').unwrap_or((stripped, ""));
+    let path = format!("/{}", path);
+    let (host, port_str) = hostport
+        .split_once(':')
+        .unwrap_or((hostport, if use_tls { "443" } else { "80" }));
+    let port: u16 = port_str.parse().unwrap_or(if use_tls { 443 } else { 80 });
+    Ok((host.to_string(), path, port, use_tls))
+}
+
+fn send_http(
+    conn: HttpConn<'_>,
+    api_key: &str,
+    body: &str,
+    stream: bool,
+    model: &str,
+    tx: Sender<ProviderEvent>,
+    request_timeout_secs: u64,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let addr = format!("{}:{}", conn.host, conn.port);
+    let mut stream_conn = TcpStream::connect(&addr)?;
+    stream_conn.set_read_timeout(Some(std::time::Duration::from_secs(request_timeout_secs)))?;
+    stream_conn.set_write_timeout(Some(std::time::Duration::from_secs(request_timeout_secs)))?;
+
+    let request = build_http_request(conn.host, conn.path, api_key, body);
+    stream_conn.write_all(request.as_bytes())?;
+    stream_conn.flush()?;
+
+    let mut reader = BufReader::with_capacity(8192, stream_conn);
+    process_http_response(&mut reader, stream, model, tx)
+}
+
+fn send_https(
+    conn: &HttpConn<'_>,
+    api_key: &str,
+    body: &str,
+    is_stream: bool,
+    model: &str,
+    tx: Sender<ProviderEvent>,
+    request_timeout_secs: u64,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    debug_log!(
+        "provider::send_https: host={} port={} stream={}",
+        conn.host,
+        conn.port,
+        is_stream
+    );
+
+    let addr = format!("{}:{}", conn.host, conn.port);
+    let stream = TcpStream::connect(&addr)?;
+    stream.set_read_timeout(Some(Duration::from_secs(request_timeout_secs)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(request_timeout_secs)))?;
+
+    let root_store =
+        rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let config = Arc::new(
+        rustls::ClientConfig::builder()
+            .with_root_certificates(root_store)
+            .with_no_client_auth(),
+    );
+    let dns_name = rustls::pki_types::DnsName::try_from(conn.host.to_string())
+        .map_err(|_| "invalid DNS name")?;
+    let server_name = ServerName::DnsName(dns_name);
+    let client = rustls::ClientConnection::new(config, server_name)?;
+    let mut tls_stream = rustls::StreamOwned::new(client, stream);
+
+    let request = build_http_request(conn.host, conn.path, api_key, body);
+    tls_stream.write_all(request.as_bytes())?;
+    tls_stream.flush()?;
+
+    let mut reader = BufReader::with_capacity(16384, tls_stream);
+    process_http_response(&mut reader, is_stream, model, tx)
+}
+
+fn build_http_request(host: &str, path: &str, api_key: &str, body: &str) -> String {
+    format!(
+        "POST {path} HTTP/1.1\r\n\
+        Host: {host}\r\n\
+        Authorization: Bearer {api_key}\r\n\
+        Content-Type: application/json\r\n\
+        Content-Length: {len}\r\n\
+        Connection: close\r\n\
+        \r\n\
+        {body}",
+        path = path,
+        host = host,
+        api_key = api_key,
+        len = body.len(),
+        body = body
+    )
+}
+
+fn process_http_response<R: BufRead>(
+    reader: &mut R,
+    stream: bool,
+    model: &str,
+    tx: Sender<ProviderEvent>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut status_code: u16 = 200;
+    let mut status_text = String::new();
+    let mut retry_after_secs: Option<u64> = None;
+    let mut is_chunked = false;
+
+    for line in reader.by_ref().lines().flatten() {
+        if line.starts_with("HTTP/") {
+            let mut parts = line.splitn(3, ' ');
+            let _ = parts.next();
+            if let Some(code) = parts.next() {
+                status_code = code.trim().parse().unwrap_or(200);
+            }
+            if let Some(reason) = parts.next() {
+                status_text = reason.trim().to_string();
+            }
+        }
+        let lower = line.to_ascii_lowercase();
+        if let Some(val) = lower.strip_prefix("retry-after:") {
+            let val = val.trim();
+            retry_after_secs = val.parse::<u64>().ok();
+        }
+        if lower.contains("transfer-encoding:") && lower.contains("chunked") {
+            is_chunked = true;
+        }
+        if line.trim().is_empty() {
+            break;
+        }
+    }
+
+    // Read remaining raw bytes. If chunked, decode first.
+    let mut raw_body = Vec::new();
+    if let Err(e) = reader.read_to_end(&mut raw_body) {
+        // Some providers (NVIDIA NIM) drop the TCP connection without a proper
+        // TLS close_notify.  Treat this as a clean EOF rather than an error.
+        if e.kind() != std::io::ErrorKind::UnexpectedEof {
+            return Err(e.into());
+        }
+    }
+    let body_bytes = if is_chunked {
+        decode_chunked(&raw_body)
+    } else {
+        raw_body
+    };
+    let body_str = String::from_utf8_lossy(&body_bytes).to_string();
+
+    if status_code >= 400 {
+        let api_msg = serde_json::from_str::<serde_json::Value>(&body_str)
+            .ok()
+            .and_then(|v| {
+                v["error"]["message"]
+                    .as_str()
+                    .or_else(|| v["error"].as_str().filter(|s| !s.is_empty()))
+                    .or_else(|| v["message"].as_str())
+                    .or_else(|| v["detail"].as_str())
+                    .or_else(|| v["error"]["code"].as_str())
+                    .map(|s| s.to_string())
+            });
+        let body_retry_after_ms: Option<u64> = serde_json::from_str::<serde_json::Value>(&body_str)
+            .ok()
+            .and_then(|v| v["error"]["retry_after_ms"].as_u64());
+
+        let mut msg = format!("[{}] {} ({})", model, status_text, status_code);
+        if let Some(detail) = api_msg {
+            msg.push_str(&format!(" — {}", detail));
+        } else if !body_str.is_empty() {
+            let preview: String = body_str.chars().take(200).collect();
+            msg.push_str(&format!(" — {}", preview));
+        }
+        if let Some(secs) = retry_after_secs {
+            msg.push_str(&format!(" (retry after {}s)", secs));
+        } else if let Some(ms) = body_retry_after_ms {
+            msg.push_str(&format!(" (retry after {}ms)", ms));
+        }
+        let _ = tx.send(ProviderEvent::Error(msg));
+        return Ok(());
+    }
+
+    if stream {
+        let cursor = std::io::Cursor::new(body_bytes);
+        let buf_reader = std::io::BufReader::new(cursor);
+        let mut lines = buf_reader.lines();
+        parse_sse_stream(&mut lines, &tx)?;
+    } else {
+        let parts: Vec<&str> = body_str.splitn(2, "\n\n").collect();
+        if let Some(v) = serde_json::from_str::<serde_json::Value>(body_str.trim()).ok() {
+            if let Some(text) = v["choices"][0]["message"]["content"].as_str() {
+                let _ = tx.send(ProviderEvent::Delta(text.to_string()));
+            }
+            let p = v["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as usize;
+            let c = v["usage"]["completion_tokens"].as_u64().unwrap_or(0) as usize;
+            let _ = tx.send(ProviderEvent::Done {
+                prompt_tokens: p,
+                completion_tokens: c,
+            });
+        } else if let Some(v) = parts.get(1) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(v.trim()) {
+                if let Some(text) = v["choices"][0]["message"]["content"].as_str() {
+                    let _ = tx.send(ProviderEvent::Delta(text.to_string()));
+                }
+                let p = v["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as usize;
+                let c = v["usage"]["completion_tokens"].as_u64().unwrap_or(0) as usize;
+                let _ = tx.send(ProviderEvent::Done {
+                    prompt_tokens: p,
+                    completion_tokens: c,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+// -- SSE stream parser ---------------------------------------------------------
+
+fn parse_sse_stream<R: BufRead>(
+    lines: &mut std::io::Lines<R>,
+    tx: &Sender<ProviderEvent>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut tool_acc: std::collections::HashMap<usize, (String, String, String)> =
+        std::collections::HashMap::new();
+
+    let mut content_count = 0u32;
+    let mut reasoning_count = 0u32;
+
+    let mut prompt_tokens = 0usize;
+    let mut completion_tokens = 0usize;
+    let mut saw_data_line = false;
+    let mut saw_finish = false;
+    let mut had_error = false;
+    let mut raw_buf = String::new();
+    let mut line_count = 0u32;
+
+    for line in lines.by_ref() {
+        let line = match line {
+            Ok(l) => l,
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(e) => return Err(e.into()),
+        };
+
+        line_count += 1;
+        if line_count <= 10 {
+            debug_log!(
+                "provider::sse raw_line[{}]: {:?}",
+                line_count,
+                &line[..line.len().min(120)]
+            );
+        }
+
+        if line.starts_with(':') {
+            continue;
+        }
+
+        if !line.starts_with("data: ") {
+            raw_buf.push_str(&line);
+            raw_buf.push('\n');
+            continue;
+        }
+
+        saw_data_line = true;
+        let data = line["data: ".len()..].trim();
+
+        if data == "[DONE]" {
+            saw_finish = true;
+            break;
+        }
+
+        let v = match serde_json::from_str::<serde_json::Value>(data) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        if let (Some(p), Some(c)) = (
+            v["usage"]["prompt_tokens"].as_u64(),
+            v["usage"]["completion_tokens"].as_u64(),
+        ) {
+            prompt_tokens = p as usize;
+            completion_tokens = c as usize;
+        }
+
+        let delta = &v["choices"][0]["delta"];
+
+        if let Some(text) = delta["content"].as_str()
+            && !text.is_empty()
+        {
+            if content_count < 3 {
+                debug_log!(
+                    "provider::sse content_chunk[{}]: {:?}",
+                    content_count,
+                    &text[..text.len().min(80)]
+                );
+            }
+            content_count += 1;
+            if tx.send(ProviderEvent::Delta(text.to_string())).is_err() {
+                return Err("channel closed".into());
+            }
+        }
+
+        if let Some(reasoning) = delta["reasoning_content"].as_str()
+            && !reasoning.is_empty()
+        {
+            if reasoning_count < 3 {
+                debug_log!(
+                    "provider::sse reason_chunk[{}]: {:?}",
+                    reasoning_count,
+                    &reasoning[..reasoning.len().min(80)]
+                );
+            }
+            reasoning_count += 1;
+            if tx
+                .send(ProviderEvent::Reasoning(reasoning.to_string()))
+                .is_err()
+            {
+                return Err("channel closed".into());
+            }
+        }
+
+        if let Some(tc_arr) = delta["tool_calls"].as_array() {
+            for tc in tc_arr {
+                let idx = tc["index"].as_u64().unwrap_or(0) as usize;
+                let entry = tool_acc
+                    .entry(idx)
+                    .or_insert_with(|| (String::new(), String::new(), String::new()));
+
+                if let Some(id) = tc["id"].as_str() {
+                    entry.0 = id.to_string();
+                }
+                if let Some(name) = tc["function"]["name"].as_str() {
+                    entry.1 = name.to_string();
+                }
+                if let Some(args) = tc["function"]["arguments"].as_str() {
+                    entry.2.push_str(args);
+                }
+            }
+        }
+
+        // Some providers (e.g. NVIDIA NIM) send tool calls in the
+        // non-streaming `message.tool_calls` field instead of `delta.tool_calls`.
+        if let Some(tc_arr) = v["choices"][0]["message"]["tool_calls"].as_array() {
+            for (idx, tc) in tc_arr.iter().enumerate() {
+                let id = tc["id"].as_str().unwrap_or("").to_string();
+                let name = tc["function"]["name"].as_str().unwrap_or("").to_string();
+                let args = tc["function"]["arguments"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string();
+                if !name.is_empty() {
+                    tool_acc.insert(idx, (id, name, args));
+                }
+            }
+        }
+
+        if let Some(reason) = v["choices"][0]["finish_reason"].as_str() {
+            if reason == "tool_calls" {
+                let mut indices: Vec<usize> = tool_acc.keys().cloned().collect();
+                indices.sort();
+                for idx in indices {
+                    if let Some((id, name, args)) = tool_acc.remove(&idx)
+                        && tx
+                            .send(ProviderEvent::ToolCall(ToolCall {
+                                id,
+                                name,
+                                arguments: args,
+                            }))
+                            .is_err()
+                    {
+                        return Err("channel closed".into());
+                    }
+                }
+            }
+            if reason == "stop" || reason == "tool_calls" || reason == "length" {
+                saw_finish = true;
+            }
+            if reason == "content_filter" {
+                let _ = tx.send(ProviderEvent::Error(
+                    "Response filtered by provider content policy (content_filter)".to_string(),
+                ));
+                had_error = true;
+                saw_finish = true;
+            }
+        }
+    }
+
+    if !tool_acc.is_empty() {
+        let mut indices: Vec<usize> = tool_acc.keys().cloned().collect();
+        indices.sort();
+        for idx in indices {
+            if let Some((id, name, args)) = tool_acc.remove(&idx)
+                && tx
+                    .send(ProviderEvent::ToolCall(ToolCall {
+                        id,
+                        name,
+                        arguments: args,
+                    }))
+                    .is_err()
+            {
+                return Err("channel closed".into());
+            }
+        }
+    }
+
+    if !saw_data_line && !raw_buf.trim().is_empty() {
+        let api_msg = serde_json::from_str::<serde_json::Value>(raw_buf.trim())
+            .ok()
+            .and_then(|v| {
+                v["error"]["message"]
+                    .as_str()
+                    .or_else(|| v["message"].as_str())
+                    .or_else(|| v["error"].as_str())
+                    .map(|s| s.to_string())
+            });
+
+        if let Some(msg) = api_msg {
+            let _ = tx.send(ProviderEvent::Error(msg));
+            return Ok(());
+        }
+        let preview: String = raw_buf.trim().chars().take(300).collect();
+        let _ = tx.send(ProviderEvent::Error(format!(
+            "Unexpected response: {}",
+            preview
+        )));
+        return Ok(());
+    }
+
+    if !saw_finish && saw_data_line {
+        let _ = tx.send(ProviderEvent::Error(
+            "Connection lost mid-stream -- response may be truncated".to_string(),
+        ));
+        return Ok(());
+    }
+
+    if !had_error {
+        debug_log!(
+            "provider::sse summary: lines={} content_chunks={} reason_chunks={} prompt_tokens={} comp_tokens={}",
+            line_count,
+            content_count,
+            reasoning_count,
+            prompt_tokens,
+            completion_tokens
+        );
+        let _ = tx.send(ProviderEvent::Done {
+            prompt_tokens,
+            completion_tokens,
+        });
+    }
+    Ok(())
+}
+
+#[allow(dead_code)]
+fn process_non_stream_body(
+    body: &str,
+    tx: &Sender<ProviderEvent>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let v = match serde_json::from_str::<serde_json::Value>(body) {
+        Ok(v) => v,
+        Err(_) => {
+            let preview: String = body.trim().chars().take(300).collect();
+            let _ = tx.send(ProviderEvent::Error(format!(
+                "Non-JSON response from provider: {}",
+                preview
+            )));
+            return Ok(());
+        }
+    };
+
+    if let Some(err) = v["error"]["message"].as_str() {
+        let kind = v["error"]["type"].as_str().unwrap_or("");
+        let code = v["error"]["code"].as_str().unwrap_or("");
+        let full = match (kind, code) {
+            ("", "") => err.to_string(),
+            (k, "") => format!("{} ({})", err, k),
+            ("", c) => format!("{} [{}]", err, c),
+            (k, c) => format!("{} ({}) [{}]", err, k, c),
+        };
+        let _ = tx.send(ProviderEvent::Error(full));
+        return Ok(());
+    }
+
+    let msg = &v["choices"][0]["message"];
+
+    if let Some(tc_arr) = msg["tool_calls"].as_array() {
+        for tc in tc_arr {
+            let id = tc["id"].as_str().unwrap_or("").to_string();
+            let name = tc["function"]["name"].as_str().unwrap_or("").to_string();
+            let args = tc["function"]["arguments"]
+                .as_str()
+                .unwrap_or("{}")
+                .to_string();
+            let _ = tx.send(ProviderEvent::ToolCall(ToolCall {
+                id,
+                name,
+                arguments: args,
+            }));
+        }
+    }
+
+    if let Some(content) = msg["content"].as_str()
+        && !content.is_empty()
+    {
+        let _ = tx.send(ProviderEvent::Delta(content.to_string()));
+    }
+
+    let p = v["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as usize;
+    let c = v["usage"]["completion_tokens"].as_u64().unwrap_or(0) as usize;
+    let _ = tx.send(ProviderEvent::Done {
+        prompt_tokens: p,
+        completion_tokens: c,
+    });
+    Ok(())
+}
+
+// -- Model list fetcher --------------------------------------------------------
+
+pub fn fetch_models(provider: &ApiProvider) -> Vec<String> {
+    let url = format!("{}/models", provider.base_url.trim_end_matches('/'));
+
+    // Use native_get so we get cookie handling, chunked decoding, and
+    // header stripping for free.  Pass the API key via the Authorization
+    // header which is already built into the request by native_get... wait,
+    // native_get doesn't support custom headers.  We'll do it inline but
+    // with chunked decoding added.
+
+    let (host, path, port, use_tls) = match parse_url(&url) {
+        Ok(p) => p,
+        Err(_) => return Vec::new(),
+    };
+
+    let result = (|| -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let addr = format!("{}:{}", host, port);
+        let stream = TcpStream::connect(&addr)?;
+        stream.set_read_timeout(Some(Duration::from_secs(15)))?;
+
+        let mut buffer = Vec::new();
+        let request = format!(
+            "GET {path} HTTP/1.1\r\n\
+             Host: {host}\r\n\
+             Authorization: Bearer {api_key}\r\n\
+             Connection: close\r\n\
+             \r\n",
+            api_key = provider.api_key.as_str(),
+        );
+
+        if use_tls {
+            let root_store =
+                rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+            let config = Arc::new(
+                rustls::ClientConfig::builder()
+                    .with_root_certificates(root_store)
+                    .with_no_client_auth(),
+            );
+            let dns_name = rustls::pki_types::DnsName::try_from(host.clone())
+                .map_err(|_| "invalid DNS name")?;
+            let server_name = ServerName::DnsName(dns_name);
+            let client = rustls::ClientConnection::new(config, server_name)?;
+            let mut tls_stream = rustls::StreamOwned::new(client, stream);
+            tls_stream.write_all(request.as_bytes())?;
+            tls_stream.read_to_end(&mut buffer)?;
+        } else {
+            let mut stream = stream;
+            stream.write_all(request.as_bytes())?;
+            stream.read_to_end(&mut buffer)?;
+        };
+
+        // Strip headers and decode chunked encoding
+        let (header_end, is_chunked) = {
+            let header_str = String::from_utf8_lossy(&buffer);
+            let is_chunked = header_str.contains("Transfer-Encoding: chunked")
+                || header_str.contains("transfer-encoding: chunked");
+            let start = buffer
+                .windows(4)
+                .position(|w| w == b"\r\n\r\n")
+                .map(|i| i + 4)
+                .or_else(|| buffer.windows(2).position(|w| w == b"\n\n").map(|i| i + 2))
+                .unwrap_or(0);
+            (start, is_chunked)
+        };
+        let body = if header_end > 0 && header_end < buffer.len() {
+            if is_chunked {
+                decode_chunked(&buffer[header_end..])
+            } else {
+                buffer[header_end..].to_vec()
+            }
+        } else {
+            buffer
+        };
+        Ok(String::from_utf8_lossy(&body).to_string())
+    })();
+
+    match result {
+        Ok(text) => {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                v["data"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|m| m["id"].as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            }
+        }
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Perform a native HTTP GET request, returning the response body with
+/// HTTP headers stripped. Supports both HTTP and HTTPS. Does not follow
+/// redirects. The max_bytes limit applies to the body only (headers excluded).
+pub fn native_get(url: &str, timeout_secs: u64, max_bytes: usize) -> Result<Vec<u8>, String> {
+    let (host, path, port, use_tls) = parse_url(url).map_err(|e| e.to_string())?;
+    let addr = format!("{}:{}", host, port);
+    let stream = TcpStream::connect(&addr).map_err(|e| format!("connect: {}", e))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(timeout_secs)))
+        .map_err(|e| format!("set_read_timeout: {}", e))?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(timeout_secs)))
+        .map_err(|e| format!("set_write_timeout: {}", e))?;
+
+    // Read all data into a scratch buffer (headers + body). We allocate
+    // extra headroom past max_bytes so headers don't eat into the body limit.
+    let scratch_max = max_bytes + 8192;
+    let mut buffer = Vec::with_capacity(scratch_max.min(16384));
+
+    fn read_all(
+        stream: &mut dyn std::io::Read,
+        buffer: &mut Vec<u8>,
+        max_total: usize,
+    ) -> Result<(), String> {
+        let mut buf = [0u8; 8192];
+        loop {
+            match stream.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let remaining = max_total.saturating_sub(buffer.len());
+                    if remaining == 0 {
+                        break;
+                    }
+                    let to_copy = n.min(remaining);
+                    buffer.extend_from_slice(&buf[..to_copy]);
+                }
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::TimedOut
+                        || e.kind() == std::io::ErrorKind::WouldBlock =>
+                {
+                    return Err("read: timed out".into());
+                }
+                Err(e) => return Err(format!("read: {}", e)),
+            }
+        }
+        Ok(())
+    }
+
+    let cookie_line = cookie_header(&host);
+    let cookie_str = cookie_line.as_deref().unwrap_or("");
+
+    let request = format!(
+        "GET {path} HTTP/1.1\r\n\
+         Host: {host}\r\n\
+         User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36\r\n\
+         Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n\
+         Accept-Language: en-US,en;q=0.9\r\n\
+         Accept-Encoding: identity\r\n\
+         {cookie_str}\
+         Connection: close\r\n\
+         \r\n"
+    );
+
+    if use_tls {
+        let root_store =
+            rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let config = Arc::new(
+            rustls::ClientConfig::builder()
+                .with_root_certificates(root_store)
+                .with_no_client_auth(),
+        );
+        let dns_name = rustls::pki_types::DnsName::try_from(host.clone())
+            .map_err(|_| "invalid DNS name".to_string())?;
+        let server_name = ServerName::DnsName(dns_name);
+        let client = rustls::ClientConnection::new(config, server_name)
+            .map_err(|e| format!("tls: {}", e))?;
+        let mut tls_stream = rustls::StreamOwned::new(client, stream);
+        tls_stream
+            .write_all(request.as_bytes())
+            .map_err(|e| format!("write: {}", e))?;
+        read_all(&mut tls_stream, &mut buffer, scratch_max)?;
+    } else {
+        let mut stream = stream;
+        stream
+            .write_all(request.as_bytes())
+            .map_err(|e| format!("write: {}", e))?;
+        read_all(&mut stream, &mut buffer, scratch_max)?;
+    }
+
+    // Store any Set-Cookie from the response for subsequent requests
+    store_cookies(&host, &buffer);
+
+    // Strip HTTP response headers: find the blank line separating headers from body.
+    // We look for \r\n\r\n (HTTP standard) with a fallback for servers that use \n\n.
+    let (body_start, is_chunked) = {
+        let header_str = String::from_utf8_lossy(&buffer);
+        let is_chunked = header_str.contains("Transfer-Encoding: chunked")
+            || header_str.contains("transfer-encoding: chunked");
+        let start = buffer
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .map(|i| i + 4)
+            .or_else(|| buffer.windows(2).position(|w| w == b"\n\n").map(|i| i + 2))
+            .unwrap_or(0);
+        (start, is_chunked)
+    };
+
+    let body = if body_start > 0 && body_start < buffer.len() {
+        let raw = &buffer[body_start..];
+        if is_chunked {
+            decode_chunked(raw)
+        } else {
+            raw.to_vec()
+        }
+    } else {
+        // No headers found — assume entire response is the body
+        buffer.to_vec()
+    };
+
+    // Cap body to max_bytes
+    let end = body.len().min(max_bytes);
+    Ok(body[..end].to_vec())
+}
+
+/// Decode HTTP chunked transfer-encoding: strip hex size prefixes and
+/// chunk separators, returning the reassembled body.
+fn decode_chunked(raw: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(raw.len());
+    let mut pos = 0;
+    while pos < raw.len() {
+        // Find the end of the chunk size line
+        let size_end = match raw[pos..].iter().position(|&b| b == b'\r' || b == b'\n') {
+            Some(i) => pos + i,
+            None => break,
+        };
+        let size_line = String::from_utf8_lossy(&raw[pos..size_end]);
+        let chunk_size = match usize::from_str_radix(size_line.trim(), 16) {
+            Ok(0) => break, // final chunk
+            Ok(n) => n,
+            Err(_) => break,
+        };
+        // Skip past the size line and any \r\n
+        pos = size_end;
+        while pos < raw.len() && (raw[pos] == b'\r' || raw[pos] == b'\n') {
+            pos += 1;
+        }
+        // Copy chunk_size bytes to output
+        let chunk_data_end = (pos + chunk_size).min(raw.len());
+        out.extend_from_slice(&raw[pos..chunk_data_end]);
+        pos = chunk_data_end;
+        // Skip trailing \r\n
+        while pos < raw.len() && (raw[pos] == b'\r' || raw[pos] == b'\n') {
+            pos += 1;
+        }
+    }
+    out
+}

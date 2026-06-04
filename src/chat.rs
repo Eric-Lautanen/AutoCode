@@ -1,0 +1,2467 @@
+// chat.rs -- Chat orchestration: sending messages, handling streaming responses,
+// tool calls (run_shell, read_file, write_file, list_dir),
+// security hardening, and actual token usage tracking.
+
+use crate::debug_log;
+
+use std::sync::mpsc::Receiver;
+
+use crate::{
+    fsutil, helpers,
+    provider::{
+        ApiMessage, CompletionRequest, ProviderClient, ProviderEvent, ToolCall, ToolChoice,
+    },
+    session,
+    shell::{self, ShellEvent},
+    state::{AppState, ChatMessage, Role, ShellStatus, TodoItem, TodoStatus, ToolMeta},
+};
+
+/// Classify an error message as transient (retryable) or permanent.
+/// Transient errors are network/infrastructure issues that may resolve on retry.
+/// Permanent errors are request/content issues that won't be fixed by retrying.
+fn is_transient_error(msg: &str) -> bool {
+    // Permanent errors - never retry these
+    let permanent_patterns = [
+        "content_filter",    // Provider content policy violation
+        "authentication",    // API key issues
+        "invalid_api_key",   // Bad API key
+        "invalid x-api-key", // Bad API key (NVIDIA)
+        "quota",             // Account quota exceeded (not rate limit)
+        "billing",           // Billing issues
+        "model_not_found",   // Invalid model name
+        "context_length",    // Request too large for model
+        "max_context",       // Context window exceeded
+        "too many tokens",   // Token limit exceeded
+        "Invalid model",     // Model doesn't exist
+    ];
+    let msg_lower = msg.to_lowercase();
+    for pattern in &permanent_patterns {
+        if msg_lower.contains(pattern) {
+            return false;
+        }
+    }
+
+    // Transient errors - worth retrying
+    let transient_patterns = [
+        "429",                // Rate limited
+        "502",                // Bad gateway
+        "503",                // Service unavailable
+        "504",                // Gateway timeout
+        "timed out",          // Connection/request timeout
+        "timeout",            // Timeout
+        "no response",        // No initial response from provider
+        "connection refused", // Server not accepting connections
+        "connection lost",    // Dropped connection
+        "connection reset",   // Connection reset by peer
+        "connection closed",  // Connection closed
+        "connection aborted", // Connection aborted
+        "broken pipe",        // Broken pipe (Unix connection close)
+        "stream stalled",     // Stream idle timeout
+        "os error",           // OS-level network error
+        "unexpected empty",   // Provider returned empty response
+        "invalid tool calls", // Malformed tool calls (model hallucination)
+        "orphaned tool",      // Orphaned tool calls
+        "panic",              // Internal panic (may be transient)
+        "consumer dropped",   // Channel closed
+        "overloaded",         // Server overloaded
+        "capacity",           // Server at capacity
+        "server error",       // Generic 500
+        "internal server",    // 500 Internal Server Error
+        "dns",                // DNS resolution failure
+        "could not resolve",  // DNS resolution failure
+        "name or service",    // DNS resolution failure (getaddrinfo)
+        "no such host",       // DNS resolution failure
+        "tls",                // TLS/SSL error
+        "ssl",                // TLS/SSL error
+        "certificate",        // TLS certificate error
+        "handshake",          // TLS handshake failure
+    ];
+    for pattern in &transient_patterns {
+        if msg_lower.contains(pattern) {
+            return true;
+        }
+    }
+
+    // Default: don't retry unknown errors (safer default)
+    false
+}
+
+fn still_owns_session(runtime: &ChatRuntime, state: &AppState) -> bool {
+    runtime
+        .active_session_id
+        .as_deref()
+        .map(|sid| state.sessions.iter().any(|s| s.id == sid))
+        .unwrap_or(false)
+}
+
+fn project_root(state: &AppState) -> String {
+    state
+        .active_project()
+        .map(|p| p.root_path.clone())
+        .unwrap_or_default()
+}
+
+/// Percentage of the context-window handoff budget used (0–100).
+fn context_usage_info(state: &AppState) -> (usize, usize, usize) {
+    let max = state
+        .active_provider()
+        .map(|p| p.max_context_tokens as usize)
+        .unwrap_or(128_000);
+    let used = state.active_session().map(|s| {
+        if s.actual_tokens_used > 0 {
+            s.actual_tokens_used
+        } else {
+            s.token_count()
+        }
+    }).unwrap_or(0);
+    let pct = if max == 0 { 0 } else { (used * 100) / max };
+    (used, max, pct.min(100))
+}
+
+/// Shorten verbose OS error messages for display in the chat.
+fn shorten_err(msg: &str) -> String {
+    if let Some(pos) = msg.rfind(" (os error ") {
+        let kind = if msg.contains("refused") {
+            "connection refused"
+        } else if msg.contains("timed out") || msg.contains("did not properly respond") {
+            "connection timeout"
+        } else if msg.contains("reset") {
+            "connection reset"
+        } else if msg.contains("No such host") || msg.contains("not known") {
+            "dns resolution failed"
+        } else if msg.contains("10060") || msg.contains("10061") || msg.contains("10054") {
+            // Common WinSock codes: 10060=timeout, 10061=refused, 10054=reset
+            "connection failed"
+        } else {
+            "connection failed"
+        };
+        let suffix = &msg[pos..];
+        return format!("{} {}", kind, suffix);
+    }
+    msg.to_string()
+}
+
+fn push_to_session(state: &mut AppState, session_id: Option<&str>, msg: ChatMessage) {
+    if let Some(sid) = session_id {
+        if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
+            sess.total_tokens_used += msg.token_count;
+            sess.messages.push(msg);
+        }
+    }
+}
+
+/// Push a message to the runtime's active session (not necessarily the viewed one).
+fn push_runtime(state: &mut AppState, runtime: &ChatRuntime, msg: ChatMessage) {
+    push_to_session(state, runtime.active_session_id.as_deref(), msg);
+}
+
+fn push_tool_results_to_state(
+    state: &mut AppState,
+    runtime: &ChatRuntime,
+    results: &[ToolResult],
+) {
+    let sess_id = runtime.active_session_id.as_deref();
+    for tr in results {
+        let mut msg = ChatMessage::new(Role::Tool, tr.content.clone());
+        msg.tool_call_id = Some(tr.tool_call.id.clone());
+        msg.tool_meta = Some(tr.meta.clone());
+        push_to_session(state, sess_id, msg);
+    }
+    for tr in results {
+        if let Some((title, items)) = &tr.todo_update {
+            let was_empty = state.todo_list.is_empty();
+            state.todo_list.set_items(title.clone(), items.clone());
+            if was_empty || !state.todo_user_dismissed {
+                state.todo_user_dismissed = false;
+                state.show_todo = true;
+            }
+        }
+    }
+}
+
+struct ToolResult {
+    tool_call: ToolCall,
+    content: String,
+    meta: ToolMeta,
+    todo_update: Option<(String, Vec<TodoItem>)>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct NetworkStatus {
+    pub bytes: u64,
+    pub stalled: bool,
+    pub active: bool,
+    pub idle_secs: Option<u64>,
+    blink_start: Option<std::time::Instant>,
+    last_blink: bool,
+}
+
+impl NetworkStatus {
+    pub fn blink_dot(&mut self) -> (char, egui::Color32) {
+        use crate::theme::Palette;
+        if !self.active {
+            return ('*', Palette::TEXT_MUTED);
+        }
+        let now = std::time::Instant::now();
+        let start = self.blink_start.get_or_insert(now);
+        let elapsed = start.elapsed().as_millis();
+        let on = (elapsed / 500).is_multiple_of(2);
+        self.last_blink = on;
+        let ch = if on { '*' } else { 'o' };
+        let color = if self.stalled {
+            Palette::ERROR
+        } else {
+            Palette::SUCCESS
+        };
+        (ch, color)
+    }
+
+    pub fn reset(&mut self) {
+        self.bytes = 0;
+        self.stalled = false;
+        self.active = false;
+        self.idle_secs = None;
+        self.blink_start = None;
+        self.last_blink = false;
+    }
+
+    pub fn format_bytes(&self) -> String {
+        let b = self.bytes;
+        if b == 0 {
+            return String::new();
+        }
+        if b < 1024 {
+            format!("{}B", b)
+        } else if b < 1024 * 1024 {
+            format!("{:.1}K", b as f64 / 1024.0)
+        } else {
+            format!("{:.1}M", b as f64 / (1024.0 * 1024.0))
+        }
+    }
+}
+
+pub struct ChatRuntime {
+    pub pending_response: String,
+    /// Accumulated model reasoning (extended thinking). Stored separately
+    /// so it doesn't pollute the main response or consume context budget.
+    pub reasoning_buf: String,
+    pub stream_rx: Option<Receiver<ProviderEvent>>,
+    pub running_tasks: Vec<(String, Receiver<ShellEvent>, u32)>,
+    pub status: String,
+    pub active_session_id: Option<String>,
+    tool_rx: Option<Receiver<Vec<ToolResult>>>,
+    path_cache: std::collections::HashMap<String, std::path::PathBuf>,
+    pending_tool_calls: Vec<ToolCall>,
+    assistant_tool_calls_json: Option<serde_json::Value>,
+    provider_error: Option<String>,
+    retry_count: u8,
+    request_start: Option<std::time::Instant>,
+    last_delta_time: Option<std::time::Instant>,
+    pub live_shell_rx: Option<Receiver<ShellEvent>>,
+    pub live_shell_buf: String,
+    pub live_shell_pid: Option<u32>,
+    pub live_shell_timeout_secs: u64,
+    pub live_shell_start: Option<std::time::Instant>,
+    pending_tool_results: Vec<ToolResult>,
+    pending_tool_remaining: Vec<ToolCall>,
+    pub net_status: NetworkStatus,
+    /// Accumulated partial response from previous attempt(s) when a stream
+    /// drops mid-output. Used to resume generation instead of starting over.
+    pub partial_response_backup: String,
+    /// Tracks how many times we've retried due to stream drops, to apply
+    /// exponential backoff on the idle timeout.
+    pub stream_drop_retries: u8,
+    pub continuation_chain: u8,
+    /// Recovery phase: after fast retries are exhausted, enter a slower
+    /// exponential-backoff recovery loop so the agent auto-resumes when
+    /// the provider comes back online. 0 = not in recovery.
+    pub recovery_attempts: u8,
+    /// When to attempt the next recovery. None = not waiting.
+    pub recovery_after: Option<std::time::Instant>,
+}
+
+impl Default for ChatRuntime {
+    fn default() -> Self {
+        Self {
+            pending_response: String::new(),
+            reasoning_buf: String::new(),
+            stream_rx: None,
+            running_tasks: Vec::new(),
+            status: "Ready".to_string(),
+            active_session_id: None,
+            tool_rx: None,
+            path_cache: std::collections::HashMap::new(),
+            pending_tool_calls: Vec::new(),
+            assistant_tool_calls_json: None,
+            provider_error: None,
+            retry_count: 0,
+            request_start: None,
+            last_delta_time: None,
+            live_shell_rx: None,
+            live_shell_buf: String::new(),
+            live_shell_pid: None,
+            live_shell_timeout_secs: 0,
+            live_shell_start: None,
+            pending_tool_results: Vec::new(),
+            pending_tool_remaining: Vec::new(),
+            net_status: NetworkStatus::default(),
+            partial_response_backup: String::new(),
+            stream_drop_retries: 0,
+            continuation_chain: 0,
+            recovery_attempts: 0,
+            recovery_after: None,
+        }
+    }
+}
+
+impl ChatRuntime {
+    pub fn is_busy(&self) -> bool {
+        self.stream_rx.is_some()
+            || self.tool_rx.is_some()
+            || self.live_shell_rx.is_some()
+    }
+
+    pub fn drain(&mut self) {
+        self.stream_rx = None;
+        self.tool_rx = None;
+        for (_, _, pid) in self.running_tasks.drain(..) {
+            kill_process(pid);
+        }
+        self.pending_response.clear();
+        self.reasoning_buf.clear();
+        self.pending_tool_calls.clear();
+        self.assistant_tool_calls_json = None;
+        self.provider_error = None;
+        self.retry_count = 0;
+        self.active_session_id = None;
+        self.status = "Ready".to_string();
+        self.request_start = None;
+        self.last_delta_time = None;
+        self.live_shell_rx = None;
+        if let Some(pid) = self.live_shell_pid.take() {
+            kill_process(pid);
+        }
+        self.live_shell_pid = None;
+        self.live_shell_timeout_secs = 0;
+        self.live_shell_start = None;
+        self.pending_tool_results.clear();
+        self.pending_tool_remaining.clear();
+        self.net_status.reset();
+        self.partial_response_backup.clear();
+        self.stream_drop_retries = 0;
+        self.continuation_chain = 0;
+        self.recovery_attempts = 0;
+        self.recovery_after = None;
+
+        // Release heap memory back to the OS after large string operations.
+        self.pending_response.shrink_to(256);
+        self.reasoning_buf.shrink_to(256);
+        self.partial_response_backup.shrink_to(256);
+        self.live_shell_buf.shrink_to(256);
+    }
+}
+
+pub fn abort_for_session(runtime: &mut ChatRuntime, session_id: &str) {
+    if runtime.active_session_id.as_deref() == Some(session_id) || runtime.is_busy() {
+        runtime.drain();
+    }
+}
+
+fn kill_process(pid: u32) {
+    if cfg!(target_os = "windows") {
+        let mut cmd = std::process::Command::new("taskkill");
+        cmd.args(["/F", "/T", "/PID", &pid.to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        let _ = cmd.output();
+    } else {
+        let _ = std::process::Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output();
+    }
+}
+
+// -- Send a user message -------------------------------------------------------
+
+pub fn send_message(state: &mut AppState, runtime: &mut ChatRuntime, text: String) {
+    if text.trim().is_empty() || runtime.is_busy() {
+        return;
+    }
+    if state.active_session_id.is_none() || state.sessions.is_empty() {
+        state.new_session();
+    }
+    session::ensure_session(state);
+    let sid = state.active_session_id.clone();
+    // Clear stale error messages from the session so the user starts fresh.
+    if let Some(sess) = state.sessions.iter_mut().find(|s| Some(&s.id) == sid.as_ref()) {
+        sess.messages.retain(|m| m.role != Role::Error);
+    }
+    push_to_session(state, sid.as_deref(), ChatMessage::new(Role::User, text));
+    // Clear any stale partial response backup from a previous failed attempt.
+    runtime.partial_response_backup.clear();
+    runtime.stream_drop_retries = 0;
+    runtime.continuation_chain = 0;
+    runtime.recovery_attempts = 0;
+    runtime.recovery_after = None;
+    runtime.active_session_id = sid;
+    start_completion(state, runtime);
+}
+
+fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
+    debug_log!("chat: start_completion");
+    if runtime.stream_rx.is_some() {
+        debug_log!("chat: start_completion skipped — stream already active");
+        return;
+    }
+    let provider = match state.active_provider().cloned() {
+        Some(p) if !p.api_key.is_empty() => p,
+        Some(_) => {
+            runtime.status = "API key not set.".into();
+            return;
+        }
+        None => {
+            runtime.status = "No provider configured.".into();
+            return;
+        }
+    };
+
+    let mut messages = session::prepare_request_messages(state);
+
+    // If we have a partial response from a previous dropped stream,
+    // prepend it as context so the model can continue rather than
+    // starting over. This prevents the infinite retry loop where
+    // the same long response gets dropped repeatedly.
+    if !runtime.partial_response_backup.is_empty() {
+        let backup = std::mem::take(&mut runtime.partial_response_backup);
+        let continuation_prompt = format!(
+            "[Previous response was interrupted after {} characters. \
+             Continue from where you left off.\n\n--- INTERRUPTED OUTPUT ---\n{}\n--- END ---]",
+            backup.len(),
+            &backup[..backup.len().min(5000)]
+        );
+        messages.push(ApiMessage::user(continuation_prompt));
+    }
+
+    let thinking = provider.thinking_mode && provider.thinking_api.supports_thinking();
+    let defs = crate::state::model_or_safe(&provider.kind, &provider.model);
+    let thinking_api = provider.thinking_api.clone();
+    // DeepSeek through Go proxy always does reasoning — can't disable it.
+    // Must use the higher token budget so content isn't starved.
+    let force_thinking = matches!(thinking_api, crate::state::ThinkingApi::DeepSeek);
+    let max_tokens = if thinking || force_thinking {
+        defs.max_output_tokens_thinking
+            .unwrap_or(defs.max_output_tokens * 2)
+    } else {
+        defs.max_output_tokens
+    };
+    let reasoning_effort = if provider.reasoning_effort.is_empty() {
+        defs.reasoning_efforts
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "high".into())
+    } else {
+        provider.reasoning_effort.clone()
+    };
+
+    let req = CompletionRequest {
+        messages,
+        model: provider.model.clone(),
+        temperature: if thinking { 0.0 } else { 0.2 },
+        max_tokens,
+        stream: true,
+        tools: true,
+        tool_choice: ToolChoice::Auto,
+        parallel_tool_calls: provider.kind.supports_parallel_tool_calls(),
+        request_timeout_secs: state.request_timeout_secs,
+        thinking_mode: thinking,
+        reasoning_effort,
+        thinking_api,
+    };
+
+    runtime.pending_response.clear();
+    runtime.reasoning_buf.clear();
+    runtime.pending_response.reserve(32768);
+    runtime.pending_tool_calls.clear();
+    runtime.assistant_tool_calls_json = None;
+    runtime.provider_error = None;
+    if runtime.active_session_id.is_none() {
+        runtime.active_session_id = state.active_session_id.clone();
+    }
+    runtime.request_start = Some(std::time::Instant::now());
+    runtime.last_delta_time = None;
+    let event_rx = ProviderClient::complete(provider, req);
+    runtime.stream_rx = Some(event_rx);
+    runtime.net_status.reset();
+    runtime.net_status.active = true;
+    runtime.status = "Waiting for response...".into();
+}
+
+// -- Per-frame update ----------------------------------------------------------
+
+pub fn update(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
+    let mut repaint = false;
+
+    repaint |= poll_stream(state, runtime);
+    repaint |= poll_shell_tasks(state, runtime);
+    repaint |= poll_tool_results(state, runtime);
+    repaint |= poll_live_shell(state, runtime);
+    repaint |= poll_network(runtime);
+
+    // Recovery: if we're in a recovery backoff and the timer has elapsed,
+    // re-issue the completion to auto-resume autonomous operations.
+    // While waiting, keep repaint=true so the app polls the timer.
+    if let Some(after) = runtime.recovery_after {
+        repaint = true;
+        if std::time::Instant::now() >= after
+            && runtime.stream_rx.is_none()
+            && runtime.tool_rx.is_none()
+            && runtime.live_shell_rx.is_none()
+        {
+            runtime.recovery_after = None;
+            start_completion(state, runtime);
+        }
+    }
+
+    repaint
+}
+
+// -- Stream polling ------------------------------------------------------------
+
+fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
+    let stream_idle_timeout_secs = state.stream_idle_timeout_secs;
+
+    let rx = match runtime.stream_rx.as_ref() {
+        Some(r) => r,
+        None => return false,
+    };
+
+    let mut got_something = false;
+    let mut done = false;
+    let mut events_this_frame: u32 = 0;
+    let mut disconnected = false;
+
+    loop {
+        match rx.try_recv() {
+            Ok(ProviderEvent::Delta(text)) => {
+                runtime.net_status.bytes += text.len() as u64;
+                runtime.pending_response.push_str(&text);
+                runtime.last_delta_time = Some(std::time::Instant::now());
+                got_something = true;
+                events_this_frame += 1;
+                if events_this_frame >= 256 {
+                    break;
+                }
+            }
+            Ok(ProviderEvent::Reasoning(text)) => {
+                runtime.net_status.bytes += text.len() as u64;
+                runtime.reasoning_buf.push_str(&text);
+                runtime.last_delta_time = Some(std::time::Instant::now());
+                got_something = true;
+            }
+            Ok(ProviderEvent::ToolCall(tc)) => {
+                let tc_json = serde_json::json!({
+                    "id": tc.id,
+                    "type": "function",
+                    "function": { "name": tc.name, "arguments": tc.arguments }
+                });
+                match runtime.assistant_tool_calls_json.as_mut() {
+                    Some(serde_json::Value::Array(arr)) => arr.push(tc_json),
+                    _ => {
+                        runtime.assistant_tool_calls_json = Some(serde_json::json!([tc_json]));
+                    }
+                }
+                runtime.pending_tool_calls.push(tc);
+                runtime.last_delta_time = Some(std::time::Instant::now());
+                got_something = true;
+            }
+            Ok(ProviderEvent::Done {
+                prompt_tokens,
+                completion_tokens,
+            }) => {
+                let resp_preview: String = runtime.pending_response.chars().take(200).collect();
+                let reason_len = runtime.reasoning_buf.len();
+                debug_log!(
+                    "chat: stream Done: prompt={} comp={} reason_len={} resp_preview={:?}",
+                    prompt_tokens,
+                    completion_tokens,
+                    reason_len,
+                    resp_preview
+                );
+                done = true;
+                runtime.retry_count = 0;
+                let was_recovering = runtime.recovery_attempts > 0;
+                runtime.recovery_attempts = 0;
+                if let Some(sess) = state.active_session_mut() {
+                    sess.record_actual_usage(prompt_tokens, completion_tokens);
+                }
+                // Clear error messages now that we've recovered.
+                if was_recovering {
+                    let sid = runtime.active_session_id.clone();
+                    if let Some(sess) = state.sessions.iter_mut().find(|s| Some(&s.id) == sid.as_ref())
+                    {
+                        sess.messages.retain(|m| m.role != Role::Error);
+                    }
+                }
+                let elapsed = runtime
+                    .request_start
+                    .map(|t| t.elapsed().as_secs_f32())
+                    .unwrap_or(0.0);
+                runtime.status = format!(
+                    "Done -- {} prompt + {} completion tokens ({:.1}s)",
+                    prompt_tokens, completion_tokens, elapsed
+                );
+                break;
+            }
+            Ok(ProviderEvent::Error(e)) => {
+                debug_log!("chat: stream Error: {}", e);
+                runtime.status = format!("Error: {}", e);
+                runtime.provider_error = Some(e);
+                done = true;
+                break;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => break,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                debug_log!("chat: stream Disconnected (no Done/Error)");
+                disconnected = true;
+                done = true;
+                break;
+            }
+        }
+    }
+
+    if !done {
+        // Apply exponential backoff to the idle timeout based on how many
+        // times the stream has dropped. This gives the provider more time
+        // on each retry, preventing tight retry loops on slow connections.
+        if let Some(last) = runtime.last_delta_time {
+            let backoff_multiplier = 1u64 + runtime.stream_drop_retries as u64;
+            let effective_timeout = stream_idle_timeout_secs
+                .saturating_mul(backoff_multiplier)
+                .min(300);
+            if last.elapsed().as_secs() >= effective_timeout {
+                runtime.provider_error = Some(format!(
+                    "Stream stalled -- no data for {}s",
+                    effective_timeout
+                ));
+                runtime.status =
+                    format!("Stream stalled ({}s idle) -- aborting", effective_timeout);
+                done = true;
+            }
+        } else if let Some(start) = runtime.request_start {
+            // Before any data received, use the request timeout rather than the
+            // stream idle timeout. This avoids aborting a slow initial response
+            // while the connection is still waiting for the first byte.
+            let timeout = state.request_timeout_secs;
+            if start.elapsed().as_secs() >= timeout {
+                runtime.provider_error = Some(format!(
+                    "No response received after {}s -- timed out",
+                    timeout
+                ));
+                runtime.status = format!("No response after {}s -- timed out", timeout);
+                done = true;
+            }
+        }
+    }
+
+    if disconnected && runtime.provider_error.is_none() {
+        if runtime.pending_response.is_empty() {
+            runtime.provider_error =
+                Some("Connection lost -- provider dropped the stream".to_string());
+            runtime.status = "Connection lost -- provider dropped the stream".to_string();
+        } else {
+            runtime.provider_error =
+                Some("Connection lost mid-stream -- response may be truncated".to_string());
+            runtime.status = "Connection lost -- response may be truncated".to_string();
+        }
+    }
+
+    if done {
+        debug_log!(
+            "chat: stream done-path: disconnected={} error={:?} tool_calls={}",
+            disconnected,
+            runtime.provider_error.is_some(),
+            runtime.pending_tool_calls.len()
+        );
+        runtime.stream_rx = None;
+
+        let owned_id = match runtime.active_session_id.clone() {
+            Some(id) => id,
+            None => {
+                runtime.drain();
+                return true;
+            }
+        };
+        if state.sessions.iter().all(|s| s.id != owned_id) {
+            runtime.drain();
+            return true;
+        }
+
+        if let Some(err_msg) = runtime.provider_error.take() {
+            // Check if this is a stream drop (connection lost / stalled) with
+            // partial content. Save the partial response so we can resume.
+            let is_stream_drop = err_msg.contains("Stream stalled")
+                || err_msg.contains("Connection lost")
+                || err_msg.contains("timed out");
+            let has_partial = !runtime.pending_response.is_empty();
+
+            if is_stream_drop && has_partial {
+                // Save partial response for continuation on retry.
+                // Append to any existing backup in case of multiple drops.
+                if !runtime.partial_response_backup.is_empty() {
+                    runtime
+                        .partial_response_backup
+                        .push_str(&runtime.pending_response);
+                } else {
+                    runtime.partial_response_backup = std::mem::take(&mut runtime.pending_response);
+                }
+                runtime.pending_response.clear();
+                runtime.pending_tool_calls.clear();
+                runtime.assistant_tool_calls_json = None;
+                // Increment stream-drop retry counter for backoff.
+                runtime.stream_drop_retries += 1;
+                debug_log!(
+                    "chat: stream dropped with partial response ({} chars saved, drop_retry={})",
+                    runtime.partial_response_backup.len(),
+                    runtime.stream_drop_retries
+                );
+            } else {
+                runtime.pending_response.clear();
+                runtime.pending_tool_calls.clear();
+                runtime.assistant_tool_calls_json = None;
+            }
+
+            // Only retry transient errors (network issues, rate limits, etc).
+            // Permanent errors (auth, content filter, invalid model) are not
+            // retryable and should be shown to the user immediately.
+            let max_retries = state.max_retries;
+            let wall_elapsed = runtime
+                .request_start
+                .map(|t| t.elapsed().as_secs())
+                .unwrap_or(0);
+            let should_retry = is_transient_error(&err_msg)
+                && runtime.retry_count < max_retries
+                && wall_elapsed < state.max_retry_wait_secs;
+            if should_retry {
+                runtime.retry_count += 1;
+                debug_log!(
+                    "chat: retry {}/{}: {}",
+                    runtime.retry_count,
+                    max_retries,
+                    err_msg
+                );
+                // Brief delay before retry to avoid hammering the provider.
+                // Exponential backoff: 1s, 2s, 4s... capped at 5 min.
+                let backoff_secs = (1u64 << (runtime.retry_count - 1).min(9)).min(300);
+                runtime.status = format!(
+                    "{} — retrying ({}/{}) in {}s...",
+                    shorten_err(&err_msg), runtime.retry_count, max_retries, backoff_secs
+                );
+                std::thread::sleep(std::time::Duration::from_secs(backoff_secs));
+                start_completion(state, runtime);
+            } else if is_transient_error(&err_msg) {
+                // Fast retries exhausted, but error is transient (network/overload).
+                // Enter a slower recovery phase with exponential backoff so the
+                // agent auto-resumes when the provider comes back online.
+                // Never gives up — backoff grows to ~32 min and stays there.
+                runtime.recovery_attempts += 1;
+                let backoff_secs = (30u64 * (1u64 << (runtime.recovery_attempts - 1).min(4))).min(300);
+                runtime.recovery_after = Some(
+                    std::time::Instant::now() + std::time::Duration::from_secs(backoff_secs),
+                );
+                runtime.retry_count = 0;
+                runtime.stream_drop_retries = 0;
+                runtime.status = format!(
+                    "Recovering — attempt {} in {}s...",
+                    runtime.recovery_attempts, backoff_secs
+                );
+                push_runtime(state, runtime, ChatMessage::new(
+                    Role::Error,
+                    format!(
+                        "⚠ Provider error (attempt {}): {} — retrying in {}s",
+                        runtime.recovery_attempts, shorten_err(&err_msg), backoff_secs
+                    ),
+                ));
+            } else {
+                // The provider rejected the request because the conversation
+                // has an assistant tool_calls message with no matching Tool
+                // results.  Strip the offending message and try once more.
+                let orphaned = err_msg.contains("insufficient tool messages")
+                    || err_msg.contains("tool_calls")
+                        && err_msg.contains("must be followed by tool messages");
+                if orphaned {
+                    debug_log!("chat: orphaned tool_calls detected, stripping and retrying: {}", err_msg);
+                    runtime.retry_count = 0;
+                    runtime.status =
+                        "Orphaned tool calls detected -- removing and retrying...".to_string();
+                    // Walk backwards to find the last assistant(tool_calls)
+                    // that has no Tool results after it, and remove it.
+                    if let Some(sess) = state.active_session_mut() {
+                        for i in (0..sess.messages.len()).rev() {
+                            if sess.messages[i].role == Role::Assistant
+                                && sess.messages[i].tool_calls.is_some()
+                            {
+                                let has_results = sess.messages[i + 1..]
+                                    .iter()
+                                    .any(|m| m.role == Role::Tool);
+                                if !has_results {
+                                    sess.messages.remove(i);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    start_completion(state, runtime);
+                } else {
+                    debug_log!("chat: retries exhausted, giving up after {}", max_retries);
+                    runtime.retry_count = 0;
+                    runtime.partial_response_backup.clear();
+                    runtime.stream_drop_retries = 0;
+                    push_runtime(state, runtime, ChatMessage::new(
+                        Role::Error,
+                        format!(
+                            "Provider error (gave up after {} retries): {}",
+                            max_retries, err_msg
+                        ),
+                    ));
+                }
+            }
+            return true;
+        }
+
+        // -- Tool calls path (async) ------------------------------------------
+        if !runtime.pending_tool_calls.is_empty() {
+            // Step 1: extract tool calls & infer names for empty/missing ones.
+            let mut tool_calls: Vec<ToolCall> = std::mem::take(&mut runtime.pending_tool_calls);
+            runtime.assistant_tool_calls_json = None;
+            for tc in &mut tool_calls {
+                if tc.name.is_empty()
+                    && let Ok(args) = serde_json::from_str::<serde_json::Value>(&tc.arguments)
+                {
+                    if args.get("items").is_some() && args.get("title").is_some() {
+                        tc.name = "todo_list".into();
+                    } else if args.get("command").is_some() {
+                        tc.name = "run_shell".into();
+                    } else if args.get("path").is_some() && args.get("content").is_some() {
+                        tc.name = "write_file".into();
+                    } else if args.get("path").is_some()
+                        && (args.get("old_text").is_some() || args.get("new_text").is_some())
+                    {
+                        tc.name = "patch_file".into();
+                    } else if args.get("path").is_some()
+                        && args.get("old_text").is_none()
+                        && args.get("content").is_none()
+                    {
+                        if args.get("entire") == Some(&serde_json::Value::Bool(true)) {
+                            tc.name = "read_entire_file".into();
+                        } else {
+                            tc.name = "read_file".into();
+                        }
+                    } else if args.get("paths").is_some() {
+                        tc.name = "read_files".into();
+                    } else if args.get("pattern").is_some() {
+                        tc.name = "grep".into();
+                    } else if args.get("query").is_some() {
+                        tc.name = "web_search".into();
+                    } else if args.get("url").is_some() {
+                        tc.name = "fetch_url".into();
+                    } else if args.get("from").is_some() && args.get("to").is_some() {
+                        tc.name = "rename_file".into();
+                    } else if args.get("reason").is_some() {
+                        tc.name = "handoff".into();
+                    }
+                    if !tc.name.is_empty() {
+                        debug_log!("chat: inferred tool name: {}", tc.name);
+                    }
+                }
+            }
+
+            // Step 2: filter out tool calls that still have no name after
+            // inference. Malformed / hallucinated tool calls (empty name +
+            // empty args) would otherwise create an infinite retry loop.
+            let dropped = tool_calls.iter().filter(|tc| tc.name.is_empty()).count();
+            if dropped > 0 {
+                debug_log!("chat: dropping {} empty-named tool call(s)", dropped);
+            }
+            tool_calls.retain(|tc| !tc.name.is_empty());
+
+            // Step 3: handle the case where ALL tool calls were invalid.
+            if tool_calls.is_empty() {
+                if runtime.pending_response.trim().is_empty() {
+                    // No text and no valid tool calls — treat like an empty
+                    // response and retry. We do NOT push an assistant message
+                    // (the orphaned tool_calls json would confuse the model).
+                    runtime.reasoning_buf.clear();
+                    runtime.pending_response.clear();
+                    debug_log!("chat: all tool calls dropped and no text -- retrying");
+                    let max_retries = state.max_retries;
+                    if runtime.retry_count < max_retries {
+                        runtime.retry_count += 1;
+                        runtime.status = format!(
+                            "Provider returned invalid tool calls -- retrying ({}/{})...",
+                            runtime.retry_count, max_retries
+                        );
+                        start_completion(state, runtime);
+                    } else {
+                        runtime.retry_count = 0;
+                        push_runtime(state, runtime, ChatMessage::new(
+                            Role::Error,
+                            format!(
+                                "Provider returned invalid tool calls (gave up after {} retries).",
+                                max_retries
+                            ),
+                        ));
+                    }
+                    return true;
+                } else {
+                    // Has text but no valid tool calls — treat as text message.
+                    let response = std::mem::take(&mut runtime.pending_response);
+                    let reasoning = std::mem::take(&mut runtime.reasoning_buf);
+                    runtime.reasoning_buf.shrink_to(256);
+                    let mut msg = ChatMessage::new(Role::Assistant, response.clone());
+                    if !reasoning.is_empty() {
+                        msg.reasoning_content = Some(reasoning);
+                    }
+                    push_runtime(state, runtime, msg);
+                    let root = project_root(state);
+                    auto_execute(state, runtime, &response, &root);
+                    if helpers::is_incomplete_task_response(&response) {
+                        let max_chain = state.max_retries.max(5);
+                        if runtime.continuation_chain < max_chain {
+                            runtime.continuation_chain += 1;
+                            push_runtime(state, runtime, ChatMessage::new(Role::User, "continue".to_string()));
+                            start_completion(state, runtime);
+                        }
+                    }
+                    return true;
+                }
+            }
+
+            // Step 4: rebuild tool_calls JSON from the filtered set, then
+            // push the assistant message. We only push after filtering so
+            // that orphaned/invalid tool calls don't pollute the conversation.
+            let filtered_json = serde_json::Value::Array(
+                tool_calls
+                    .iter()
+                    .map(|tc| {
+                        serde_json::json!({
+                            "id": tc.id,
+                            "type": "function",
+                            "function": { "name": tc.name, "arguments": tc.arguments }
+                        })
+                    })
+                    .collect(),
+            );
+            let mut assistant_msg =
+                ChatMessage::new(Role::Assistant, runtime.pending_response.clone());
+            assistant_msg.tool_calls = Some(filtered_json);
+            let reasoning = std::mem::take(&mut runtime.reasoning_buf);
+            if !reasoning.is_empty() {
+                assistant_msg.reasoning_content = Some(reasoning);
+            }
+            push_runtime(state, runtime, assistant_msg);
+            runtime.pending_response.clear();
+            // Clear any partial response backup since we got a complete
+            // assistant message with tool calls.
+            runtime.partial_response_backup.clear();
+            runtime.stream_drop_retries = 0;
+            let project_root = project_root(state);
+
+            // Capture per-provider file-escape flag so tool threads can access
+            // files outside the project root when enabled.
+            let allow_escape = state
+                .active_provider()
+                .map(|p| p.allow_project_escape)
+                .unwrap_or(false);
+
+            // Separate run_shell calls (streamed live) from other tools (batch).
+            let mut shell_calls: Vec<ToolCall> = Vec::new();
+            let mut other_calls: Vec<ToolCall> = Vec::new();
+            for tc in tool_calls {
+                if tc.name == "run_shell" {
+                    shell_calls.push(tc);
+                } else {
+                    other_calls.push(tc);
+                }
+            }
+
+            // Execute non-shell tools on background thread.
+            if !other_calls.is_empty() {
+                let (tx, rx) = std::sync::mpsc::channel::<Vec<ToolResult>>();
+                runtime.tool_rx = Some(rx);
+
+                let mut path_cache = std::collections::HashMap::new();
+                std::mem::swap(&mut path_cache, &mut runtime.path_cache);
+
+                let pr_clone = project_root.clone();
+                let calls_clone = other_calls.clone();
+                let fast_tools = [
+                    "read_file",
+                    "read_entire_file",
+                    "read_files",
+                    "write_file",
+                    "patch_file",
+                    "delete_file",
+                    "rename_file",
+                    "create_dir",
+                    "list_dir",
+                    "glob",
+                    "todo_list",
+                    "handoff",
+                ];
+                // Non-shell tools run in this batch; use a shorter timeout for
+                // pure file operations vs web/network tools that may take longer.
+                let per_tool_timeout = if calls_clone
+                    .iter()
+                    .all(|tc| fast_tools.contains(&tc.name.as_str()))
+                {
+                    std::time::Duration::from_secs(state.tool_timeout_secs)
+                } else {
+                    std::time::Duration::from_secs(state.request_timeout_secs)
+                };
+                debug_log!(
+                    "chat: spawning tool-exec thread for {} tools (timeout={}s)",
+                    calls_clone.len(),
+                    per_tool_timeout.as_secs()
+                );
+                let ctx_info = context_usage_info(state);
+                std::thread::spawn(move || {
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let mut results = Vec::with_capacity(calls_clone.len());
+                        for tc in &calls_clone {
+                            let start = std::time::Instant::now();
+                            let tc_clone = tc.clone();
+                            let pr2 = pr_clone.clone();
+                            let mut pc = path_cache.clone();
+
+                            let (ct, cr) = std::sync::mpsc::channel();
+                            let ctx_used = ctx_info.0;
+                            let ctx_max = ctx_info.1;
+                            std::thread::spawn(move || {
+                                let result =
+                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                        execute_tool_with_cache(
+                                            &tc_clone,
+                                            &pr2,
+                                            &mut pc,
+                                            allow_escape,
+                                            ctx_used,
+                                            ctx_max,
+                                        )
+                                    }));
+                                let r = match result {
+                                    Ok(r) => r,
+                                    Err(e) => {
+                                        let msg = format!(
+                                            "Tool '{}' panicked: {}",
+                                            tc_clone.name,
+                                            crate::debug::panic_msg(&e)
+                                        );
+                                        helpers::tool_error(
+                                            &msg,
+                                            "Re-read the file and try a smaller edit",
+                                        )
+                                    }
+                                };
+                                let _ = ct.send((r, pc));
+                            });
+
+                            let (result, updated_cache) = match cr.recv_timeout(per_tool_timeout) {
+                                Ok((r, pc)) => (r, pc),
+                                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                                    let err = helpers::tool_error(
+                                        &format!(
+                                            "Tool '{}' timed out after {}s",
+                                            tc.name,
+                                            per_tool_timeout.as_secs()
+                                        ),
+                                        "Simplify the operation or increase the timeout",
+                                    );
+                                    (err, path_cache.clone())
+                                }
+                                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                                    let err = helpers::tool_error(
+                                        &format!(
+                                            "Tool '{}' failed — thread terminated unexpectedly",
+                                            tc.name,
+                                        ),
+                                        "Re-read the file and try again with a smaller edit",
+                                    );
+                                    (err, path_cache.clone())
+                                }
+                            };
+                            path_cache = updated_cache;
+
+                            let duration_ms = start.elapsed().as_millis() as u64;
+                            let meta = build_tool_meta(tc, &result, duration_ms);
+                            let todo_update = if tc.name == "todo_list" {
+                                let args: serde_json::Value = serde_json::from_str(&tc.arguments)
+                                    .unwrap_or(serde_json::Value::Null);
+                                helpers::parse_todo_from_tool_args(&args)
+                            } else {
+                                None
+                            };
+                            results.push(ToolResult {
+                                tool_call: tc.clone(),
+                                content: result,
+                                meta,
+                                todo_update,
+                            });
+                        }
+                        results
+                    }));
+                    let results = match result {
+        Ok(results) => {
+                            debug_log!("chat: tool-exec finished ok, {} results", results.len());
+                            results
+                        }
+                        Err(panic_info) => {
+                            let panic_msg = format!(
+                                "Tool execution panicked: {}",
+                                crate::debug::panic_msg(&panic_info)
+                            );
+                            debug_log!("chat: tool-exec PANIC: {}", panic_msg);
+                            calls_clone
+                                .iter()
+                                .map(|tc| ToolResult {
+                                    tool_call: tc.clone(),
+                                    content: helpers::tool_error(
+                                        &panic_msg,
+                                        "Retry the operation or use run_shell as fallback.",
+                                    ),
+                                    meta: ToolMeta {
+                                        tool_name: tc.name.clone(),
+                                        is_error: true,
+                                        ..Default::default()
+                                    },
+                                    todo_update: None,
+                                })
+                                .collect()
+                        }
+                    };
+                    let _ = tx.send(results);
+                });
+            }
+
+            // Queue shell calls for live streaming execution.
+            if !shell_calls.is_empty() {
+                runtime.pending_tool_remaining = shell_calls;
+                runtime.pending_tool_results = Vec::new();
+                start_next_live_shell(runtime, &project_root);
+            }
+
+            return true;
+
+        // -- Regular text path ------------------------------------------------
+        } else {
+            let response = std::mem::take(&mut runtime.pending_response);
+            let reasoning = std::mem::take(&mut runtime.reasoning_buf);
+            if response.trim().is_empty() {
+                // Done received with no content and no tool calls.
+                // This typically means the API returned an empty/truncated
+                // response (e.g. request timed out).
+                // Treat like a stream error and retry directly.
+                debug_log!("chat: stream Done with empty response and no tool calls -- retrying");
+                // Only retry transient errors (network issues, rate limits, etc).
+                // Permanent errors (auth, content filter, invalid model) are not
+                // retryable and should be shown to the user immediately.
+                let max_retries = state.max_retries;
+                if runtime.retry_count < max_retries {
+                    runtime.retry_count += 1;
+                    runtime.status = format!(
+                        "Unexpected empty response -- retrying ({}/{})...",
+                        runtime.retry_count, max_retries
+                    );
+                    start_completion(state, runtime);
+                } else {
+                    runtime.retry_count = 0;
+                    runtime.partial_response_backup.clear();
+                    runtime.stream_drop_retries = 0;
+                    push_runtime(state, runtime, ChatMessage::new(
+                        Role::Error,
+                        format!(
+                            "Provider returned empty response (gave up after {} retries).",
+                            max_retries
+                        ),
+                    ));
+                }
+                return true;
+            }
+
+            // If we have a partial response backup from a previous drop,
+            // prepend it to the current response so the full output is preserved.
+            let full_response = if !runtime.partial_response_backup.is_empty() {
+                let backup = std::mem::take(&mut runtime.partial_response_backup);
+                let combined = format!("{}{}", backup, response);
+                runtime.stream_drop_retries = 0;
+                combined
+            } else {
+                response
+            };
+
+            let mut msg = ChatMessage::new(Role::Assistant, full_response.clone());
+            if !reasoning.is_empty() {
+                msg.reasoning_content = Some(reasoning);
+            }
+            push_runtime(state, runtime, msg);
+
+            let root = project_root(state);
+            auto_execute(state, runtime, &full_response, &root);
+
+            if helpers::is_incomplete_task_response(&full_response) {
+                let max_chain = state.max_retries.max(5);
+                if runtime.continuation_chain < max_chain {
+                    runtime.continuation_chain += 1;
+                    push_runtime(state, runtime, ChatMessage::new(Role::User, "continue".to_string()));
+                    start_completion(state, runtime);
+                }
+            }
+        }
+    }
+
+    got_something || done
+}
+
+fn poll_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
+    let rx = match runtime.tool_rx.as_ref() {
+        Some(r) => r,
+        None => return false,
+    };
+
+    match rx.try_recv() {
+        Ok(results) => {
+            debug_log!("chat: poll_tool_results received {} results", results.len());
+            runtime.tool_rx = None;
+
+            if still_owns_session(runtime, state) {
+                let has_handoff = results.iter().any(|r| r.content.starts_with("HANDOFF:"));
+                push_tool_results_to_state(state, runtime, &results);
+                runtime.status = format!("{} tool(s) complete.", results.len());
+
+                if has_handoff && state.handoff_enabled {
+                    handle_handoff(state, runtime);
+                // Only start next completion if shell calls are also done.
+                } else if runtime.live_shell_rx.is_none() && runtime.pending_tool_remaining.is_empty() {
+                    start_completion(state, runtime);
+                }
+            } else {
+                runtime.drain();
+            }
+            true
+        }
+        Err(std::sync::mpsc::TryRecvError::Empty) => {
+            if runtime.tool_rx.is_some() {
+                runtime.status = "Running tool(s)...".to_string();
+            }
+            false
+        }
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+            debug_log!("chat: poll_tool_results Disconnected (no results)");
+            runtime.tool_rx = None;
+            true
+        }
+    }
+}
+
+fn start_next_live_shell(runtime: &mut ChatRuntime, project_root: &str) {
+    while let Some(tc) = runtime.pending_tool_remaining.first().cloned() {
+        let args: serde_json::Value =
+            serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
+        let command = match args["command"].as_str() {
+            Some(c) => c.to_string(),
+            None => {
+                runtime.pending_tool_results.push(ToolResult {
+                    tool_call: tc,
+                    content: "Error: missing 'command' argument".to_string(),
+                    meta: ToolMeta {
+                        tool_name: "run_shell".into(),
+                        is_error: true,
+                        ..Default::default()
+                    },
+                    todo_update: None,
+                });
+                runtime.pending_tool_remaining.remove(0);
+                continue;
+            }
+        };
+        let cwd = args["cwd"].as_str().unwrap_or(project_root).to_string();
+        let timeout_secs = args["timeout_secs"].as_u64().unwrap_or(0);
+        runtime.live_shell_timeout_secs = timeout_secs;
+        runtime.live_shell_buf = format!("$ {}\n", command);
+        let (task, rx) = shell::run_command_in_dir(&command, Some(&cwd));
+        runtime.live_shell_pid = task.pid;
+        runtime.live_shell_start = Some(std::time::Instant::now());
+        runtime.live_shell_rx = Some(rx);
+        runtime.status = format!("Running: {}...", helpers::truncate_str(&command, 60));
+        return;
+    }
+}
+
+fn poll_live_shell(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
+    let rx = match runtime.live_shell_rx.as_ref() {
+        Some(r) => r,
+        None => return false,
+    };
+
+    // Use model-requested timeout if set, else default. Capped at max.
+    let shell_timeout = if runtime.live_shell_timeout_secs > 0 {
+        runtime
+            .live_shell_timeout_secs
+            .min(state.shell_timeout_max_secs)
+    } else {
+        state.shell_timeout_secs
+    };
+    if let Some(start) = runtime.live_shell_start
+        && start.elapsed().as_secs() >= shell_timeout
+    {
+        if let Some(pid) = runtime.live_shell_pid.take() {
+            kill_process(pid);
+        }
+        runtime
+            .live_shell_buf
+            .push_str(&format!("\n[shell timed out after {}s]\n", shell_timeout));
+        runtime.live_shell_rx = None;
+        runtime.live_shell_pid = None;
+        runtime.live_shell_start = None;
+
+        let tc = runtime.pending_tool_remaining.remove(0);
+        let content = format!(
+            "{}\n\n[Shell timed out after {}s]\n\nExit code: -1",
+            runtime.live_shell_buf.trim_end_matches('\n'),
+            shell_timeout,
+        );
+        let result = ToolResult {
+            tool_call: tc,
+            content,
+            meta: ToolMeta {
+                tool_name: "run_shell".into(),
+                exit_code: Some(-1),
+                line_count: Some(runtime.live_shell_buf.lines().count()),
+                byte_count: Some(runtime.live_shell_buf.len()),
+                is_error: true,
+                duration_ms: None,
+                ..Default::default()
+            },
+            todo_update: None,
+        };
+        runtime.pending_tool_results.push(result);
+
+        if runtime.pending_tool_remaining.is_empty() {
+            commit_tool_results(state, runtime);
+        } else {
+            start_next_live_shell(runtime, &project_root(state));
+        }
+        return true;
+    }
+
+    let mut repaint = false;
+    let mut done = false;
+    let mut exit_code: i32 = -1;
+
+    loop {
+        match rx.try_recv() {
+            Ok(ShellEvent::Output(line)) => {
+                runtime.live_shell_buf.push_str(&line);
+                runtime.live_shell_buf.push('\n');
+                repaint = true;
+            }
+            Ok(ShellEvent::Done { exit_code: code }) => {
+                exit_code = code;
+                done = true;
+                break;
+            }
+            Ok(ShellEvent::SpawnError(e)) => {
+                runtime
+                    .live_shell_buf
+                    .push_str(&format!("[spawn error: {}]\n", e));
+                exit_code = -1;
+                done = true;
+                break;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => break,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                done = true;
+                break;
+            }
+        }
+    }
+
+    if done {
+        runtime.live_shell_rx = None;
+        runtime.live_shell_pid = None;
+        runtime.live_shell_start = None;
+
+        let tc = runtime.pending_tool_remaining.remove(0);
+        let content = format!(
+            "{}\n\nExit code: {}",
+            runtime.live_shell_buf.trim_end_matches('\n'),
+            exit_code
+        );
+        let meta = ToolMeta {
+            tool_name: "run_shell".into(),
+            exit_code: Some(exit_code),
+            line_count: Some(runtime.live_shell_buf.lines().count()),
+            byte_count: Some(runtime.live_shell_buf.len()),
+            is_error: exit_code != 0,
+            duration_ms: None,
+            ..Default::default()
+        };
+        let result = ToolResult {
+            tool_call: tc,
+            content,
+            meta,
+            todo_update: None,
+        };
+        runtime.pending_tool_results.push(result);
+        runtime.live_shell_buf.clear();
+
+        if !runtime.pending_tool_remaining.is_empty() {
+            let project_root = project_root(state);
+            start_next_live_shell(runtime, &project_root);
+        } else {
+            commit_tool_results(state, runtime);
+        }
+
+        repaint = true;
+    }
+
+    repaint
+}
+
+fn poll_network(runtime: &mut ChatRuntime) -> bool {
+    let is_streaming = runtime.stream_rx.is_some()
+        || runtime.tool_rx.is_some()
+        || runtime.live_shell_rx.is_some();
+
+    if is_streaming && !runtime.net_status.active {
+        runtime.net_status.active = true;
+    }
+
+    if !is_streaming && runtime.net_status.active {
+        runtime.net_status.active = false;
+        runtime.net_status.stalled = false;
+        runtime.net_status.idle_secs = None;
+        return true;
+    }
+
+    if is_streaming {
+        runtime.net_status.idle_secs = runtime
+            .last_delta_time
+            .map(|t| t.elapsed().as_secs())
+            .or_else(|| runtime.request_start.map(|t| t.elapsed().as_secs()));
+    }
+
+    runtime.net_status.active
+}
+
+fn commit_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) {
+    if still_owns_session(runtime, state) && !runtime.pending_tool_results.is_empty() {
+        // Check for handoff signal before clearing the vec.
+        let has_handoff = runtime
+            .pending_tool_results
+            .iter()
+            .any(|tr| tr.content.starts_with("HANDOFF:"));
+
+        let count = runtime.pending_tool_results.len();
+        push_tool_results_to_state(state, runtime, &runtime.pending_tool_results);
+        runtime.pending_tool_results.clear();
+        runtime.status = format!("{} tool(s) complete.", count);
+
+        if has_handoff && state.handoff_enabled {
+            handle_handoff(state, runtime);
+            return;
+        }
+
+        // Only continue if non-shell tools are also done.
+        if runtime.tool_rx.is_none() {
+            start_completion(state, runtime);
+        }
+    } else if !still_owns_session(runtime, state) {
+        runtime.drain();
+    }
+}
+
+/// Handle a `handoff` tool call: archive the session and start a fresh one
+/// with instructions to read RESUME.md.
+fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
+    state.new_session();
+
+    // Point the runtime at the new session before pushing messages.
+    runtime.active_session_id = state.active_session_id.clone();
+
+    // Seed the new session with system prompt.
+    let sys_prompt = state.system_prompt.clone();
+    let sys = ChatMessage::new(Role::System, sys_prompt);
+    push_runtime(state, runtime, sys);
+
+    // Use the user-configured handoff prompt.
+    let handoff_msg = state.handoff_prompt.clone();
+    let msg = ChatMessage::new(Role::User, handoff_msg);
+    push_runtime(state, runtime, msg);
+
+    // Reset streaming state so the runtime is ready for the next request.
+    runtime.stream_rx = None;
+    runtime.tool_rx = None;
+    runtime.pending_tool_calls.clear();
+    runtime.pending_tool_remaining.clear();
+    runtime.pending_tool_results.clear();
+    runtime.assistant_tool_calls_json = None;
+    runtime.provider_error = None;
+    runtime.retry_count = 0;
+    runtime.recovery_attempts = 0;
+    runtime.recovery_after = None;
+    runtime.continuation_chain = 0;
+    runtime.status = "Session handed off — starting fresh.".into();
+    runtime.request_start = None;
+    runtime.last_delta_time = None;
+    runtime.live_shell_rx = None;
+    runtime.live_shell_buf.clear();
+    for (_, _, pid) in runtime.running_tasks.drain(..) {
+        kill_process(pid);
+    }
+
+    // Start a completion on the new session.
+    start_completion(state, runtime);
+
+    debug_log!("chat: session handoff complete");
+}
+
+fn build_tool_meta(tc: &ToolCall, result: &str, duration_ms: u64) -> ToolMeta {
+    let args: serde_json::Value =
+        serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
+    let is_error = result.starts_with("{\"error\":") || result.starts_with("Error:");
+
+    match tc.name.as_str() {
+        "read_file" => {
+            let path = args["path"].as_str().unwrap_or("").to_string();
+            let (total_lines, total_bytes) = result
+                .lines()
+                .nth(1)
+                .and_then(|l| l.strip_prefix("-- "))
+                .and_then(|l| l.strip_suffix(" --"))
+                .and_then(|h| h.split_once(" lines, "))
+                .and_then(|(l, b)| {
+                    let lines = l.parse::<usize>().ok()?;
+                    let bytes = b.strip_suffix(" bytes")?.parse::<usize>().ok()?;
+                    Some((lines, bytes))
+                })
+                .unwrap_or((result.lines().count(), result.len()));
+            ToolMeta {
+                tool_name: "read_file".into(),
+                file_path: Some(path),
+                line_count: Some(total_lines),
+                byte_count: Some(total_bytes),
+                is_error,
+                duration_ms: Some(duration_ms),
+                ..Default::default()
+            }
+        }
+        "read_entire_file" => {
+            let path = args["path"].as_str().unwrap_or("").to_string();
+            let (total_lines, total_bytes) = result
+                .lines()
+                .nth(1)
+                .and_then(|l| l.strip_prefix("-- "))
+                .and_then(|l| l.strip_suffix(" --"))
+                .and_then(|h| h.split_once(" lines, "))
+                .and_then(|(l, b)| {
+                    let lines = l.parse::<usize>().ok()?;
+                    let bytes = b.strip_suffix(" bytes")?.parse::<usize>().ok()?;
+                    Some((lines, bytes))
+                })
+                .unwrap_or((result.lines().count(), result.len()));
+            ToolMeta {
+                tool_name: "read_entire_file".into(),
+                file_path: Some(path),
+                line_count: Some(total_lines),
+                byte_count: Some(total_bytes),
+                is_error,
+                duration_ms: Some(duration_ms),
+                ..Default::default()
+            }
+        }
+        "read_files" => {
+            let paths: Vec<&str> = args["paths"]
+                .as_array()
+                .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
+                .unwrap_or_default();
+            let file_list = paths.join(", ");
+            // Count content lines from the `path:` sections (each section
+            // is `path:X\n<content>\n---\n`).  Strip line-level truncation
+            // markers like "[... N bytes truncated ...]" from the count.
+            let total_lines: usize = result
+                .split("\n---\n")
+                .flat_map(|section| {
+                    let body = section
+                        .lines()
+                        .skip(1) // skip the "path:" line
+                        .collect::<Vec<_>>();
+                    body
+                })
+                .filter(|l| !l.starts_with("[..."))
+                .count();
+            ToolMeta {
+                tool_name: "read_files".into(),
+                file_path: Some(file_list),
+                line_count: Some(total_lines),
+                byte_count: Some(result.len()),
+                is_error,
+                duration_ms: Some(duration_ms),
+                ..Default::default()
+            }
+        }
+        "write_file" => {
+            let path = args["path"].as_str().unwrap_or("").to_string();
+            let bytes = args["content"].as_str().map(|s| s.len()).unwrap_or(0);
+            ToolMeta {
+                tool_name: "write_file".into(),
+                file_path: Some(path),
+                byte_count: Some(bytes),
+                is_error,
+                duration_ms: Some(duration_ms),
+                ..Default::default()
+            }
+        }
+        "patch_file" => {
+            let path = args["path"].as_str().unwrap_or("").to_string();
+            let old_text = helpers::strip_line_numbers(args["old_text"].as_str().unwrap_or(""));
+            let new_text = helpers::strip_line_numbers(args["new_text"].as_str().unwrap_or(""));
+            ToolMeta {
+                tool_name: "patch_file".into(),
+                file_path: Some(path),
+                old_text: Some(old_text),
+                new_text: Some(new_text),
+                is_error,
+                duration_ms: Some(duration_ms),
+                ..Default::default()
+            }
+        }
+        "run_shell" => {
+            let exit_code = result
+                .lines()
+                .last()
+                .and_then(|l| l.strip_prefix("Exit code: "))
+                .or_else(|| {
+                    // Legacy: first line started with "exit_code: "
+                    result
+                        .lines()
+                        .next()
+                        .and_then(|l| l.strip_prefix("exit_code: "))
+                })
+                .and_then(|c| c.parse::<i32>().ok());
+            ToolMeta {
+                tool_name: "run_shell".into(),
+                exit_code,
+                line_count: Some(result.lines().count()),
+                byte_count: Some(result.len()),
+                is_error: exit_code.map(|c| c != 0).unwrap_or(is_error),
+                duration_ms: Some(duration_ms),
+                ..Default::default()
+            }
+        }
+        "grep" => {
+            let pattern = args["pattern"].as_str().unwrap_or("").to_string();
+            let search_path = args["path"].as_str().unwrap_or("").to_string();
+            let match_count = result
+                .lines()
+                .find_map(|l| {
+                    let l = l.trim();
+                    l.strip_suffix(" match(es):")
+                        .and_then(|n| n.parse::<usize>().ok())
+                })
+                .unwrap_or(0);
+            ToolMeta {
+                tool_name: "grep".into(),
+                file_path: Some(search_path),
+                old_text: Some(pattern),
+                line_count: Some(match_count),
+                is_error,
+                duration_ms: Some(duration_ms),
+                ..Default::default()
+            }
+        }
+        "todo_list" => {
+            let args: serde_json::Value =
+                serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
+            let total = args["items"].as_array().map(|a| a.len()).unwrap_or(0);
+            let done = args["items"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter(|v| v["status"].as_str() == Some("completed"))
+                        .count()
+                })
+                .unwrap_or(0);
+            ToolMeta {
+                tool_name: "todo_list".into(),
+                line_count: Some(total),
+                byte_count: Some(done),
+                is_error,
+                duration_ms: Some(duration_ms),
+                ..Default::default()
+            }
+        }
+        "glob" => {
+            let pattern = args["pattern"].as_str().unwrap_or("").to_string();
+            let search_path = args["path"].as_str().unwrap_or("").to_string();
+            let match_count = result
+                .lines()
+                .next()
+                .and_then(|l| l.split_whitespace().next())
+                .and_then(|n| n.parse::<usize>().ok())
+                .unwrap_or(0);
+            ToolMeta {
+                tool_name: "glob".into(),
+                file_path: Some(pattern),
+                old_text: Some(search_path),
+                line_count: Some(match_count),
+                is_error,
+                duration_ms: Some(duration_ms),
+                ..Default::default()
+            }
+        }
+        "list_dir" => {
+            let path = args["path"].as_str().unwrap_or("").to_string();
+            let entry_count = result.lines().count();
+            ToolMeta {
+                tool_name: "list_dir".into(),
+                file_path: Some(path),
+                line_count: Some(entry_count),
+                is_error,
+                duration_ms: Some(duration_ms),
+                ..Default::default()
+            }
+        }
+        "delete_file" => {
+            let path = args["path"].as_str().unwrap_or("").to_string();
+            ToolMeta {
+                tool_name: "delete_file".into(),
+                file_path: Some(path),
+                is_error,
+                duration_ms: Some(duration_ms),
+                ..Default::default()
+            }
+        }
+        "rename_file" => {
+            let from = args["from"].as_str().unwrap_or("").to_string();
+            let to = args["to"].as_str().unwrap_or("").to_string();
+            ToolMeta {
+                tool_name: "rename_file".into(),
+                file_path: Some(from),
+                old_text: Some(to),
+                is_error,
+                duration_ms: Some(duration_ms),
+                ..Default::default()
+            }
+        }
+        "create_dir" => {
+            let path = args["path"].as_str().unwrap_or("").to_string();
+            ToolMeta {
+                tool_name: "create_dir".into(),
+                file_path: Some(path),
+                is_error,
+                duration_ms: Some(duration_ms),
+                ..Default::default()
+            }
+        }
+        "handoff" => {
+            let reason = args["reason"].as_str().unwrap_or("").to_string();
+            ToolMeta {
+                tool_name: "handoff".into(),
+                old_text: Some(reason),
+                is_error,
+                duration_ms: Some(duration_ms),
+                ..Default::default()
+            }
+        }
+        _ => ToolMeta {
+            tool_name: tc.name.clone(),
+            is_error,
+            duration_ms: Some(duration_ms),
+            ..Default::default()
+        },
+    }
+}
+
+// -- Tool execution (async, runs on background thread) -------------------------
+
+fn execute_tool_with_cache(
+    tc: &ToolCall,
+    project_root: &str,
+    path_cache: &mut std::collections::HashMap<String, std::path::PathBuf>,
+    allow_escape: bool,
+    ctx_used: usize,
+    ctx_max: usize,
+) -> String {
+    let args: serde_json::Value =
+        serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
+    debug_log!(
+        "chat: execute_tool_with_cache name={} args={}",
+        tc.name,
+        tc.arguments
+    );
+
+    match tc.name.as_str() {
+        "read_file" => {
+            let raw_path = match args["path"].as_str() {
+                Some(p) => p,
+                None => return "Error: missing 'path' argument".to_string(),
+            };
+            let path =
+                helpers::resolve_path_cached(raw_path, project_root, path_cache, allow_escape);
+            if helpers::is_blocked_path(&path) {
+                return helpers::blocked_error(raw_path);
+            }
+            match fsutil::read_to_string(&path) {
+                Ok(content) => {
+                    let all_lines: Vec<&str> = content.lines().collect();
+                    let total_lines = all_lines.len();
+                    let total_bytes = content.len();
+
+                    // offset is 1-based; default to line 1
+                    let offset = args["offset"].as_u64().unwrap_or(1).max(1) as usize;
+                    let limit = args["limit"].as_u64().unwrap_or(2000).max(1) as usize;
+
+                    let start_idx = (offset - 1).min(total_lines);
+                    let end_idx = start_idx + limit;
+
+                    let mut out = format!(
+                        "{}\n-- {} lines, {} bytes --\n",
+                        path.display(),
+                        total_lines,
+                        total_bytes
+                    );
+
+                    if start_idx >= total_lines {
+                        out.push_str(&format!(
+                            "Offset {} exceeds file length ({} lines). No content returned.\n",
+                            offset, total_lines
+                        ));
+                    } else {
+                        let truncated = end_idx < total_lines;
+                        let slice = &all_lines[start_idx..end_idx.min(total_lines)];
+                        // Calculate width for line number padding
+                        let last_line_num = start_idx + slice.len();
+                        let width = format!("{}", last_line_num).len();
+                        for (i, line) in slice.iter().enumerate() {
+                            let line_num = start_idx + i + 1;
+                            out.push_str(&format!(
+                                "{:>width$} | {}\n",
+                                line_num,
+                                line,
+                                width = width
+                            ));
+                        }
+                        if truncated {
+                            let remaining = total_lines - end_idx;
+                            out.push_str(&format!(
+                                "\n... {} more line(s) below (use offset={} to continue reading)",
+                                remaining,
+                                end_idx + 1
+                            ));
+                        }
+                    }
+                    out
+                }
+                Err(e) => helpers::tool_error(
+                    &format!("Error reading {}: {}", path.display(), e),
+                    "Check the path is correct and the file is readable",
+                ),
+            }
+        }
+
+        "read_entire_file" => {
+            let raw_path = match args["path"].as_str() {
+                Some(p) => p,
+                None => return "Error: missing 'path' argument".to_string(),
+            };
+            let path =
+                helpers::resolve_path_cached(raw_path, project_root, path_cache, allow_escape);
+            if helpers::is_blocked_path(&path) {
+                return helpers::blocked_error(raw_path);
+            }
+            match fsutil::read_to_string(&path) {
+                Ok(content) => {
+                    let all_lines: Vec<&str> = content.lines().collect();
+                    let total_lines = all_lines.len();
+                    let total_bytes = content.len();
+                    let width = format!("{}", total_lines).len();
+                    let mut out = format!(
+                        "{}\n-- {} lines, {} bytes --\n",
+                        path.display(),
+                        total_lines,
+                        total_bytes
+                    );
+                    for (i, line) in all_lines.iter().enumerate() {
+                        out.push_str(&format!(
+                            "{:>width$} | {}\n",
+                            i + 1,
+                            line,
+                            width = width
+                        ));
+                    }
+                    out
+                }
+                Err(e) => helpers::tool_error(
+                    &format!("Error reading {}: {}", path.display(), e),
+                    "Check the path is correct and the file is readable",
+                ),
+            }
+        }
+
+        "read_files" => {
+            let paths = match args["paths"].as_array() {
+                Some(a) => a.clone(),
+                None => return "Error: missing 'paths' argument".to_string(),
+            };
+            if paths.is_empty() {
+                return "Error: paths array is empty".to_string();
+            }
+            let mut out = String::new();
+            for val in &paths {
+                let raw = match val.as_str() {
+                    Some(s) => s,
+                    None => continue,
+                };
+                let path =
+                    helpers::resolve_path_cached(raw, project_root, path_cache, allow_escape);
+                if helpers::is_blocked_path(&path) {
+                    out.push_str(&helpers::blocked_error(raw));
+                    out.push_str("\n---\n");
+                    continue;
+                }
+                out.push_str(&format!("path:{}\n", path.display()));
+                match fsutil::read_to_string(&path) {
+                    Ok(content) => {
+                        out.push_str(&helpers::truncate_middle(&content, 32 * 1024));
+                    }
+                    Err(e) => {
+                        out.push_str(&helpers::tool_error(
+                            &format!("Error reading {}: {}", path.display(), e),
+                            "Check the path is correct and the file is readable",
+                        ));
+                    }
+                }
+                out.push_str("\n---\n");
+            }
+            out
+        }
+
+        "write_file" => {
+            let raw_path = match args["path"].as_str() {
+                Some(p) => p,
+                None => return "Error: missing 'path' argument".to_string(),
+            };
+            let content = args["content"].as_str().unwrap_or("");
+            let path = helpers::resolve_path_write_cached(
+                raw_path,
+                project_root,
+                path_cache,
+                allow_escape,
+            );
+            if helpers::is_blocked_path(&path) {
+                return helpers::blocked_error(raw_path);
+            }
+            if let Some(parent) = path.parent() {
+                let _ = fsutil::create_dir_all(parent);
+            }
+            match fsutil::write(&path, content) {
+                Ok(_) => format!("Written {} bytes to {}", content.len(), path.display()),
+                Err(e) => helpers::tool_error(
+                    &format!("Error writing {}: {}", path.display(), e),
+                    "Check that the path is writable and parent directories exist",
+                ),
+            }
+        }
+
+        "list_dir" => {
+            let raw_path = match args["path"].as_str() {
+                Some(p) => p,
+                None => return "Error: missing 'path' argument".to_string(),
+            };
+            let path =
+                helpers::resolve_path_cached(raw_path, project_root, path_cache, allow_escape);
+            if helpers::is_blocked_path(&path) {
+                return helpers::blocked_error(raw_path);
+            }
+            if !path.exists() {
+                return format!("Error listing {}: path does not exist", path.display());
+            }
+            let entries = crate::explorer::list_dir(&path);
+            if entries.is_empty() && fsutil::read_dir(&path).is_err() {
+                return format!(
+                    "Error listing {}: permission denied or invalid path",
+                    path.display()
+                );
+            }
+            let mut lines: Vec<String> = entries
+                .iter()
+                .map(|e| {
+                    if e.is_dir {
+                        format!("{}/", e.name)
+                    } else {
+                        e.name.clone()
+                    }
+                })
+                .collect();
+            lines.sort();
+            lines.join("\n")
+        }
+
+        "delete_file" => {
+            let raw_path = match args["path"].as_str() {
+                Some(p) => p,
+                None => return "Error: missing 'path' argument".to_string(),
+            };
+            let path = helpers::resolve_path_write_cached(
+                raw_path,
+                project_root,
+                path_cache,
+                allow_escape,
+            );
+            if helpers::is_blocked_path(&path) {
+                return helpers::blocked_error(raw_path);
+            }
+            let result = if fsutil::is_dir(&path) {
+                fsutil::remove_dir(&path)
+            } else {
+                fsutil::remove_file(&path)
+            };
+            match result {
+                Ok(_) => format!("Deleted: {}", path.display()),
+                Err(e) => helpers::tool_error(
+                    &format!("Error deleting {}: {}", path.display(), e),
+                    "Ensure the path exists and you have permission; use list_dir to verify",
+                ),
+            }
+        }
+
+        "rename_file" => {
+            let raw_from = match args["from"].as_str() {
+                Some(p) => p,
+                None => return "Error: missing 'from' argument".to_string(),
+            };
+            let raw_to = match args["to"].as_str() {
+                Some(p) => p,
+                None => return "Error: missing 'to' argument".to_string(),
+            };
+            let from =
+                helpers::resolve_path_cached(raw_from, project_root, path_cache, allow_escape);
+            if helpers::is_blocked_path(&from) {
+                return helpers::blocked_error(raw_from);
+            }
+            let to =
+                helpers::resolve_path_write_cached(raw_to, project_root, path_cache, allow_escape);
+            if helpers::is_blocked_path(&to) {
+                return helpers::blocked_error(raw_to);
+            }
+            if let Some(parent) = to.parent() {
+                let _ = fsutil::create_dir_all(parent);
+            }
+            match fsutil::rename(&from, &to) {
+                Ok(_) => format!("Renamed {} -> {}", from.display(), to.display()),
+                Err(e) => helpers::tool_error(
+                    &format!(
+                        "Error renaming {} -> {}: {}",
+                        from.display(),
+                        to.display(),
+                        e
+                    ),
+                    "Verify the source path exists and the destination is writable",
+                ),
+            }
+        }
+
+        "create_dir" => {
+            let raw_path = match args["path"].as_str() {
+                Some(p) => p,
+                None => return "Error: missing 'path' argument".to_string(),
+            };
+            let path = helpers::resolve_path_write_cached(
+                raw_path,
+                project_root,
+                path_cache,
+                allow_escape,
+            );
+            if helpers::is_blocked_path(&path) {
+                return helpers::blocked_error(raw_path);
+            }
+            match fsutil::create_dir_all(&path) {
+                Ok(_) => format!("Created directory: {}", path.display()),
+                Err(e) => format!("Error creating dir {}: {}", path.display(), e),
+            }
+        }
+
+        "grep" => {
+            let pattern = match args["pattern"].as_str() {
+                Some(p) => p,
+                None => return "Error: missing 'pattern' argument".to_string(),
+            };
+            let search_root = args["path"].as_str().unwrap_or(project_root);
+            let search_path =
+                helpers::resolve_path_cached(search_root, project_root, path_cache, allow_escape);
+            if helpers::is_blocked_path(&search_path) {
+                return helpers::blocked_error(search_root);
+            }
+            let file_glob = args["file_glob"].as_str().unwrap_or("*");
+            let case_sensitive = args["case_sensitive"].as_bool().unwrap_or(true);
+            let max_results = args["max_results"].as_u64().unwrap_or(50).min(200) as usize;
+
+            crate::explorer::grep_files(
+                &search_path,
+                pattern,
+                file_glob,
+                case_sensitive,
+                max_results,
+            )
+        }
+
+        "patch_file" => {
+            let raw_path = match args["path"].as_str() {
+                Some(p) => p,
+                None => return "Error: missing 'path' argument".to_string(),
+            };
+            let raw_old_text = match args["old_text"].as_str() {
+                Some(t) => t,
+                None => return "Error: missing 'old_text' argument".to_string(),
+            };
+            let raw_new_text = args["new_text"].as_str().unwrap_or("");
+            let replace_all = args["replace_all"].as_bool().unwrap_or(false);
+
+            // Strip line-number prefixes if the AI copied from read_file output
+            let old_text = helpers::strip_line_numbers(raw_old_text);
+            let new_text = helpers::strip_line_numbers(raw_new_text);
+
+            let path = helpers::resolve_path_write_cached(
+                raw_path,
+                project_root,
+                path_cache,
+                allow_escape,
+            );
+            if helpers::is_blocked_path(&path) {
+                return helpers::blocked_error(raw_path);
+            }
+            let content = match fsutil::read_to_string(&path) {
+                Ok(c) => c,
+                Err(e) => {
+                    return helpers::tool_error(
+                        &format!("Error reading {}: {}", path.display(), e),
+                        "Verify the path exists with list_dir before patching",
+                    );
+                }
+            };
+
+            match helpers::fuzzy_find_replace(&content, &old_text, &new_text, replace_all) {
+                Some((patched, strategy)) => match fsutil::write(&path, &patched) {
+                    Ok(_) => format!(
+                        "Patched {} via {} ({} -> {} bytes)",
+                        path.display(),
+                        strategy,
+                        content.len(),
+                        patched.len()
+                    ),
+                    Err(e) => helpers::tool_error(
+                        &format!("Error writing {}: {}", path.display(), e),
+                        "Check that the path is writable",
+                    ),
+                },
+                None => {
+                    let old_lines: Vec<&str> = old_text.lines().collect();
+                    let first_old = old_lines.first().copied().unwrap_or("");
+                    let nearby = helpers::find_nearby_lines(&content, first_old, 5);
+                    format!(
+                        "Error: 'old_text' not found in {}. No changes made.\n\
+                         --- old_text (first line) ---\n{}\n\
+                         --- nearest lines in file ---\n{}\n\
+                         --- tip ---\n\
+                         Re-read the file with read_file and copy the exact text for old_text.",
+                        path.display(),
+                        if old_text.len() > 500 {
+                            format!("{}... ({} chars total)", &old_text[..500], old_text.len())
+                        } else {
+                            old_text.to_string()
+                        },
+                        nearby,
+                    )
+                }
+            }
+        }
+
+        "web_search" => {
+            let query = match args["query"].as_str() {
+                Some(q) => q,
+                None => return "Error: missing 'query' argument".to_string(),
+            };
+            let num_results = args["num_results"].as_u64().unwrap_or(5).min(10) as usize;
+
+            let cache_key = format!("ddg:{}:{}", query, num_results);
+            if let Some(cached) = crate::extract::search_cache_get(&cache_key) {
+                return cached;
+            }
+
+            let encoded: String = query
+                .chars()
+                .map(|c| match c {
+                    'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
+                    ' ' => "+".to_string(),
+                    c => format!("%{:02X}", c as u32),
+                })
+                .collect();
+
+            let url = format!("https://html.duckduckgo.com/html/?q={}", encoded);
+            debug_log!("web_search: fetching {}", url);
+
+            match crate::provider::native_get(&url, 15, 512_000) {
+                Err(e) => format!("Web search error: {}", e),
+                Ok(data) => {
+                    let html = String::from_utf8_lossy(&data);
+                    let results = crate::extract::extract_ddg_results(&html, num_results);
+                    if results.is_empty() {
+                        debug_log!(
+                            "web_search: no DDG results for query '{}', HTML preview (first 800 chars): {}",
+                            query,
+                            html.chars().take(800).collect::<String>()
+                        );
+                        format!("No web results for \"{}\"", query)
+                    } else {
+                        crate::extract::search_cache_set(&cache_key, &results);
+                        results
+                    }
+                }
+            }
+        }
+
+        "fetch_url" => {
+            let url = match args["url"].as_str() {
+                Some(u) => u,
+                None => return "Error: missing 'url' argument".to_string(),
+            };
+            if !url.starts_with("http://") && !url.starts_with("https://") {
+                return helpers::tool_error(
+                    &format!(
+                        "Invalid URL scheme for \"{}\": only http/https allowed",
+                        url
+                    ),
+                    "Provide an http:// or https:// URL",
+                );
+            }
+            let max_bytes = args["max_bytes"].as_u64().unwrap_or(32_768).min(131_072) as usize;
+
+            match crate::provider::native_get(url, 20, max_bytes) {
+                Err(e) => format!("fetch error for {}: {}", url, e),
+                Ok(data) => {
+                    let body = String::from_utf8_lossy(&data);
+                    let is_html = body.trim_start().starts_with("<!")
+                        || body.trim_start().starts_with("<html")
+                        || body.contains("<html");
+                    let text = if is_html {
+                        crate::extract::extract_html_content(&body, url)
+                    } else {
+                        body.to_string()
+                    };
+
+                    if text.trim().is_empty() {
+                        format!("Empty response from {}", url)
+                    } else {
+                        // Cap at max_bytes to prevent runaway token usage
+                        text.chars().take(max_bytes).collect()
+                    }
+                }
+            }
+        }
+
+        "todo_list" => {
+            let title = args["title"].as_str().unwrap_or("Task List").to_string();
+            let items_val = match args["items"].as_array() {
+                Some(a) => a,
+                None => return "Error: missing 'items' array".to_string(),
+            };
+            let items: Vec<TodoItem> = items_val
+                .iter()
+                .filter_map(|v| {
+                    let id = v["id"].as_str()?.to_string();
+                    let content = v["content"].as_str()?.to_string();
+                    let status_str = v["status"].as_str().unwrap_or("pending");
+                    let status = match status_str {
+                        "completed" => TodoStatus::Completed,
+                        "in_progress" => TodoStatus::InProgress,
+                        "cancelled" => TodoStatus::Cancelled,
+                        _ => TodoStatus::Pending,
+                    };
+                    let priority = v["priority"].as_str().unwrap_or("medium").to_string();
+                    Some(TodoItem {
+                        id,
+                        content,
+                        status,
+                        priority,
+                    })
+                })
+                .collect();
+            let done = items
+                .iter()
+                .filter(|i| i.status == TodoStatus::Completed)
+                .count();
+            let total = items.len();
+            let all_pending = items.iter().all(|i| i.status == TodoStatus::Pending);
+            let all_terminal = items.iter().all(|i| {
+                i.status == TodoStatus::Completed || i.status == TodoStatus::Cancelled
+            });
+            if all_pending || all_terminal {
+                format!(
+                    "Task list updated: \"{}\" -- {}/{} complete | Context: {}/{} tokens ({}%)",
+                    title, done, total, ctx_used, ctx_max, (ctx_used * 100 / ctx_max.max(1)).min(100),
+                )
+            } else {
+                format!(
+                    "Task list updated: \"{}\" -- {}/{} complete",
+                    title, done, total,
+                )
+            }
+        }
+
+        "glob" => {
+            let pattern = match args["pattern"].as_str() {
+                Some(p) => p,
+                None => return "Error: missing 'pattern' argument".to_string(),
+            };
+            let search_path = Some(
+                args["path"]
+                    .as_str()
+                    .map(|p| helpers::resolve_path_cached(p, project_root, path_cache, allow_escape))
+                    .unwrap_or_else(|| std::path::PathBuf::from(&project_root)),
+            );
+            if let Some(ref sp) = search_path {
+                if helpers::is_blocked_path(sp) {
+                    return helpers::blocked_error(
+                        args["path"].as_str().unwrap_or(&project_root),
+                    );
+                }
+            }
+            let results = crate::explorer::glob_files(search_path.as_deref(), pattern);
+            if results.is_empty() {
+                format!("No files match '{}'", pattern)
+            } else {
+                format!(
+                    "{} file(s) matching '{}':\n{}",
+                    results.len(),
+                    pattern,
+                    results.join("\n")
+                )
+            }
+        }
+
+        "handoff" => {
+            let reason = args["reason"].as_str().unwrap_or("no reason given");
+            format!("HANDOFF:{}", reason)
+        }
+
+        other => {
+            debug_log!("chat: unknown tool call: '{}'", other);
+            format!("Unknown tool: {}", other)
+        }
+    }
+}
+
+// -- Autonomous execution ------------------------------------------------------
+
+fn auto_execute(state: &mut AppState, runtime: &mut ChatRuntime, response: &str, root: &str) {
+    let allow_escape = state
+        .active_provider()
+        .map(|p| p.allow_project_escape)
+        .unwrap_or(false);
+
+    let files = shell::extract_files(response);
+    if !files.is_empty() {
+        let written = shell::write_extracted_files(root, &files, allow_escape);
+        push_runtime(state, runtime, ChatMessage::new(
+            Role::Tool,
+            format!("Files written: {}", written.join(", ")),
+        ));
+    }
+
+    let commands = shell::extract_commands(response);
+    for cmd in commands {
+        let (task, rx) = shell::run_command_in_dir(&cmd, Some(root));
+        let task_id = task.id.clone();
+        let pid = task.pid.unwrap_or(0);
+        state.shell_tasks.push(task);
+        runtime.running_tasks.push((task_id, rx, pid));
+    }
+}
+
+// -- Shell task polling --------------------------------------------------------
+
+fn poll_shell_tasks(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
+    let mut repaint = false;
+    let mut completed: Vec<String> = Vec::new();
+
+    for (task_id, rx, _pid) in &runtime.running_tasks {
+        loop {
+            match rx.try_recv() {
+                Ok(ShellEvent::Output(line)) => {
+                    if let Some(t) = state.shell_tasks.iter_mut().find(|t| t.id == *task_id) {
+                        t.output.push_str(&line);
+                        t.output.push('\n');
+                    }
+                    repaint = true;
+                }
+                Ok(ShellEvent::Done { exit_code }) => {
+                    let (output, command) = if let Some(t) = state.shell_tasks.iter_mut().find(|t| t.id == *task_id) {
+                        t.status = ShellStatus::Done { exit_code };
+                        (t.output.clone(), t.command.clone())
+                    } else {
+                        (String::new(), String::new())
+                    };
+                    if !output.is_empty() && still_owns_session(runtime, state) {
+                        let msg = ChatMessage::new(
+                            Role::Tool,
+                            format!(
+                                "```\n{}\n```\n\nShell `{}` exited {}.",
+                                output, command, exit_code
+                            ),
+                        );
+                        push_runtime(state, runtime, msg);
+                    }
+                    completed.push(task_id.clone());
+                    repaint = true;
+                    break;
+                }
+                Ok(ShellEvent::SpawnError(e)) => {
+                    if let Some(t) = state.shell_tasks.iter_mut().find(|t| t.id == *task_id) {
+                        t.status = ShellStatus::Failed(e);
+                    }
+                    completed.push(task_id.clone());
+                    repaint = true;
+                    break;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    completed.push(task_id.clone());
+                    break;
+                }
+            }
+        }
+    }
+
+    if !completed.is_empty() {
+        runtime
+            .running_tasks
+            .retain(|(id, _, _)| !completed.contains(id));
+        if still_owns_session(runtime, state)
+            && runtime.stream_rx.is_none()
+        {
+            start_completion(state, runtime);
+        } else if !still_owns_session(runtime, state) {
+            runtime.drain();
+        }
+    }
+
+    repaint
+}
