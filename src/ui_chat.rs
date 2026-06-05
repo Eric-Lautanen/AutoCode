@@ -3,6 +3,7 @@
 // highlighting + collapsible tool cards with diff views.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 
 use egui::{
     CollapsingHeader, Color32, FontId, Frame, Key, Margin, RichText, ScrollArea, Stroke, TextEdit,
@@ -146,6 +147,19 @@ pub struct ChatPanelState {
     prev_session_id: Option<String>,
     scroll_offsets: std::collections::HashMap<String, f32>,
     scroll_area_id: Option<egui::Id>,
+
+    /// Messages currently rendered in the chat scroll area.
+    pub display_buffer: Vec<ChatMessage>,
+    /// Total messages on disk for the active session.
+    pub display_total_count: usize,
+    /// How many messages from the end are in display_buffer.
+    pub display_tail_count: usize,
+    /// Set when user clicks "Load older messages".
+    pub wants_older_messages: bool,
+    /// Track message count for detecting new arrivals.
+    prev_message_count: usize,
+    /// True when user scrolled up to read history.
+    pub user_scrolled_up: bool,
 }
 
 impl Default for ChatPanelState {
@@ -158,6 +172,12 @@ impl Default for ChatPanelState {
             prev_session_id: None,
             scroll_offsets: std::collections::HashMap::new(),
             scroll_area_id: None,
+            display_buffer: Vec::new(),
+            display_total_count: 0,
+            display_tail_count: 0,
+            wants_older_messages: false,
+            prev_message_count: 0,
+            user_scrolled_up: false,
         }
     }
 }
@@ -167,17 +187,89 @@ impl Default for ChatPanelState {
 pub fn show(
     ui: &mut egui::Ui,
     state: &mut AppState,
-    runtime: &mut ChatRuntime,
+    runtimes: &mut HashMap<String, ChatRuntime>,
     panel_state: &mut ChatPanelState,
 ) {
-    show_session_tabs(ui, state, runtime, panel_state);
+    show_session_tabs(ui, state, runtimes, panel_state);
     ui.separator();
 
-    // On session switch, save/restore scroll offset using cached scroll area ID
-    // (captured from the previous frame's ScrollArea).
+    // On session switch: persist old session, evict from RAM only if no live runtime.
     if panel_state.prev_session_id != state.active_session_id {
+        if let Some(ref old_id) = panel_state.prev_session_id
+            && let Some(old_sess) = state.sessions.iter_mut().find(|s| s.id == *old_id)
+        {
+            // Save current per-session state to the old session.
+            old_sess.todo_list = state.todo_list.clone();
+            old_sess.show_todo = state.show_todo;
+            old_sess.todo_user_dismissed = state.todo_user_dismissed;
+            old_sess.handoff_enabled = state.handoff_enabled;
+            old_sess.show_explorer = state.show_explorer;
+            old_sess.settings_open = state.settings_open;
+            if let Some(old_proj) = state
+                .projects
+                .iter()
+                .find(|p| Some(&p.id) == old_sess.project_id.as_ref())
+            {
+                let _ = crate::session_storage::save_session(old_proj, old_sess);
+            }
+            if !runtimes.contains_key(old_id) {
+                old_sess.messages.clear();
+                old_sess.messages.shrink_to_fit();
+            }
+        }
+        // Load new session: only from disk if evicted from RAM.
+        if let Some(ref new_id) = state.active_session_id {
+            if let Some(new_sess) = state.sessions.iter_mut().find(|s| s.id == *new_id)
+                && let Some(new_proj) = state
+                    .projects
+                    .iter()
+                    .find(|p| Some(&p.id) == new_sess.project_id.as_ref())
+            {
+                if new_sess.messages.is_empty() {
+                    crate::session_storage::load_session(new_proj, new_sess);
+                }
+                let window = state.ui_display_window;
+                let total = new_sess.messages.len();
+                let start = total.saturating_sub(window);
+                panel_state.display_buffer = new_sess.messages[start..].to_vec();
+                panel_state.display_total_count = total;
+                panel_state.display_tail_count = panel_state.display_buffer.len();
+                // Restore provider and model for this session.
+                if !new_sess.provider_label.is_empty()
+                    && state.providers.contains_key(&new_sess.provider_label)
+                {
+                    state.active_provider = new_sess.provider_label.clone();
+                    if let Some(prov) = state.providers.get_mut(&state.active_provider) {
+                        prov.model = new_sess.model.clone();
+                    }
+                }
+                // Sync new session's per-session state to the global working copy.
+                state.todo_list = new_sess.todo_list.clone();
+                state.show_todo = new_sess.show_todo;
+                state.todo_user_dismissed = new_sess.todo_user_dismissed;
+                state.handoff_enabled = new_sess.handoff_enabled;
+                state.show_explorer = new_sess.show_explorer;
+                state.settings_open = new_sess.settings_open;
+                if let Some(ref pid) = new_sess.project_id {
+                    state.active_project_id = Some(pid.clone());
+                }
+            }
+        } else {
+            panel_state.display_buffer.clear();
+            panel_state.display_total_count = 0;
+            panel_state.display_tail_count = 0;
+            state.todo_list.clear();
+            state.show_todo = false;
+            state.todo_user_dismissed = false;
+            state.handoff_enabled = false;
+            state.show_explorer = true;
+            state.settings_open = false;
+        }
+        panel_state.prev_message_count = panel_state.display_buffer.len();
+        panel_state.wants_older_messages = false;
+
+        // Scroll-offset save/restore.
         if let Some(sa_id) = panel_state.scroll_area_id {
-            // Save offset for the session we're leaving.
             if let Some(ref prev) = panel_state.prev_session_id {
                 let sid = ui.ctx().data_mut(|d| {
                     d.get_persisted::<egui::scroll_area::State>(sa_id)
@@ -187,71 +279,126 @@ pub fn show(
                     .scroll_offsets
                     .insert(prev.clone(), sid.offset.y);
             }
-            // Restore offset for the session we're entering.
             if let Some(ref next) = state.active_session_id {
                 if let Some(saved_y) = panel_state.scroll_offsets.get(next) {
+                    // Write to the new session's scroll area ID (it's
+                    // session-keyed, not the previous frame's sa_id).
+                    let next_sa_id = egui::Id::new(("chat_scroll", next.as_str()));
                     let mut sid = ui.ctx().data_mut(|d| {
-                        d.get_persisted::<egui::scroll_area::State>(sa_id)
+                        d.get_persisted::<egui::scroll_area::State>(next_sa_id)
                             .unwrap_or_default()
                     });
                     sid.offset.y = *saved_y;
-                    ui.ctx().data_mut(|d| d.insert_persisted(sa_id, sid));
+                    ui.ctx().data_mut(|d| d.insert_persisted(next_sa_id, sid));
                 } else {
                     panel_state.scroll_to_bottom = true;
                 }
             }
         } else {
-            // First frame — no cached ID yet, scroll to bottom.
             panel_state.scroll_to_bottom = true;
         }
         panel_state.prev_session_id = state.active_session_id.clone();
     }
 
-    let is_live_session = state.active_session_id.is_some()
-        && runtime.active_session_id.is_some()
-        && state.active_session_id == runtime.active_session_id;
-
-    let streaming = is_live_session
-        && (runtime.is_busy()
-            || !runtime.pending_response.is_empty()
-            || !runtime.reasoning_buf.is_empty()
-            || !runtime.live_shell_buf.is_empty());
-    if streaming {
-        panel_state.scroll_to_bottom = true;
+    // Phase 2: "Load older messages" click.
+    if panel_state.wants_older_messages {
+        panel_state.wants_older_messages = false;
+        let proj_id = state.active_project_id.clone();
+        let sess_id = state.active_session_id.clone();
+        if let Some(proj) = state
+            .projects
+            .iter()
+            .find(|p| Some(&p.id) == proj_id.as_ref())
+            && let Some(sess) = state
+                .sessions
+                .iter()
+                .find(|s| Some(&s.id) == sess_id.as_ref())
+        {
+            let offset = panel_state.display_tail_count;
+            let count = state.ui_scroll_page;
+            let (older, _) = crate::session_storage::load_message_window(proj, sess, offset, count);
+            if !older.is_empty() {
+                let mut new_buf = older;
+                new_buf.extend_from_slice(&panel_state.display_buffer);
+                panel_state.display_buffer = new_buf;
+                panel_state.display_tail_count += count;
+            }
+        }
     }
 
-    let chat_w = ui.available_width();
-    // Reserve space for the separator + input row (frame margins 6+6 + textarea 60 + gutter ≈ 92).
-    let input_row_h = 92.0;
-    let scroll_h = (ui.available_height() - input_row_h).max(40.0);
+    // Phase 2: new messages arrived — append to display_buffer.
+    if let Some(sess) = state.active_session() {
+        let current_count = sess.messages.len();
+        if current_count > panel_state.prev_message_count {
+            let new_msgs = &sess.messages[panel_state.prev_message_count..current_count];
+            panel_state.display_buffer.extend_from_slice(new_msgs);
+            panel_state.prev_message_count = current_count;
+            if !panel_state.user_scrolled_up {
+                panel_state.scroll_to_bottom = true;
+            }
+        }
+    }
 
-    let scroll_resp = ScrollArea::vertical()
-        .id_salt("chat_scroll")
-        .max_height(scroll_h)
-        .stick_to_bottom(panel_state.scroll_to_bottom)
-        .auto_shrink([false; 2])
-        .show(ui, |ui| {
-            ui.set_min_width(chat_w);
-            ui.add_space(6.0);
-            // Indent chat content so bubbles, names, and timestamps share the
-            // same 6 px left margin as the session tab row above.
-            let bubble_indent = Margin {
-                left: 6,
-                right: 6,
-                top: 0,
-                bottom: 0,
-            };
-            Frame::NONE.inner_margin(bubble_indent).show(ui, |ui| {
-                ui.set_min_width(chat_w - 12.0);
-                if let Some(sess) = state.active_session() {
-                    if sess.messages.is_empty() {
-                        empty_state(ui);
-                    } else {
-                        for (i, msg) in sess.messages.iter().enumerate() {
+    // --- scoped active-runtime block ----------------------------------------
+    {
+        let active_sid = state.active_session_id.clone();
+        let mut runtime = active_sid.as_ref().and_then(|sid| runtimes.get_mut(sid));
+        let is_live_session = active_sid.is_some() && runtime.is_some();
+        let streaming = is_live_session
+            && runtime.as_ref().is_some_and(|r| {
+                r.is_busy()
+                    || !r.pending_response.is_empty()
+                    || !r.reasoning_buf.is_empty()
+                    || !r.live_shell_buf.is_empty()
+            });
+        if streaming {
+            panel_state.scroll_to_bottom = true;
+        }
+
+        let chat_w = ui.available_width();
+        let input_row_h = 92.0;
+        let scroll_h = (ui.available_height() - input_row_h).max(40.0);
+
+        let scroll_resp = ScrollArea::vertical()
+            .id_salt(("chat_scroll", active_sid.as_deref().unwrap_or("")))
+            .max_height(scroll_h)
+            .stick_to_bottom(panel_state.scroll_to_bottom)
+            .auto_shrink([false; 2])
+            .show(ui, |ui| {
+                ui.set_min_width(chat_w);
+                ui.add_space(6.0);
+                let bubble_indent = Margin {
+                    left: 6,
+                    right: 6,
+                    top: 0,
+                    bottom: 0,
+                };
+                Frame::NONE.inner_margin(bubble_indent).show(ui, |ui| {
+                    ui.set_min_width(chat_w - 12.0);
+                    if !panel_state.display_buffer.is_empty() {
+                        if panel_state.display_buffer.len() < panel_state.display_total_count {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    RichText::new(format!(
+                                        "Showing {} of {} messages",
+                                        panel_state.display_buffer.len(),
+                                        panel_state.display_total_count
+                                    ))
+                                    .size(11.0)
+                                    .color(theme().text_muted),
+                                );
+                                if ui.button("Load older messages...").clicked() {
+                                    panel_state.wants_older_messages = true;
+                                }
+                            });
+                            ui.add_space(8.0);
+                        }
+                        ui.push_id(("chat_messages", active_sid.as_deref().unwrap_or("")), |ui| {
+                        for (i, msg) in panel_state.display_buffer.iter().enumerate() {
                             if msg.role == Role::System {
                                 show_system_pill(ui, msg);
                             } else if msg.role == Role::Error {
-                                continue; // errors render at the bottom
+                                continue;
                             } else if msg.role == Role::Assistant
                                 && msg.content.trim().is_empty()
                                 && msg.tool_calls.is_some()
@@ -261,80 +408,95 @@ pub fn show(
                             }
                             ui.add_space(8.0);
                         }
-                    }
-                } else {
-                    empty_state(ui);
-                }
-
-                if is_live_session {
-                    let has_streaming =
-                        !runtime.pending_response.is_empty() || !runtime.live_shell_buf.is_empty();
-
-                    if runtime.is_busy() && !has_streaming {
-                        show_waiting_bubble(ui, &runtime.status, chat_w);
-                        ui.add_space(8.0);
+                        }); // end push_id("chat_messages", ...)
                     } else {
-                        if !runtime.reasoning_buf.is_empty() {
-                            show_reasoning_bubble(ui, &runtime.reasoning_buf, chat_w, true);
-                        }
-                        if !runtime.pending_response.is_empty() {
-                            show_streaming_bubble(ui, &runtime.pending_response, chat_w);
-                        } else if !runtime.live_shell_buf.is_empty() {
-                            show_live_shell_bubble(ui, &runtime.live_shell_buf, chat_w);
-                        }
+                        empty_state(ui);
                     }
-                }
 
-                // Render error notices at the very bottom.
-                if let Some(sess) = state.active_session() {
-                    for msg in sess.messages.iter().rev() {
-                        if msg.role == Role::Error {
-                            show_error_notice(ui, msg);
+                    if is_live_session {
+                        let r = runtime.as_mut().unwrap();
+                        let has_streaming =
+                            !r.pending_response.is_empty() || !r.live_shell_buf.is_empty();
+
+                        if r.is_busy() && !has_streaming {
+                            show_waiting_bubble(ui, &r.status, chat_w);
                             ui.add_space(8.0);
+                        } else {
+                            if !r.reasoning_buf.is_empty() {
+                                show_reasoning_bubble(ui, &r.reasoning_buf, chat_w, true);
+                            }
+                            if !r.pending_response.is_empty() {
+                                show_streaming_bubble(ui, &r.pending_response, chat_w);
+                            } else if !r.live_shell_buf.is_empty() {
+                                show_live_shell_bubble(ui, &r.live_shell_buf, chat_w);
+                            }
                         }
                     }
-                }
-            }); // end bubble_indent frame
-        });
 
-    panel_state.scroll_area_id = Some(scroll_resp.id);
+                    // Render error notices at the very bottom.
+                    if let Some(sess) = state.active_session() {
+                        for msg in sess.messages.iter().rev() {
+                            if msg.role == Role::Error {
+                                show_error_notice(ui, msg);
+                                ui.add_space(8.0);
+                            }
+                        }
+                    }
+                });
+            }); // end ScrollArea
 
-    // Manual keyboard scrolling: arrow keys / PgUp / PgDn scroll the chat
-    // even when the scroll area doesn't have explicit keyboard focus.
-    let scroll_id = scroll_resp.id;
-    if !ui.ctx().text_edit_focused() && !ui.ctx().memory(|mem| mem.has_focus(scroll_id)) {
-        let delta = ui.ctx().input(|i| {
-            if i.key_pressed(Key::ArrowDown) {
-                100.0f32
-            } else if i.key_pressed(Key::ArrowUp) {
-                -100.0
-            } else if i.key_pressed(Key::PageDown) {
-                400.0
-            } else if i.key_pressed(Key::PageUp) {
-                -400.0
-            } else {
-                0.0
-            }
-        });
-        if delta != 0.0 {
-            panel_state.scroll_to_bottom = false;
-            let mut state: egui::scroll_area::State = ui
-                .ctx()
-                .data_mut(|d| d.get_persisted(scroll_id).unwrap_or_default());
-            state.offset.y = (state.offset.y + delta).max(0.0);
-            let max_offset =
-                (scroll_resp.content_size.y - scroll_resp.inner_rect.height()).max(0.0);
-            state.offset.y = state.offset.y.min(max_offset);
-            ui.ctx().data_mut(|d| d.insert_persisted(scroll_id, state));
+        panel_state.scroll_area_id = Some(scroll_resp.id);
+
+        if let Some(sa_id) = panel_state.scroll_area_id {
+            let sa_state = ui.ctx().data_mut(|d| {
+                d.get_persisted::<egui::scroll_area::State>(sa_id)
+                    .unwrap_or_default()
+            });
+            let max_y = (scroll_resp.content_size.y - scroll_resp.inner_rect.height()).max(0.0);
+            panel_state.user_scrolled_up = sa_state.offset.y < max_y - 20.0;
         }
-    }
 
-    if !streaming {
-        panel_state.scroll_to_bottom = false;
-    }
+        let scroll_id = scroll_resp.id;
+        if !ui.ctx().text_edit_focused() && !ui.ctx().memory(|mem| mem.has_focus(scroll_id)) {
+            let delta = ui.ctx().input(|i| {
+                if i.key_pressed(Key::ArrowDown) {
+                    100.0f32
+                } else if i.key_pressed(Key::ArrowUp) {
+                    -100.0
+                } else if i.key_pressed(Key::PageDown) {
+                    400.0
+                } else if i.key_pressed(Key::PageUp) {
+                    -400.0
+                } else {
+                    0.0
+                }
+            });
+            if delta != 0.0 {
+                panel_state.scroll_to_bottom = false;
+                if delta < 0.0 {
+                    panel_state.user_scrolled_up = true;
+                }
+                let mut state: egui::scroll_area::State = ui
+                    .ctx()
+                    .data_mut(|d| d.get_persisted(scroll_id).unwrap_or_default());
+                state.offset.y = (state.offset.y + delta).max(0.0);
+                let max_offset =
+                    (scroll_resp.content_size.y - scroll_resp.inner_rect.height()).max(0.0);
+                state.offset.y = state.offset.y.min(max_offset);
+                if state.offset.y >= max_offset - 1.0 {
+                    panel_state.user_scrolled_up = false;
+                }
+                ui.ctx().data_mut(|d| d.insert_persisted(scroll_id, state));
+            }
+        }
+
+        if !streaming {
+            panel_state.scroll_to_bottom = false;
+        }
+    } // end scoped block — runtime borrow is released here
 
     ui.separator();
-    show_input_row(ui, state, runtime, panel_state);
+    show_input_row(ui, state, runtimes, panel_state);
 }
 
 // -- Session tabs --------------------------------------------------------------
@@ -342,7 +504,7 @@ pub fn show(
 fn show_session_tabs(
     ui: &mut egui::Ui,
     state: &mut AppState,
-    runtime: &mut crate::chat::ChatRuntime,
+    runtimes: &mut HashMap<String, crate::chat::ChatRuntime>,
     panel_state: &mut ChatPanelState,
 ) {
     ui.add_space(6.0); // top padding for session tabs
@@ -357,6 +519,7 @@ fn show_session_tabs(
                 let sessions: Vec<(String, String)> = state
                     .sessions
                     .iter()
+                    .filter(|s| !s.closed)
                     .map(|s| (s.id.clone(), s.label.clone()))
                     .collect();
 
@@ -370,58 +533,103 @@ fn show_session_tabs(
                 }
 
                 for (id, label) in sessions {
-                    let active = state.active_session_id.as_deref() == Some(&id);
-                    Frame::NONE
-                        .fill(Color32::TRANSPARENT)
-                        .stroke(Stroke::new(
-                            1.0,
-                            if active {
-                                Palette::TAB_ACCENT
-                            } else {
-                                Color32::TRANSPARENT
-                            },
-                        ))
-                        .corner_radius(ROUND_SM)
-                        .inner_margin(Margin {
-                            left: 10,
-                            right: 10,
-                            top: 4,
-                            bottom: 4,
-                        })
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 4.0;
-                                let tab_resp = ui.add(
-                                    egui::Button::new(RichText::new(&label).size(11.5).color(
-                                        if active {
-                                            Palette::TAB_ACCENT
-                                        } else {
-                                            theme().text_muted
-                                        },
-                                    ))
-                                    .fill(Color32::TRANSPARENT)
-                                    .stroke(egui::Stroke::NONE),
-                                );
-                                if tab_resp.clicked() {
-                                    state.active_session_id = Some(id.clone());
-                                }
+                    ui.push_id(("session_tab", &id), |ui| {
+                        let active = state.active_session_id.as_deref() == Some(&id);
+                        Frame::NONE
+                            .fill(Color32::TRANSPARENT)
+                            .stroke(Stroke::new(
+                                1.0,
                                 if active {
-                                    let close = ui.add(
-                                        egui::Button::new(
-                                            RichText::new("x").size(9.0).color(theme().text_muted),
-                                        )
+                                    Palette::TAB_ACCENT
+                                } else {
+                                    Color32::TRANSPARENT
+                                },
+                            ))
+                            .corner_radius(ROUND_SM)
+                            .inner_margin(Margin {
+                                left: 10,
+                                right: 10,
+                                top: 4,
+                                bottom: 4,
+                            })
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 4.0;
+                                    let tab_resp = ui.add(
+                                        egui::Button::new(RichText::new(&label).size(11.5).color(
+                                            if active {
+                                                Palette::TAB_ACCENT
+                                            } else {
+                                                theme().text_muted
+                                            },
+                                        ))
                                         .fill(Color32::TRANSPARENT)
-                                        .stroke(Stroke::NONE)
-                                        .min_size(Vec2::new(14.0, 14.0)),
+                                        .stroke(egui::Stroke::NONE),
                                     );
-                                    if close.on_hover_text("Close session").clicked() {
-                                        crate::chat::abort_for_session(runtime, &id);
-                                        panel_state.scroll_offsets.remove(&id);
-                                        crate::session::delete_session(state, &id);
+                                    if tab_resp.clicked() {
+                                        state.active_session_id = Some(id.clone());
                                     }
-                                }
-                            });
-                        });
+                                    if active {
+                                        let close = ui.add(
+                                            egui::Button::new(
+                                                RichText::new("x").size(9.0).color(theme().text_muted),
+                                            )
+                                            .fill(Color32::TRANSPARENT)
+                                            .stroke(Stroke::NONE)
+                                            .min_size(Vec2::new(14.0, 14.0)),
+                                        );
+                                        if close.on_hover_text("Close session").clicked() {
+                                            crate::chat::abort_for_session(runtimes, &id);
+                                            panel_state.scroll_offsets.remove(&id);
+                                            if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == id) {
+                                                sess.closed = true;
+                                                if let Some(pid) = sess.project_id.as_ref()
+                                                    && let Some(proj) = state.projects.iter().find(|p| &p.id == pid)
+                                                {
+                                                    // Save messages to disk BEFORE clearing RAM.
+                                                    let _ = crate::session_storage::save_session(proj, sess);
+                                                }
+                                                sess.messages.clear();
+                                            }
+                                            if state.active_session_id.as_deref() == Some(&id) {
+                                                state.active_session_id = state
+                                                    .sessions
+                                                    .iter()
+                                                    .rev()
+                                                    .find(|s| s.id != id && !s.closed)
+                                                    .map(|s| s.id.clone());
+                                            }
+                                            // Load new session's messages into the display buffer.
+                                            if let Some(ref new_id) = state.active_session_id {
+                                                if let Some(new_sess) = state.sessions.iter_mut().find(|s| s.id == *new_id) {
+                                                    if new_sess.messages.is_empty() {
+                                                        if let Some(pid) = new_sess.project_id.as_ref()
+                                                            && let Some(proj) = state.projects.iter().find(|p| &p.id == pid)
+                                                        {
+                                                            crate::session_storage::load_session(proj, new_sess);
+                                                        }
+                                                    }
+                                                    let window = state.ui_display_window;
+                                                    let total = new_sess.messages.len();
+                                                    let start = total.saturating_sub(window);
+                                                    panel_state.display_buffer = new_sess.messages[start..].to_vec();
+                                                    panel_state.display_total_count = total;
+                                                    panel_state.display_tail_count = panel_state.display_buffer.len();
+                                                }
+                                            } else {
+                                                panel_state.display_buffer.clear();
+                                                panel_state.display_total_count = 0;
+                                                panel_state.display_tail_count = 0;
+                                            }
+                                            panel_state.prev_session_id = state.active_session_id.clone();
+                                            panel_state.prev_message_count = panel_state.display_buffer.len();
+                                            panel_state.wants_older_messages = false;
+                                            runtimes.remove(&id);
+                                        }
+                                    }
+                });
+            }); // end push_id("chat_content", ...)
+                    });
                 }
             });
         });
@@ -442,6 +650,16 @@ fn empty_state(ui: &mut egui::Ui) {
 // -- Message bubbles -----------------------------------------------------------
 
 fn show_bubble(ui: &mut egui::Ui, msg: &ChatMessage, idx: usize, panel_w: f32, suppress_ts: bool) {
+    // Skip hidden tool results.
+    if msg.role == Role::Tool
+        && msg
+            .tool_meta
+            .as_ref()
+            .is_some_and(|m| m.tool_name == "name_session")
+    {
+        return;
+    }
+
     // Every widget inside a bubble — including nested ScrollAreas — gets a
     // unique parent ID derived from this message's timestamp + index.
     // This prevents scroll state from leaking between messages.
@@ -1351,6 +1569,7 @@ fn show_reasoning_bubble(ui: &mut egui::Ui, text: &str, panel_w: f32, live: bool
                     .color(theme().accent)
                     .strong(),
             )
+            .id_salt("reasoning_live_header")
             .default_open(live)
             .show(ui, |ui| {
                 ui.set_max_height(f32::INFINITY);
@@ -1465,13 +1684,13 @@ fn show_live_shell_bubble(ui: &mut egui::Ui, text: &str, panel_w: f32) {
     });
 }
 
-fn render_code_block(ui: &mut egui::Ui, lang: &str, code: &str) {
-    render_code_block_impl(ui, lang, code, false)
-}
-
 const CODE_DISPLAY_MAX_LINES: usize = 5000;
 
-fn render_code_block_impl(ui: &mut egui::Ui, lang: &str, code: &str, _streaming: bool) {
+fn render_code_block(ui: &mut egui::Ui, lang: &str, code: &str) {
+    render_code_block_impl(ui, lang, code, false, 0)
+}
+
+fn render_code_block_impl(ui: &mut egui::Ui, lang: &str, code: &str, _streaming: bool, _inst: u64) {
     let lines: Vec<&str> = code.lines().collect();
     let truncated_count = lines.len().saturating_sub(CODE_DISPLAY_MAX_LINES);
     let display_lines = if truncated_count > 0 {
@@ -1482,7 +1701,7 @@ fn render_code_block_impl(ui: &mut egui::Ui, lang: &str, code: &str, _streaming:
     let display_text = display_lines.join("\n");
 
     ui.add_space(4.0);
-    ui.scope(|ui| {
+    ui.push_id(("code_block", _inst), |ui| {
         ui.set_max_height(f32::INFINITY);
         Frame::NONE
             .fill(theme().code_frame_bg)
@@ -1533,7 +1752,7 @@ fn render_code_block_impl(ui: &mut egui::Ui, lang: &str, code: &str, _streaming:
                 );
                 let viewport_width = ui.available_width();
                 ScrollArea::vertical()
-                    .id_salt("code_scroll")
+                    .id_salt(("code_scroll", _inst))
                     .max_height(400.0)
                     .min_scrolled_height(0.0)
                     .show(ui, |ui| {
@@ -1551,7 +1770,7 @@ fn render_code_block_impl(ui: &mut egui::Ui, lang: &str, code: &str, _streaming:
                     );
                 }
             });
-    }); // end scope
+    }); // end push_id
     ui.add_space(4.0);
 }
 
@@ -1661,17 +1880,32 @@ fn render_inline(ui: &mut egui::Ui, line: &str) {
                 ui.add_space(1.0);
                 return;
             }
-            ui.horizontal(|ui| {
+            let cell_count = cells.len();
+            ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
+                let max_cell_w = (ui.available_width() / cell_count as f32).max(80.0);
                 for (i, cell) in cells.iter().enumerate() {
                     if i > 0 {
                         ui.label(RichText::new("|").size(12.0).color(theme().text_muted));
                     }
-                    ui.label(
-                        RichText::new(cell.trim())
-                            .size(12.0)
-                            .color(theme().text_primary),
+                    let mut job = egui::text::LayoutJob {
+                        wrap: egui::text::TextWrapping {
+                            max_width: max_cell_w,
+                            break_anywhere: true,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    };
+                    job.append(
+                        cell.trim(),
+                        0.0,
+                        TextFormat {
+                            font_id: FontId::proportional(12.0),
+                            color: theme().text_primary,
+                            ..Default::default()
+                        },
                     );
+                    ui.label(job);
                 }
             });
             return;
@@ -1705,7 +1939,7 @@ fn render_rich_inline(ui: &mut egui::Ui, text: &str) {
 fn show_input_row(
     ui: &mut egui::Ui,
     state: &mut AppState,
-    runtime: &mut ChatRuntime,
+    runtimes: &mut HashMap<String, ChatRuntime>,
     panel_state: &mut ChatPanelState,
 ) {
     Frame::NONE
@@ -1719,10 +1953,10 @@ fn show_input_row(
         .show(ui, |ui| {
             ui.push_id("input_row", |ui| {
                 ui.horizontal(|ui| {
-                    let live = state.active_session_id.is_some()
-                        && runtime.active_session_id.is_some()
-                        && state.active_session_id == runtime.active_session_id;
-                    let busy = live && runtime.is_busy();
+                    let active_sid = state.active_session_id.clone();
+                    let busy = active_sid
+                        .as_ref()
+                        .is_some_and(|sid| runtimes.get(sid).is_some_and(|r| r.is_busy()));
                     // Buttons: Send(72) + gap(6) + TH(36) + gap(6) + Effort(44) + gap(6) + [=](28) = 198
                     // Plus item_spacing before button group in this horizontal (default ~6) = 204
                     // Small buffer for padding = 206
@@ -1787,7 +2021,7 @@ fn show_input_row(
                             false,
                             // No active provider ? dead path, buttons stay greyed.
                             // Fallback kind is irrelevant here.
-                            crate::state::ProviderKind::OpenRouter,
+                            crate::state::ProviderKind::new("openrouter"),
                             String::new(),
                         ));
 
@@ -1804,9 +2038,12 @@ fn show_input_row(
                             .stroke(Stroke::NONE)
                             .min_size(Vec2::new(72.0, 36.0));
 
-                            if ui.add(stop_btn).clicked() {
-                                runtime.drain();
-                                runtime.status = "Stopped.".into();
+                            if ui.add(stop_btn).clicked()
+                                && let Some(r) =
+                                    active_sid.as_ref().and_then(|sid| runtimes.get_mut(sid))
+                            {
+                                r.drain();
+                                r.status = "Stopped.".into();
                             }
                         } else {
                             let send_btn = egui::Button::new(
@@ -1829,7 +2066,7 @@ fn show_input_row(
                                     panel_state.input.pop();
                                 }
                                 let text = std::mem::take(&mut panel_state.input);
-                                chat::send_message(state, runtime, text);
+                                chat::send_message(state, runtimes, text);
                                 panel_state.scroll_to_bottom = true;
                             }
                         }
@@ -1907,21 +2144,23 @@ fn show_input_row(
                             ui.set_min_width(80.0);
                             ui.spacing_mut().button_padding = Vec2::new(8.0, 4.0);
                             for label in &available_efforts {
-                                let display = {
-                                    let mut c = label.clone();
-                                    if !c.is_empty() {
-                                        let (first, rest) = c.split_at(1);
-                                        c = format!("{}{}", first.to_uppercase(), rest);
+                                ui.push_id(("effort", label), |ui| {
+                                    let display = {
+                                        let mut c = label.clone();
+                                        if !c.is_empty() {
+                                            let (first, rest) = c.split_at(1);
+                                            c = format!("{}{}", first.to_uppercase(), rest);
+                                        }
+                                        c
+                                    };
+                                    let selected = effort == *label;
+                                    if ui.selectable_label(selected, &display).clicked() {
+                                        if let Some(p) = state.providers.get_mut(&provider_key_popup) {
+                                            p.reasoning_effort = label.clone();
+                                        }
+                                        egui::Popup::close_id(ui.ctx(), popup_id);
                                     }
-                                    c
-                                };
-                                let selected = effort == *label;
-                                if ui.selectable_label(selected, &display).clicked() {
-                                    if let Some(p) = state.providers.get_mut(&provider_key_popup) {
-                                        p.reasoning_effort = label.clone();
-                                    }
-                                    egui::Popup::close_id(ui.ctx(), popup_id);
-                                }
+                                });
                             }
                         });
 
@@ -2016,6 +2255,7 @@ fn render_markdown(ui: &mut egui::Ui, text: &str) {
     let mut in_code = false;
     let mut code_lang = String::new();
     let mut code_buf = String::new();
+    let mut code_idx = 0u64;
 
     for line in text.lines() {
         if !in_code && line.starts_with("```") {
@@ -2026,7 +2266,8 @@ fn render_markdown(ui: &mut egui::Ui, text: &str) {
         }
         if in_code {
             if line.trim() == "```" {
-                render_code_block(ui, &code_lang, &code_buf);
+                render_code_block_impl(ui, &code_lang, &code_buf, false, code_idx);
+                code_idx += 1;
                 in_code = false;
                 code_buf.clear();
             } else {
@@ -2039,7 +2280,7 @@ fn render_markdown(ui: &mut egui::Ui, text: &str) {
     }
 
     if in_code && !code_buf.is_empty() {
-        render_code_block(ui, &code_lang, &code_buf);
+        render_code_block_impl(ui, &code_lang, &code_buf, false, code_idx);
     }
 }
 
@@ -2047,6 +2288,7 @@ fn render_markdown_streaming(ui: &mut egui::Ui, text: &str) {
     let mut in_code = false;
     let mut code_lang = String::new();
     let mut code_buf = String::new();
+    let mut code_idx = 0u64;
 
     for line in text.lines() {
         if !in_code && line.starts_with("```") {
@@ -2057,7 +2299,8 @@ fn render_markdown_streaming(ui: &mut egui::Ui, text: &str) {
         }
         if in_code {
             if line.trim() == "```" {
-                render_code_block_streaming(ui, &code_lang, &code_buf);
+                render_code_block_impl(ui, &code_lang, &code_buf, true, code_idx);
+                code_idx += 1;
                 in_code = false;
                 code_buf.clear();
             } else {
@@ -2070,7 +2313,7 @@ fn render_markdown_streaming(ui: &mut egui::Ui, text: &str) {
     }
 
     if in_code && !code_buf.is_empty() {
-        render_code_block_streaming(ui, &code_lang, &code_buf);
+        render_code_block_impl(ui, &code_lang, &code_buf, true, code_idx);
     }
 }
 
@@ -2082,10 +2325,6 @@ fn strip_exit_code_trailer(body: &str) -> &str {
     } else {
         body
     }
-}
-
-fn render_code_block_streaming(ui: &mut egui::Ui, lang: &str, code: &str) {
-    render_code_block_impl(ui, lang, code, true)
 }
 
 fn render_shell_terminal(ui: &mut egui::Ui, code: &str) {

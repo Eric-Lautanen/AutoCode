@@ -3,12 +3,13 @@
 
 use crate::{
     provider,
-    state::{AppState, Project},
+    state::{AppState, Project, Session},
     theme::{Palette, ROUND_MD, ROUND_SM},
     ui_helpers,
 };
 use egui::{
-    Color32, CornerRadius, Frame, Grid, Margin, RichText, ScrollArea, Stroke, TextEdit, Vec2,
+    CollapsingHeader, Color32, CornerRadius, Frame, Grid, Margin, RichText, ScrollArea, Stroke,
+    TextEdit, Vec2,
 };
 
 // -- State ---------------------------------------------------------------------
@@ -19,6 +20,7 @@ enum Tab {
     Providers,
     Projects,
     Prompt,
+    Session,
     Timeouts,
     Design,
     About,
@@ -36,13 +38,10 @@ use std::collections::HashMap;
 // -- Window --------------------------------------------------------------------
 
 pub fn show_window(ctx: &egui::Context, state: &mut AppState, settings: &mut SettingsState) {
-    let mut open = ctx
-        .data(|d| d.get_temp::<bool>(egui::Id::new("settings_open")))
-        .unwrap_or(false);
-
-    if !open {
+    if !state.settings_open {
         return;
     }
+    let mut open = true;
 
     let mut request_close = false;
 
@@ -177,6 +176,7 @@ pub fn show_window(ctx: &egui::Context, state: &mut AppState, settings: &mut Set
                         tab_btn(ui, &mut settings.tab, Tab::Providers, "Providers");
                         tab_btn(ui, &mut settings.tab, Tab::Projects, "Projects");
                         tab_btn(ui, &mut settings.tab, Tab::Prompt, "Prompt");
+                        tab_btn(ui, &mut settings.tab, Tab::Session, "Session");
                         tab_btn(ui, &mut settings.tab, Tab::Timeouts, "Timeouts");
                         tab_btn(ui, &mut settings.tab, Tab::Design, "Design");
                         tab_btn(ui, &mut settings.tab, Tab::About, "About");
@@ -194,6 +194,7 @@ pub fn show_window(ctx: &egui::Context, state: &mut AppState, settings: &mut Set
                             Tab::Providers => show_providers(ui, state, settings),
                             Tab::Projects => show_projects(ui, state),
                             Tab::Prompt => show_prompt(ui, state),
+                            Tab::Session => show_session_settings(ui, state),
                             Tab::Timeouts => show_timeouts(ui, state),
                             Tab::Design => show_design(ui, state),
                             Tab::About => show_about(ui, state),
@@ -202,14 +203,12 @@ pub fn show_window(ctx: &egui::Context, state: &mut AppState, settings: &mut Set
         });
 
     if request_close {
-        open = false;
+        state.settings_open = false;
     }
-    if !open {
+    if !state.settings_open {
         // Notify the chat input that a popup just closed so it can reclaim focus.
         ctx.data_mut(|d| d.insert_temp(egui::Id::new("popup_just_closed"), true));
     }
-
-    ctx.data_mut(|d| d.insert_temp(egui::Id::new("settings_open"), open));
 }
 
 fn tab_btn(ui: &mut egui::Ui, current: &mut Tab, target: Tab, label: &str) {
@@ -260,6 +259,22 @@ fn tab_btn(ui: &mut egui::Ui, current: &mut Tab, target: Tab, label: &str) {
 fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut SettingsState) {
     ui_helpers::section_heading(ui, "API Providers");
 
+    ui.add_space(4.0);
+    if ui.button("+ Add Provider").clicked() {
+        let kind = crate::state::ProviderKind::new("openai-compatible");
+        let base = kind.label().to_string();
+        let mut key = base.clone();
+        let mut n = 2;
+        while state.providers.contains_key(&key) {
+            key = format!("{} {}", base, n);
+            n += 1;
+        }
+        state
+            .providers
+            .insert(key, crate::state::ApiProvider::new(kind));
+    }
+    ui.add_space(8.0);
+
     let mut keys: Vec<String> = state.providers.keys().cloned().collect();
     // Active provider always first.
     keys.sort_by(|a, b| {
@@ -275,10 +290,11 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
     let mut to_remove: Vec<String> = Vec::new();
 
     for key in keys {
+        ui.push_id(("provider", &key), |ui| {
         let is_active = state.active_provider == key;
         let p = match state.providers.get_mut(&key) {
             Some(p) => p,
-            None => continue,
+            None => return,
         };
 
         let border_color = if is_active {
@@ -356,6 +372,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                         if ui
                             .add(
                                 TextEdit::singleline(&mut key_buf)
+                                    .id(egui::Id::new(("provider_api_key", &key)))
                                     .password(true)
                                     .desired_width(f32::INFINITY)
                                     .hint_text("sk-..."),
@@ -370,7 +387,11 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                         ui.label(ui_helpers::field_label("Base URL"));
                         let mut url = p.base_url.clone();
                         if ui
-                            .add(TextEdit::singleline(&mut url).desired_width(f32::INFINITY))
+                            .add(
+                                TextEdit::singleline(&mut url)
+                                    .id(egui::Id::new(("provider_base_url", &key)))
+                                    .desired_width(f32::INFINITY),
+                            )
                             .changed()
                         {
                             p.base_url = url;
@@ -383,7 +404,11 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                             let mut model = p.model.clone();
                             let input_w = ui.available_width() - 100.0;
                             if ui
-                                .add(TextEdit::singleline(&mut model).desired_width(input_w))
+                                .add(
+                                    TextEdit::singleline(&mut model)
+                                        .id(egui::Id::new(("provider_model", &key)))
+                                        .desired_width(input_w),
+                                )
                                 .changed()
                             {
                                 p.model = model;
@@ -418,10 +443,12 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                     .width(ui.available_width())
                                     .show_ui(ui, |ui| {
                                         for m in models.iter() {
-                                            if ui.selectable_label(*m == current_model, m).clicked()
-                                            {
-                                                p.model = m.clone();
-                                            }
+                                            ui.push_id(("model_sel", m), |ui| {
+                                                if ui.selectable_label(*m == current_model, m).clicked()
+                                                {
+                                                    p.model = m.clone();
+                                                }
+                                            });
                                         }
                                     });
                                 if let Some(status) = settings.fetch_status.get(&key) {
@@ -457,14 +484,16 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                             egui::ComboBox::from_id_salt(format!("thinking_api_{}", key))
                                 .selected_text(current.label())
                                 .show_ui(ui, |ui| {
-                                    for api in crate::state::ThinkingApi::variants() {
+                                for api in crate::state::ThinkingApi::variants() {
+                                    ui.push_id(("thinking_sel", api.label()), |ui| {
                                         if ui
                                             .selectable_label(current == *api, api.label())
                                             .clicked()
                                         {
                                             current = api.clone();
                                         }
-                                    }
+                                    });
+                                }
                                 });
                             if current != p.thinking_api {
                                 p.thinking_api = current;
@@ -574,6 +603,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
             });
 
         ui.add_space(8.0);
+        }); // end push_id("provider", key)
     }
 
     for key in to_remove {
@@ -582,22 +612,6 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
             state.active_provider = state.providers.keys().next().cloned().unwrap_or_default();
         }
     }
-
-    ui.add_space(4.0);
-    if ui.button("+ Add Provider").clicked() {
-        let kind = crate::state::ProviderKind::OpenAiCompatible;
-        let label = kind.label();
-        let base = label.to_string();
-        let mut key = base.clone();
-        let mut n = 2;
-        while state.providers.contains_key(&key) {
-            key = format!("{} {}", base, n);
-            n += 1;
-        }
-        state
-            .providers
-            .insert(key, crate::state::ApiProvider::new(kind));
-    }
 }
 
 // -- Projects ------------------------------------------------------------------
@@ -605,11 +619,15 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
 fn show_projects(ui: &mut egui::Ui, state: &mut AppState) {
     ui_helpers::section_heading(ui, "Projects");
 
-    // Existing projects list.
     let projects: Vec<Project> = state.projects.clone();
     let mut to_remove: Option<String> = None;
 
+    let mut rename_ops: Vec<(String, String)> = Vec::new();
+    let mut delete_ops: Vec<String> = Vec::new();
+    let mut delete_all_for_project: Option<String> = None;
+
     for p in &projects {
+        ui.push_id(("project", &p.id), |ui| {
         let is_active = state.active_project_id.as_deref() == Some(&p.id);
         let border_color = if is_active {
             Palette::ACCENT_DIM
@@ -656,24 +674,192 @@ fn show_projects(ui: &mut egui::Ui, state: &mut AppState) {
                             to_remove = Some(p.id.clone());
                         }
                         if !is_active && ui.button("Set Active").clicked() {
-                            state.active_project_id = Some(p.id.clone());
+                            crate::session_storage::switch_to_project(state, &p.id);
                         }
                         if is_active {
                             ui.label(RichText::new("Active").size(10.0).color(Palette::SUCCESS));
                         }
                     });
                 });
+
+                // Collapsible session list for this project.
+                let proj_sessions: Vec<&Session> = state
+                    .sessions
+                    .iter()
+                    .filter(|s| s.project_id.as_deref() == Some(&p.id))
+                    .collect();
+                if !proj_sessions.is_empty() {
+                    CollapsingHeader::new(format!("Sessions ({})", proj_sessions.len()))
+                        .id_salt(format!("settings_proj_sessions_{}", p.id))
+                        .show(ui, |ui| {
+                            for sess in proj_sessions {
+                                ui.push_id(("session", &sess.id), |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new(&sess.id[..sess.id.len().min(8)])
+                                            .monospace()
+                                            .size(11.0),
+                                    );
+                                    let mut label_buf = sess.label.clone();
+                                    let resp = ui.add(
+                                        egui::TextEdit::singleline(&mut label_buf)
+                                            .id(egui::Id::new(("session_label", &sess.id)))
+                                            .desired_width(180.0),
+                                    );
+                                    if resp.lost_focus() && label_buf != sess.label {
+                                        rename_ops.push((sess.id.clone(), label_buf));
+                                    }
+                                    if ui.button("Delete").clicked() {
+                                        delete_ops.push(sess.id.clone());
+                                    }
+                                });
+                                }); // end push_id("session", id)
+                            }
+                            ui.add_space(4.0);
+                            if ui.button("Delete All Sessions").clicked() {
+                                delete_all_for_project = Some(p.id.clone());
+                            }
+                        });
+                }
             });
 
         ui.add_space(4.0);
+        }); // end push_id("project", id)
     }
 
+    // Apply collected ops.
+    for (sid, new_label) in rename_ops {
+        if let Some(s) = state.sessions.iter_mut().find(|s| s.id == sid) {
+            s.label = new_label;
+            if let Some(proj) = state
+                .projects
+                .iter()
+                .find(|p| Some(&p.id) == s.project_id.as_ref())
+            {
+                let _ = crate::session_storage::save_session(proj, s);
+            }
+        }
+    }
+    for sid in delete_ops {
+        crate::session::delete_session(state, &sid);
+    }
+    if let Some(pid) = delete_all_for_project {
+        let ids: Vec<String> = state
+            .sessions
+            .iter()
+            .filter(|s| s.project_id.as_deref() == Some(&pid))
+            .map(|s| s.id.clone())
+            .collect();
+        for sid in ids {
+            crate::session::delete_session(state, &sid);
+        }
+    }
     if let Some(id) = to_remove {
+        let sess_ids: Vec<String> = state
+            .sessions
+            .iter()
+            .filter(|s| s.project_id.as_deref() == Some(&id))
+            .map(|s| s.id.clone())
+            .collect();
+        let proj_dir = state
+            .projects
+            .iter()
+            .find(|p| p.id == id)
+            .map(crate::session_storage::project_sessions_dir);
+        for sid in sess_ids {
+            crate::session::delete_session(state, &sid);
+        }
+        if let Some(dir) = proj_dir {
+            let _ = crate::fsutil::remove_dir(&dir);
+        }
         state.projects.retain(|p| p.id != id);
         if state.active_project_id.as_deref() == Some(&id) {
             state.active_project_id = state.projects.last().map(|p| p.id.clone());
+            state.active_session_id = None;
         }
     }
+}
+
+// -- Session Settings ----------------------------------------------------------
+
+fn show_session_settings(ui: &mut egui::Ui, state: &mut AppState) {
+    ui_helpers::section_heading(ui, "Session Settings");
+
+    ui.label(
+        RichText::new("Control how many messages are kept in memory and rendered.")
+            .size(11.0)
+            .color(Palette::TEXT_MUTED),
+    );
+    ui.add_space(10.0);
+
+    Frame::NONE
+        .fill(Palette::BG_SURFACE)
+        .corner_radius(ROUND_MD)
+        .stroke(egui::Stroke::new(1.0, Palette::BORDER))
+        .inner_margin(Margin::same(12))
+        .show(ui, |ui| {
+            Grid::new("session_settings_grid")
+                .num_columns(2)
+                .spacing([12.0, 8.0])
+                .min_col_width(180.0)
+                .show(ui, |ui| {
+                    ui.label(ui_helpers::field_label("API Tail Size"));
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut state.max_session_messages)
+                                .speed(10.0)
+                                .range(20..=1000),
+                        );
+                        ui.label(
+                            RichText::new("messages")
+                                .size(10.5)
+                                .color(Palette::TEXT_MUTED),
+                        );
+                    });
+                    ui.end_row();
+
+                    ui.label(ui_helpers::field_label("Display Window"));
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut state.ui_display_window)
+                                .speed(5.0)
+                                .range(10..=500),
+                        );
+                        ui.label(
+                            RichText::new("messages")
+                                .size(10.5)
+                                .color(Palette::TEXT_MUTED),
+                        );
+                    });
+                    ui.end_row();
+
+                    ui.label(ui_helpers::field_label("Scroll Page"));
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut state.ui_scroll_page)
+                                .speed(5.0)
+                                .range(5..=200),
+                        );
+                        ui.label(
+                            RichText::new("messages")
+                                .size(10.5)
+                                .color(Palette::TEXT_MUTED),
+                        );
+                    });
+                    ui.end_row();
+                });
+
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(
+                    "API Tail: how many recent messages the model sees. \
+                     Display Window: how many are rendered in the chat panel. \
+                     Scroll Page: how many older messages load per click.",
+                )
+                .size(10.0)
+                .color(Palette::TEXT_MUTED),
+            );
+        });
 }
 
 // -- Prompt --------------------------------------------------------------------
@@ -1067,7 +1253,7 @@ fn show_design(ui: &mut egui::Ui, state: &mut AppState) {
             // --- Colors: Code Blocks ---
             ui.add_space(8.0);
             ui_helpers::section_heading(ui, "Code Block Colors");
-            Grid::new("design_code")
+            Grid::new("design_code_1")
                 .num_columns(2)
                 .spacing([12.0, 5.0])
                 .min_col_width(label_w)
@@ -1080,7 +1266,7 @@ fn show_design(ui: &mut egui::Ui, state: &mut AppState) {
             // --- Colors: Diff ---
             ui.add_space(8.0);
             ui_helpers::section_heading(ui, "Diff Colors");
-            Grid::new("design_diff")
+            Grid::new("design_diff_1")
                 .num_columns(2)
                 .spacing([12.0, 5.0])
                 .min_col_width(label_w)
@@ -1099,7 +1285,7 @@ fn show_design(ui: &mut egui::Ui, state: &mut AppState) {
             // --- Colors: Reasoning ---
             ui.add_space(8.0);
             ui_helpers::section_heading(ui, "Reasoning / Thinking Colors");
-            Grid::new("design_reason")
+            Grid::new("design_reason_1")
                 .num_columns(2)
                 .spacing([12.0, 5.0])
                 .min_col_width(label_w)
@@ -1112,7 +1298,7 @@ fn show_design(ui: &mut egui::Ui, state: &mut AppState) {
             // --- Colors: Badges ---
             ui.add_space(8.0);
             ui_helpers::section_heading(ui, "Badge Colors");
-            Grid::new("design_badges")
+            Grid::new("design_badges_1")
                 .num_columns(2)
                 .spacing([12.0, 5.0])
                 .min_col_width(label_w)
@@ -1126,7 +1312,7 @@ fn show_design(ui: &mut egui::Ui, state: &mut AppState) {
             // --- Colors: Tool Labels ---
             ui.add_space(8.0);
             ui_helpers::section_heading(ui, "Tool Label & Text Colors");
-            Grid::new("design_tool_labels")
+            Grid::new("design_tool_labels_1")
                 .num_columns(2)
                 .spacing([12.0, 5.0])
                 .min_col_width(label_w)

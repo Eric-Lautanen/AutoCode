@@ -1,6 +1,8 @@
 // app.rs -- Root eframe::App implementation.
 // Owns all state, wires panels together, drives the per-frame update loop.
 
+use std::collections::HashMap;
+
 use eframe::CreationContext;
 use egui::{CentralPanel, Frame, Panel};
 
@@ -17,7 +19,7 @@ use crate::{
 
 pub struct AutocodeApp {
     pub state: AppState,
-    pub runtime: ChatRuntime,
+    pub runtimes: HashMap<String, ChatRuntime>,
     pub chat_panel: ChatPanelState,
     pub explorer_panel: ExplorerPanelState,
     pub settings: SettingsState,
@@ -56,12 +58,92 @@ pub fn untrack_temp_file(path: &std::path::Path) {
 
 impl AutocodeApp {
     pub fn new(cc: &CreationContext) -> Self {
-        let state = if let Some(storage) = cc.storage {
+        let mut state = if let Some(storage) = cc.storage {
             AppState::load(storage)
         } else {
             AppState::default()
         };
         theme::apply(&cc.egui_ctx);
+
+        // Prune projects whose data directory was manually deleted.
+        let proj_dir = crate::fsutil::exe_dir().join("data").join("projects");
+        state.projects.retain(|p| {
+            let dir = proj_dir.join(&p.data_dir_name);
+            if !dir.exists() {
+                state
+                    .sessions
+                    .retain(|s| s.project_id.as_ref() != Some(&p.id));
+                false
+            } else {
+                true
+            }
+        });
+
+        // Prune orphaned sessions.
+        let valid_ids: std::collections::HashSet<String> =
+            state.projects.iter().map(|p| p.id.clone()).collect();
+        state.sessions.retain(|s| {
+            s.project_id
+                .as_ref()
+                .is_none_or(|pid| valid_ids.contains(pid))
+        });
+        // If the active session was pruned or no sessions remain, the
+        // global per-session state (todo_list, show_todo, etc.) is stale.
+        if state.sessions.is_empty() {
+            state.active_session_id = None;
+            state.todo_list.clear();
+            state.show_todo = false;
+            state.todo_user_dismissed = false;
+            state.handoff_enabled = false;
+            state.settings_open = false;
+        } else if state.active_session_id.is_some()
+            && !state
+                .sessions
+                .iter()
+                .any(|s| Some(&s.id) == state.active_session_id.as_ref())
+        {
+            state.active_session_id = state.sessions.last().map(|s| s.id.clone());
+        }
+
+        // Ensure remaining projects have their data directories.
+        for p in &state.projects {
+            let _ = crate::session_storage::ensure_project_dirs(p);
+        }
+
+        // Load messages for whichever session was active at shutdown.
+        if let Some(ref sid) = state.active_session_id
+            && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == *sid)
+            && let Some(proj) = state
+                .projects
+                .iter()
+                .find(|p| Some(&p.id) == sess.project_id.as_ref())
+        {
+            crate::session_storage::load_session(proj, sess);
+            // Sync the session's per-session state into the global working copy.
+            state.todo_list = sess.todo_list.clone();
+            state.show_todo = sess.show_todo;
+            state.todo_user_dismissed = sess.todo_user_dismissed;
+            state.handoff_enabled = sess.handoff_enabled;
+            state.show_explorer = sess.show_explorer;
+            state.settings_open = sess.settings_open;
+        }
+
+        // Restore provider/model from the active session if it has stored values.
+        let restore_provider = state.active_session().and_then(|s| {
+            if !s.provider_label.is_empty() {
+                Some((s.provider_label.clone(), s.model.clone()))
+            } else {
+                None
+            }
+        });
+        if let Some((label, model)) = restore_provider
+            && state.providers.contains_key(&label)
+        {
+            state.active_provider = label.clone();
+            if let Some(prov) = state.providers.get_mut(&label) {
+                prov.model = model;
+            }
+        }
 
         let sysinfo_rx = if crate::sysinfo::seed_from_persisted(&state.sysinfo) {
             None
@@ -71,7 +153,7 @@ impl AutocodeApp {
 
         Self {
             state,
-            runtime: ChatRuntime::default(),
+            runtimes: HashMap::new(),
             chat_panel: ChatPanelState::default(),
             explorer_panel: ExplorerPanelState::default(),
             settings: SettingsState::default(),
@@ -133,7 +215,8 @@ impl eframe::App for AutocodeApp {
         }
 
         let waiting_sysinfo = session::ensure_session(&mut self.state);
-        let needs_repaint = chat::update(&mut self.state, &mut self.runtime);
+        let needs_repaint = chat::update_all(&mut self.state, &mut self.runtimes);
+        let any_busy = self.runtimes.values().any(|r| r.is_busy());
 
         if waiting_sysinfo && !needs_repaint {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
@@ -142,13 +225,13 @@ impl eframe::App for AutocodeApp {
 
         if needs_repaint {
             self.repaint_scheduled = false;
-            let delay = if self.runtime.is_busy() {
+            let delay = if any_busy {
                 std::time::Duration::from_millis(16)
             } else {
                 std::time::Duration::from_millis(50)
             };
             ctx.request_repaint_after(delay);
-        } else if self.runtime.is_busy() && !self.repaint_scheduled {
+        } else if any_busy && !self.repaint_scheduled {
             self.repaint_scheduled = true;
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
@@ -164,15 +247,21 @@ impl eframe::App for AutocodeApp {
                     .and_then(|n| n.to_str())
                     .unwrap_or(&path)
                     .to_string();
+                let data_dir_name =
+                    crate::session_storage::unique_data_dir_name(&self.state.projects, &name);
                 let project = crate::state::Project {
                     id: crate::helpers::generate_id(),
                     name,
                     root_path: path,
                     created_at: crate::helpers::unix_now(),
+                    data_dir_name,
                 };
                 let id = project.id.clone();
                 self.state.projects.push(project);
-                self.state.active_project_id = Some(id);
+                let _ = crate::session_storage::ensure_project_dirs(
+                    self.state.projects.last().unwrap(),
+                );
+                crate::session_storage::switch_to_project(&mut self.state, &id);
                 self.state.show_explorer = true;
                 session::ensure_session(&mut self.state);
             }
@@ -207,8 +296,10 @@ impl eframe::App for AutocodeApp {
             self.folder_picker = Some(rx);
             let ctx2 = ctx.clone();
             std::thread::spawn(move || {
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(pick_folder_os))
-                    .unwrap_or(None);
+                let result = rfd::FileDialog::new()
+                    .set_title("Select Project Folder")
+                    .pick_folder()
+                    .map(|p| p.to_string_lossy().to_string());
                 let _ = tx.send(result);
                 ctx2.request_repaint();
             });
@@ -223,7 +314,7 @@ impl eframe::App for AutocodeApp {
         Panel::top("toolbar")
             .frame(Frame::new().fill(crate::theme::Palette::BG_BASE))
             .show_inside(ui, |ui| {
-                ui_toolbar::show(ui, &mut self.state, &mut self.runtime);
+                ui_toolbar::show(ui, &mut self.state, &mut self.runtimes);
             });
 
         // File explorer -- left.
@@ -244,7 +335,12 @@ impl eframe::App for AutocodeApp {
         CentralPanel::default()
             .frame(Frame::NONE.fill(crate::theme::Palette::BG_PANEL))
             .show_inside(ui, |ui| {
-                ui_chat::show(ui, &mut self.state, &mut self.runtime, &mut self.chat_panel);
+                ui_chat::show(
+                    ui,
+                    &mut self.state,
+                    &mut self.runtimes,
+                    &mut self.chat_panel,
+                );
             });
 
         // Debug inspection panel (shows widget IDs, input state, memory).
@@ -260,6 +356,34 @@ impl eframe::App for AutocodeApp {
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        {
+            // Sync current provider/model into the active session before saving.
+            let prov_label = self.state.active_provider.clone();
+            let model = self
+                .state
+                .active_provider()
+                .map(|p| p.model.clone())
+                .unwrap_or_default();
+            if let Some(sess) = self.state.active_session_mut() {
+                sess.provider_label = prov_label;
+                sess.model = model;
+            }
+        }
+        for sess in &self.state.sessions {
+            let should_save = self.state.active_session_id.as_ref() == Some(&sess.id)
+                || self.runtimes.contains_key(&sess.id);
+            if !should_save {
+                continue;
+            }
+            if let Some(proj) = self
+                .state
+                .projects
+                .iter()
+                .find(|p| Some(&p.id) == sess.project_id.as_ref())
+            {
+                let _ = crate::session_storage::save_session(proj, sess);
+            }
+        }
         self.state.save(storage);
     }
 
@@ -268,7 +392,38 @@ impl eframe::App for AutocodeApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.runtime.drain();
+        for runtime in self.runtimes.values_mut() {
+            runtime.drain();
+        }
+
+        {
+            // Sync current provider/model into the active session before final save.
+            let prov_label = self.state.active_provider.clone();
+            let model = self
+                .state
+                .active_provider()
+                .map(|p| p.model.clone())
+                .unwrap_or_default();
+            if let Some(sess) = self.state.active_session_mut() {
+                sess.provider_label = prov_label;
+                sess.model = model;
+            }
+        }
+        for sess in &self.state.sessions {
+            let should_save = self.state.active_session_id.as_ref() == Some(&sess.id)
+                || self.runtimes.contains_key(&sess.id);
+            if !should_save {
+                continue;
+            }
+            if let Some(proj) = self
+                .state
+                .projects
+                .iter()
+                .find(|p| Some(&p.id) == sess.project_id.as_ref())
+            {
+                let _ = crate::session_storage::save_session(proj, sess);
+            }
+        }
 
         if let Some(lock) = crate::app::TEMP_FILES.get() {
             let mut temp_files = match lock.lock() {
@@ -282,160 +437,5 @@ impl eframe::App for AutocodeApp {
                 let _ = std::fs::remove_file(path);
             }
         }
-    }
-}
-
-// -- Native OS folder picker --------------------------------------------------
-// Windows: IFileOpenDialog via raw COM FFI (no extra crates).
-// Linux/macOS: zenity (pre-installed on most desktop distros).
-
-#[cfg(target_os = "windows")]
-fn pick_folder_os() -> Option<String> {
-    use std::ffi::OsString;
-    use std::os::windows::ffi::OsStringExt;
-
-    #[allow(non_snake_case)]
-    mod ffi {
-        pub type Hresult = i32;
-        pub type Hwnd = *mut core::ffi::c_void;
-        pub type Lpvoid = *mut core::ffi::c_void;
-
-        pub const S_OK: Hresult = 0;
-        pub const COINIT_APARTMENTTHREADED: u32 = 0x2;
-
-        pub const CLSID_FOD: [u8; 16] = [
-            0x9C, 0x5A, 0x1C, 0xDC, 0x8A, 0xE8, 0xDE, 0x4D, 0xA5, 0xA1, 0x60, 0xF8, 0x2A, 0x20,
-            0xAE, 0xF7,
-        ];
-        pub const IID_IFOD: [u8; 16] = [
-            0x88, 0x72, 0x7C, 0xD5, 0xAD, 0xD4, 0x68, 0x47, 0xBE, 0x02, 0x9D, 0x96, 0x95, 0x32,
-            0xD9, 0x60,
-        ];
-
-        pub const FOS_PICKFOLDERS: u32 = 0x20;
-        pub const FOS_FORCEFILESYSTEM: u32 = 0x40;
-        pub const SIGDN_FILESYSPATH: i32 = -2147319808i32;
-
-        #[link(name = "ole32")]
-        unsafe extern "system" {
-            pub fn CoInitializeEx(pvReserved: Lpvoid, dwCoInit: u32) -> Hresult;
-            pub fn CoUninitialize();
-            pub fn CoCreateInstance(
-                rclsid: *const u8,
-                pUnkOuter: Lpvoid,
-                dwClsContext: u32,
-                riid: *const u8,
-                ppv: *mut Lpvoid,
-            ) -> Hresult;
-            pub fn CoTaskMemFree(pv: Lpvoid);
-        }
-    }
-
-    const VTBL_RELEASE: usize = 2;
-    const VTBL_SHOW: usize = 3;
-    const VTBL_SETOPTIONS: usize = 9;
-    const VTBL_GETRESULT: usize = 20;
-    const VTBL_GETDISPNAME: usize = 5;
-
-    macro_rules! vtcall {
-        ($obj:expr, $idx:expr, $fn_ty:ty $(, $arg:expr)*) => {{
-            let vtbl = *($obj as *const *const *const usize);
-            let method = *vtbl.add($idx);
-            let f: $fn_ty = std::mem::transmute(method);
-            f($obj $(, $arg)*)
-        }};
-    }
-
-    unsafe {
-        use ffi::*;
-
-        let hr = CoInitializeEx(std::ptr::null_mut(), COINIT_APARTMENTTHREADED);
-        if hr < 0 {
-            return None;
-        }
-
-        let mut dlg: Lpvoid = std::ptr::null_mut();
-        let hr = CoCreateInstance(
-            CLSID_FOD.as_ptr(),
-            std::ptr::null_mut(),
-            1,
-            IID_IFOD.as_ptr(),
-            &mut dlg,
-        );
-        if hr != S_OK || dlg.is_null() {
-            CoUninitialize();
-            return None;
-        }
-
-        vtcall!(
-            dlg,
-            VTBL_SETOPTIONS,
-            extern "system" fn(Lpvoid, u32) -> Hresult,
-            FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM
-        );
-
-        let hr: Hresult = vtcall!(
-            dlg,
-            VTBL_SHOW,
-            extern "system" fn(Lpvoid, Hwnd) -> Hresult,
-            std::ptr::null_mut()
-        );
-
-        let chosen = if hr == S_OK {
-            let mut item: Lpvoid = std::ptr::null_mut();
-            let hr2: Hresult = vtcall!(
-                dlg,
-                VTBL_GETRESULT,
-                extern "system" fn(Lpvoid, *mut Lpvoid) -> Hresult,
-                &mut item
-            );
-            if hr2 == S_OK && !item.is_null() {
-                let mut pwstr: *mut u16 = std::ptr::null_mut();
-                let hr3: Hresult = vtcall!(
-                    item,
-                    VTBL_GETDISPNAME,
-                    extern "system" fn(Lpvoid, i32, *mut *mut u16) -> Hresult,
-                    SIGDN_FILESYSPATH,
-                    &mut pwstr
-                );
-                let s = if hr3 == S_OK && !pwstr.is_null() {
-                    let len = (0..).take_while(|&i| *pwstr.add(i) != 0).count();
-                    let slice = std::slice::from_raw_parts(pwstr, len);
-                    let os: OsString = OsStringExt::from_wide(slice);
-                    CoTaskMemFree(pwstr as Lpvoid);
-                    os.into_string().ok()
-                } else {
-                    None
-                };
-                vtcall!(item, VTBL_RELEASE, extern "system" fn(Lpvoid) -> u32);
-                s
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        vtcall!(dlg, VTBL_RELEASE, extern "system" fn(Lpvoid) -> u32);
-        CoUninitialize();
-        chosen
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-fn pick_folder_os() -> Option<String> {
-    let out = std::process::Command::new("zenity")
-        .args([
-            "--file-selection",
-            "--directory",
-            "--title=Select Project Folder",
-        ])
-        .output()
-        .ok()?;
-    if out.status.success() {
-        let s = String::from_utf8(out.stdout).ok()?.trim().to_string();
-        if s.is_empty() { None } else { Some(s) }
-    } else {
-        None
     }
 }

@@ -4,15 +4,17 @@
 
 use egui::{Align, Frame, Layout, Margin, RichText, Sense, Stroke, StrokeKind, Vec2};
 
+use std::collections::HashMap;
+
 use crate::{
-    chat::{self, ChatRuntime},
+    chat::ChatRuntime,
     helpers, session,
     state::{AppState, Project},
     theme::Palette,
     ui_helpers,
 };
 
-pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtime: &mut ChatRuntime) {
+pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<String, ChatRuntime>) {
     Frame::NONE
         .fill(Palette::BG_BASE)
         .inner_margin(Margin {
@@ -38,11 +40,13 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtime: &mut ChatRuntime) 
                     .show_ui(ui, |ui| {
                         let projects: Vec<Project> = state.projects.clone();
                         for p in &projects {
-                            let selected = state.active_project_id.as_deref() == Some(&p.id);
-                            if ui.selectable_label(selected, &p.name).clicked() {
-                                state.active_project_id = Some(p.id.clone());
-                                session::ensure_session(state);
-                            }
+                            ui.push_id(("proj_sel", &p.id), |ui| {
+                                let selected = state.active_project_id.as_deref() == Some(&p.id);
+                                if ui.selectable_label(selected, &p.name).clicked() {
+                                    crate::session_storage::switch_to_project(state, &p.id);
+                                    session::ensure_session(state);
+                                }
+                            });
                         }
                         ui.separator();
                         if ui.button("New Project...").clicked() {
@@ -58,6 +62,42 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtime: &mut ChatRuntime) 
                             });
                         }
                     });
+
+                // -- Session picker for the active project ----------------
+                if let Some(ref pid) = state.active_project_id {
+                    let sessions_here: Vec<(String, String)> = state
+                        .sessions
+                        .iter()
+                        .filter(|s| s.project_id.as_ref() == Some(pid))
+                        .map(|s| (s.id.clone(), s.label.clone()))
+                        .collect();
+                    if !sessions_here.is_empty() {
+                        let active_label = state
+                            .active_session()
+                            .map(|s| s.label.clone())
+                            .unwrap_or_else(|| "Session".into());
+                        egui::ComboBox::from_id_salt("session_picker")
+                            .selected_text(
+                                RichText::new(&active_label)
+                                    .size(11.0)
+                                    .color(Palette::TEXT_MUTED),
+                            )
+                            .show_ui(ui, |ui| {
+                                for (sid, slabel) in &sessions_here {
+                                    ui.push_id(("sess_sel", sid), |ui| {
+                                        let selected = state.active_session_id.as_deref() == Some(sid);
+                                        if ui.selectable_label(selected, slabel).clicked() && !selected
+                                        {
+                                            if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == *sid) {
+                                                sess.closed = false;
+                                            }
+                                            state.active_session_id = Some(sid.clone());
+                                        }
+                                    });
+                                }
+                            });
+                    }
+                }
 
                 ui_helpers::toolbar_separator(ui);
 
@@ -81,10 +121,21 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtime: &mut ChatRuntime) 
                     .show_ui(ui, |ui| {
                         let keys: Vec<String> = state.providers.keys().cloned().collect();
                         for key in keys {
-                            let sel = state.active_provider == key;
-                            if ui.selectable_label(sel, &key).clicked() {
-                                state.active_provider = key;
-                            }
+                            ui.push_id(("prov_sel", key.clone()), |ui| {
+                                let sel = state.active_provider == key;
+                                if ui.selectable_label(sel, &key).clicked() {
+                                    let model = state
+                                        .providers
+                                        .get(&key)
+                                        .map(|p| p.model.clone())
+                                        .unwrap_or_default();
+                                    state.active_provider = key.clone();
+                                    if let Some(sess) = state.active_session_mut() {
+                                        sess.provider_label = key;
+                                        sess.model = model;
+                                    }
+                                }
+                            });
                         }
                     });
 
@@ -95,26 +146,24 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtime: &mut ChatRuntime) 
                 show_token_meter(ui, state, frac);
 
                 // -- Network status indicator -------------------------
-                show_network_status(ui, &mut runtime.net_status);
+                let active_sid = state.active_session_id.clone();
+                if let Some(runtime) = active_sid.as_ref().and_then(|sid| runtimes.get_mut(sid)) {
+                    show_network_status(ui, &mut runtime.net_status);
+                } else {
+                    let mut net = crate::chat::NetworkStatus::default();
+                    show_network_status(ui, &mut net);
+                }
 
                 // -- Right-side actions --------------------------------
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     // Settings (lights up when settings window is open).
-                    let settings_open: bool = ui
-                        .ctx()
-                        .data_mut(|d| d.get_temp(egui::Id::new("settings_open")).unwrap_or(false));
-                    if lit_btn(ui, "Settings", settings_open).clicked() {
-                        ui.ctx().data_mut(|d| {
-                            let open: bool =
-                                d.get_temp(egui::Id::new("settings_open")).unwrap_or(false);
-                            d.insert_temp(egui::Id::new("settings_open"), !open);
-                        });
+                    if lit_btn(ui, "Settings", state.settings_open).clicked() {
+                        state.settings_open = !state.settings_open;
                     }
 
                     // New session (momentary, no persistent state).
                     if lit_btn(ui, "+ Session", false).clicked() {
-                        chat::abort_for_session(runtime, "");
-                        state.new_session();
+                        state.new_session_for_project(state.active_project_id.clone());
                         session::ensure_session(state);
                     }
 

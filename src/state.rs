@@ -157,6 +157,8 @@ pub struct Project {
     pub name: String,
     pub root_path: String,
     pub created_at: u64,
+    #[serde(default)]
+    pub data_dir_name: String,
 }
 
 // -- API providers / keys -----------------------------------------------------
@@ -170,6 +172,16 @@ pub enum ProviderKind {
 }
 
 impl ProviderKind {
+    pub fn new(s: &str) -> Self {
+        match s {
+            "openrouter" | "OpenRouter" => Self::OpenRouter,
+            "nvidia-nim" | "NVIDIA NIM" => Self::NvidiaNim,
+            "openai-compatible" | "OpenAI-Compatible" => Self::OpenAiCompatible,
+            "opencode-go" | "OpenCode Go" => Self::OpenCodeGo,
+            _ => Self::OpenRouter,
+        }
+    }
+
     pub fn manifest_id(&self) -> &'static str {
         match self {
             Self::OpenRouter => "openrouter",
@@ -408,6 +420,7 @@ impl ChatMessage {
 pub struct Session {
     pub id: String,
     pub project_id: Option<String>,
+    #[serde(skip)]
     pub messages: Vec<ChatMessage>,
     pub total_tokens_used: usize,
     pub created_at: u64,
@@ -416,10 +429,30 @@ pub struct Session {
     /// Updated from ProviderEvent::Done; more accurate than estimate_tokens.
     #[serde(default)]
     pub actual_tokens_used: usize,
+    #[serde(default)]
+    pub provider_label: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub todo_list: TodoList,
+    #[serde(default)]
+    pub show_todo: bool,
+    #[serde(default)]
+    pub todo_user_dismissed: bool,
+    #[serde(default)]
+    pub handoff_enabled: bool,
+    #[serde(default)]
+    pub show_explorer: bool,
+    #[serde(default)]
+    pub settings_open: bool,
+    /// Closed tabs are hidden from the tab bar but remain in the dropdown.
+    /// Messages are evicted from RAM until the session is reopened.
+    #[serde(default)]
+    pub closed: bool,
 }
 
 impl Session {
-    pub fn new(project_id: Option<String>) -> Self {
+    pub fn new(project_id: Option<String>, provider_label: String, model: String) -> Self {
         let id = crate::helpers::generate_id();
         let short = if id.len() > 8 {
             &id[id.len() - 8..]
@@ -434,6 +467,15 @@ impl Session {
             created_at: crate::helpers::unix_now(),
             label: format!("S{}", short),
             actual_tokens_used: 0,
+            provider_label,
+            model,
+            todo_list: TodoList::default(),
+            show_todo: false,
+            todo_user_dismissed: false,
+            handoff_enabled: false,
+            show_explorer: true,
+            settings_open: false,
+            closed: false,
         }
     }
 
@@ -442,7 +484,35 @@ impl Session {
     }
 
     pub fn record_actual_usage(&mut self, prompt: usize, completion: usize) {
-        self.actual_tokens_used = prompt + completion;
+        let total = prompt + completion;
+        if total > self.actual_tokens_used {
+            self.actual_tokens_used = total;
+        }
+    }
+
+    pub fn filename(&self) -> String {
+        let short = if self.id.len() > 8 {
+            &self.id[..8]
+        } else {
+            &self.id
+        };
+        let safe_label: String = self
+            .label
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let safe_label = if safe_label.is_empty() {
+            "unnamed".to_string()
+        } else {
+            safe_label
+        };
+        format!("{}_{}.json", short, safe_label)
     }
 }
 
@@ -733,6 +803,10 @@ pub struct AppState {
     #[serde(default)]
     pub todo_user_dismissed: bool,
 
+    /// Whether the settings window is open. Per-session, stored globally as working copy.
+    #[serde(default)]
+    pub settings_open: bool,
+
     #[serde(default)]
     pub sysinfo: crate::sysinfo::SysInfo,
 
@@ -785,6 +859,14 @@ pub struct AppState {
     /// Maximum messages kept in a single session before pruning.
     #[serde(default = "crate::helpers::default_max_session_messages")]
     pub max_session_messages: usize,
+
+    /// How many messages the chat panel renders initially (UI window).
+    #[serde(default = "crate::helpers::default_ui_display_window")]
+    pub ui_display_window: usize,
+
+    /// How many older messages to load per "Load older" click (UI paging).
+    #[serde(default = "crate::helpers::default_ui_scroll_page")]
+    pub ui_scroll_page: usize,
 }
 
 use std::collections::{HashMap, HashSet};
@@ -810,7 +892,7 @@ impl Default for AppState {
             active_session_id: None,
             system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
             handoff_prompt: DEFAULT_HANDOFF_PROMPT.to_string(),
-            handoff_enabled: true,
+            handoff_enabled: false,
             shell_tasks: Vec::new(),
             show_explorer: true,
             explorer_width: 240.0,
@@ -818,6 +900,7 @@ impl Default for AppState {
             todo_list: TodoList::default(),
             show_todo: false,
             todo_user_dismissed: false,
+            settings_open: false,
             sysinfo: crate::sysinfo::SysInfo::default(),
             debug_mode: false,
             inspection_open: false,
@@ -832,6 +915,8 @@ impl Default for AppState {
             max_retries: crate::helpers::default_max_retries(),
             max_retry_wait_secs: crate::helpers::default_max_retry_wait(),
             max_session_messages: crate::helpers::default_max_session_messages(),
+            ui_display_window: crate::helpers::default_ui_display_window(),
+            ui_scroll_page: crate::helpers::default_ui_scroll_page(),
         }
     }
 }
@@ -868,6 +953,37 @@ impl AppState {
         if !state.providers.contains_key(&state.active_provider) {
             state.active_provider = ProviderKind::OpenRouter.label().to_string();
         }
+
+        // Migrate projects that lack data_dir_name.
+        let chosen_names: Vec<String> = state
+            .projects
+            .iter()
+            .map(|p| {
+                if p.data_dir_name.is_empty() {
+                    crate::session_storage::unique_data_dir_name(&state.projects, &p.name)
+                } else {
+                    p.data_dir_name.clone()
+                }
+            })
+            .collect();
+        for (p, chosen) in state.projects.iter_mut().zip(chosen_names) {
+            if p.data_dir_name.is_empty() {
+                p.data_dir_name = chosen;
+            }
+        }
+
+        // If the saved global per-session state is orphaned (no active
+        // session or the active session doesn't exist), clear it.
+        let active_ok = state.active_session_id.as_ref().is_some_and(|sid| {
+            state.sessions.iter().any(|s| s.id == *sid)
+        });
+        if !active_ok {
+            state.todo_list.clear();
+            state.show_todo = false;
+            state.todo_user_dismissed = false;
+            state.settings_open = false;
+        }
+
         state
     }
 
@@ -894,8 +1010,13 @@ impl AppState {
         self.projects.iter().find(|p| p.id == *id)
     }
 
-    pub fn new_session(&mut self) {
-        let sess = Session::new(self.active_project_id.clone());
+    pub fn new_session_for_project(&mut self, project_id: Option<String>) {
+        let prov_label = self.active_provider.clone();
+        let model = self
+            .active_provider()
+            .map(|p| p.model.clone())
+            .unwrap_or_default();
+        let sess = Session::new(project_id, prov_label, model);
         self.active_session_id = Some(sess.id.clone());
         self.sessions.push(sess);
     }
@@ -910,7 +1031,8 @@ RULES
 - Ensure code compiles. Eliminate warnings, dead code, unused imports.
 - Use the latest stable versions of all dependencies and tools. Always check for current versions before adding anything new.
 - Use dedicated tools for file ops (read_file/read_files, grep, patch_file, write_file). `run_shell` only for builds, tests, git, package managers. Never use `run_shell` to read file contents, search code, or generate diffs.
-- Call `todo_list` immediately for any multi-step task. Its result always includes your task progress, and on creation/completion it also shows your exact context window usage (e.g. `45678/128000 tokens (35%)`). Use that to track when context is filling up.
+- Call `name_session` right away with a short descriptive label for this session (e.g. 'fixing_chat_pruning'). The label must be set before doing any other work. If you forget, the system will auto-label from your first response.
+- Call `todo_list` immediately at the start of every task. Break the task into numbered steps. Every `todo_list` result includes your exact context window usage (e.g. `45678/128000 tokens (35%)`). Use that to track when context is filling up.
 - When context is getting full, or you complete a task milestone, or you judge the remaining context won't finish the current task: save a RESUME.md (and any other state files) via write_file, then call `handoff` with the reason. AutoCode will start a fresh session; the first prompt will tell you to read RESUME.md and continue.
 - Mark steps completed immediately. Re-send ALL items on every status change.
 - Use meaningful commit messages (e.g. feat:/fix:/perf:/chore: prefixes). Run `git add -A && git commit` after each logical change. Push regularly: `git push` every few commits so progress is never lost.

@@ -1,5 +1,14 @@
 use std::path::{Path, PathBuf};
 
+/// Returns the directory containing the current executable.
+/// Falls back to the current working directory if the exe path is unavailable.
+pub fn exe_dir() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|x| x.to_path_buf()))
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+}
+
 pub fn extended_path(path: &Path) -> PathBuf {
     #[cfg(target_os = "windows")]
     {

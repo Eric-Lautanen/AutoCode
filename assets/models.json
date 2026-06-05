@@ -36,7 +36,7 @@
     },
     "opencode-go": {
       "label": "OpenCode Go",
-      "base_url": "https://opencode.ai/go/v1",
+      "base_url": "https://opencode.ai/zen/go/v1",
       "supports_cache_control": true,
       "supports_parallel_tool_calls": true,
       "default_model": "kimi-k2.6",
@@ -48,7 +48,17 @@
         "glm-5": { "context_window": 131072, "max_output_tokens": 16384, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": true },
         "glm-5.1": { "context_window": 131072, "max_output_tokens": 16384, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": true },
         "mimo-v2.5": { "context_window": 131072, "max_output_tokens": 16384, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": true },
-        "mimo-v2.5-pro": { "context_window": 131072, "max_output_tokens": 16384, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": true }
+        "mimo-v2.5-pro": { "context_window": 131072, "max_output_tokens": 16384, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": true },
+        "mimo-v2-pro": { "context_window": 131072, "max_output_tokens": 16384, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": true },
+        "mimo-v2-omni": { "context_window": 131072, "max_output_tokens": 16384, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": true },
+        "minimax-m3": { "context_window": 131072, "max_output_tokens": 16384, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": true },
+        "minimax-m2.7": { "context_window": 131072, "max_output_tokens": 16384, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": true },
+        "minimax-m2.5": { "context_window": 131072, "max_output_tokens": 16384, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": true },
+        "qwen3.7-max": { "context_window": 131072, "max_output_tokens": 16384, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": true },
+        "qwen3.7-plus": { "context_window": 131072, "max_output_tokens": 16384, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": true },
+        "qwen3.6-plus": { "context_window": 131072, "max_output_tokens": 16384, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": true },
+        "qwen3.5-plus": { "context_window": 131072, "max_output_tokens": 16384, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": true },
+        "hy3-preview": { "context_window": 131072, "max_output_tokens": 16384, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": true }
       }
     }
   }

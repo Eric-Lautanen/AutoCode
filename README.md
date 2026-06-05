@@ -48,7 +48,7 @@ src/
 ### Prerequisites
 
 - Rust 1.95 or later
-- OpenGL drivers (for egui rendering via `glow`)
+- Vulkan/Metal/DirectX 12 drivers (for egui rendering via `wgpu` — no OpenGL required)
 
 ### Build
 

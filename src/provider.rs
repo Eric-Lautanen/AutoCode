@@ -659,6 +659,25 @@ fn tool_definitions() -> serde_json::Value {
                 }
             }
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "name_session",
+                "strict": true,
+                "description": "Set a descriptive label for this session. Call this immediately at the start of every session so the conversation gets a meaningful filename and tab name.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Short descriptive name, e.g. 'fixing_chat_pruning'"
+                        }
+                    },
+                    "required": ["name"],
+                    "additionalProperties": false
+                }
+            }
+        },
     ])
 }
 

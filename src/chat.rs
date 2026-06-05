@@ -4,6 +4,7 @@
 
 use crate::debug_log;
 
+use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
 
 use crate::{
@@ -94,33 +95,6 @@ fn still_owns_session(runtime: &ChatRuntime, state: &AppState) -> bool {
         .unwrap_or(false)
 }
 
-fn project_root(state: &AppState) -> String {
-    state
-        .active_project()
-        .map(|p| p.root_path.clone())
-        .unwrap_or_default()
-}
-
-/// Percentage of the context-window handoff budget used (0–100).
-fn context_usage_info(state: &AppState) -> (usize, usize, usize) {
-    let max = state
-        .active_provider()
-        .map(|p| p.max_context_tokens as usize)
-        .unwrap_or(128_000);
-    let used = state
-        .active_session()
-        .map(|s| {
-            if s.actual_tokens_used > 0 {
-                s.actual_tokens_used
-            } else {
-                s.token_count()
-            }
-        })
-        .unwrap_or(0);
-    let pct = (used * 100).checked_div(max).unwrap_or(0);
-    (used, max, pct.min(100))
-}
-
 /// Shorten verbose OS error messages for display in the chat.
 fn shorten_err(msg: &str) -> String {
     if let Some(pos) = msg.rfind(" (os error ") {
@@ -167,12 +141,20 @@ fn push_tool_results_to_state(state: &mut AppState, runtime: &ChatRuntime, resul
         push_to_session(state, sess_id, msg);
     }
     for tr in results {
-        if let Some((title, items)) = &tr.todo_update {
-            let was_empty = state.todo_list.is_empty();
-            state.todo_list.set_items(title.clone(), items.clone());
-            if was_empty || !state.todo_user_dismissed {
-                state.todo_user_dismissed = false;
-                state.show_todo = true;
+        if let Some((title, items)) = &tr.todo_update
+            && let Some(sid) = sess_id
+            && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
+        {
+            let was_empty = sess.todo_list.is_empty();
+            sess.todo_list.set_items(title.clone(), items.clone());
+            if was_empty || !sess.todo_user_dismissed {
+                sess.todo_user_dismissed = false;
+                sess.show_todo = true;
+            }
+            if state.active_session_id.as_deref() == Some(sid) {
+                state.todo_list = sess.todo_list.clone();
+                state.show_todo = sess.show_todo;
+                state.todo_user_dismissed = sess.todo_user_dismissed;
             }
         }
     }
@@ -358,8 +340,50 @@ impl ChatRuntime {
     }
 }
 
-pub fn abort_for_session(runtime: &mut ChatRuntime, session_id: &str) {
-    if runtime.active_session_id.as_deref() == Some(session_id) || runtime.is_busy() {
+fn project_root_for_session(state: &AppState, session_id: &str) -> String {
+    state
+        .sessions
+        .iter()
+        .find(|s| s.id == session_id)
+        .and_then(|s| s.project_id.as_ref())
+        .and_then(|pid| state.projects.iter().find(|p| p.id == *pid))
+        .map(|p| p.root_path.clone())
+        .unwrap_or_default()
+}
+
+fn context_usage_info_for_session(state: &AppState, session_id: &str) -> (usize, usize, usize) {
+    let max = state
+        .sessions
+        .iter()
+        .find(|s| s.id == session_id)
+        .and_then(|s| {
+            let label = if !s.provider_label.is_empty() {
+                &s.provider_label
+            } else {
+                &state.active_provider
+            };
+            state.providers.get(label)
+        })
+        .map(|p| p.max_context_tokens as usize)
+        .unwrap_or(128_000);
+    let used = state
+        .sessions
+        .iter()
+        .find(|s| s.id == session_id)
+        .map(|s| {
+            if s.actual_tokens_used > 0 {
+                s.actual_tokens_used
+            } else {
+                s.token_count()
+            }
+        })
+        .unwrap_or(0);
+    let pct = (used * 100).checked_div(max).unwrap_or(0);
+    (used, max, pct.min(100))
+}
+
+pub fn abort_for_session(runtimes: &mut HashMap<String, ChatRuntime>, session_id: &str) {
+    if let Some(runtime) = runtimes.get_mut(session_id) {
         runtime.drain();
     }
 }
@@ -400,31 +424,35 @@ fn kill_process(pid: u32) {
 
 // -- Send a user message -------------------------------------------------------
 
-pub fn send_message(state: &mut AppState, runtime: &mut ChatRuntime, text: String) {
-    if text.trim().is_empty() || runtime.is_busy() {
+pub fn send_message(
+    state: &mut AppState,
+    runtimes: &mut HashMap<String, ChatRuntime>,
+    text: String,
+) {
+    if text.trim().is_empty() {
         return;
     }
     if state.active_session_id.is_none() || state.sessions.is_empty() {
-        state.new_session();
+        state.new_session_for_project(state.active_project_id.clone());
     }
     session::ensure_session(state);
-    let sid = state.active_session_id.clone();
+    let sid = state.active_session_id.clone().unwrap();
+    let runtime = runtimes.entry(sid.clone()).or_default();
+    if runtime.is_busy() {
+        return;
+    }
     // Clear stale error messages from the session so the user starts fresh.
-    if let Some(sess) = state
-        .sessions
-        .iter_mut()
-        .find(|s| Some(&s.id) == sid.as_ref())
-    {
+    if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
         sess.messages.retain(|m| m.role != Role::Error);
     }
-    push_to_session(state, sid.as_deref(), ChatMessage::new(Role::User, text));
+    push_to_session(state, Some(&sid), ChatMessage::new(Role::User, text));
     // Clear any stale partial response backup from a previous failed attempt.
     runtime.partial_response_backup.clear();
     runtime.stream_drop_retries = 0;
     runtime.continuation_chain = 0;
     runtime.recovery_attempts = 0;
     runtime.recovery_after = None;
-    runtime.active_session_id = sid;
+    runtime.active_session_id = Some(sid);
     start_completion(state, runtime);
 }
 
@@ -434,19 +462,40 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
         debug_log!("chat: start_completion skipped — stream already active");
         return;
     }
-    let provider = match state.active_provider().cloned() {
-        Some(p) if !p.api_key.is_empty() => p,
-        Some(_) => {
-            runtime.status = "API key not set.".into();
-            return;
-        }
+    let session_id = match runtime.active_session_id.as_deref() {
+        Some(id) => id,
         None => {
-            runtime.status = "No provider configured.".into();
+            runtime.status = "No active session.".into();
             return;
         }
     };
+    let provider = {
+        let prov_label = state
+            .sessions
+            .iter()
+            .find(|s| s.id == session_id)
+            .map(|s| {
+                if !s.provider_label.is_empty() {
+                    s.provider_label.clone()
+                } else {
+                    state.active_provider.clone()
+                }
+            })
+            .unwrap_or_else(|| state.active_provider.clone());
+        match state.providers.get(&prov_label).cloned() {
+            Some(p) if !p.api_key.is_empty() => p,
+            Some(_) => {
+                runtime.status = "API key not set.".into();
+                return;
+            }
+            None => {
+                runtime.status = "No provider configured.".into();
+                return;
+            }
+        }
+    };
 
-    let mut messages = session::prepare_request_messages(state);
+    let mut messages = session::prepare_request_messages_for_session(state, session_id);
 
     // If we have a partial response from a previous dropped stream,
     // prepend it as context so the model can continue rather than
@@ -519,7 +568,12 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
 
 // -- Per-frame update ----------------------------------------------------------
 
+#[allow(dead_code)]
 pub fn update(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
+    update_runtime(state, runtime)
+}
+
+fn update_runtime(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
     let mut repaint = false;
 
     repaint |= poll_stream(state, runtime);
@@ -543,6 +597,39 @@ pub fn update(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
         }
     }
 
+    repaint
+}
+
+pub fn update_all(state: &mut AppState, runtimes: &mut HashMap<String, ChatRuntime>) -> bool {
+    let mut repaint = false;
+    let keys: Vec<String> = runtimes.keys().cloned().collect();
+    let mut rekeys: Vec<(String, String)> = Vec::new();
+    for key in keys {
+        if let Some(runtime) = runtimes.get_mut(&key) {
+            repaint |= update_runtime(state, runtime);
+            if let Some(ref new_sid) = runtime.active_session_id
+                && new_sid != &key
+            {
+                rekeys.push((key.clone(), new_sid.clone()));
+            }
+        }
+    }
+    for (old_key, new_key) in rekeys {
+        if let Some(runtime) = runtimes.remove(&old_key) {
+            runtimes.insert(new_key, runtime);
+        }
+    }
+    // Prune zombie runtimes for sessions deleted elsewhere (e.g. Settings UI).
+    let valid_ids: std::collections::HashSet<String> =
+        state.sessions.iter().map(|s| s.id.clone()).collect();
+    runtimes.retain(|id, runtime| {
+        if !valid_ids.contains(id) {
+            runtime.drain();
+            false
+        } else {
+            true
+        }
+    });
     repaint
 }
 
@@ -612,7 +699,9 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 runtime.retry_count = 0;
                 let was_recovering = runtime.recovery_attempts > 0;
                 runtime.recovery_attempts = 0;
-                if let Some(sess) = state.active_session_mut() {
+                if let Some(sid) = runtime.active_session_id.as_deref()
+                    && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
+                {
                     sess.record_actual_usage(prompt_tokens, completion_tokens);
                 }
                 // Clear error messages now that we've recovered.
@@ -825,7 +914,9 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                         "Orphaned tool calls detected -- removing and retrying...".to_string();
                     // Walk backwards to find the last assistant(tool_calls)
                     // that has no Tool results after it, and remove it.
-                    if let Some(sess) = state.active_session_mut() {
+                    if let Some(sid) = runtime.active_session_id.as_deref()
+                        && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
+                    {
                         for i in (0..sess.messages.len()).rev() {
                             if sess.messages[i].role == Role::Assistant
                                 && sess.messages[i].tool_calls.is_some()
@@ -901,6 +992,8 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                         tc.name = "rename_file".into();
                     } else if args.get("reason").is_some() {
                         tc.name = "handoff".into();
+                    } else if args.get("name").is_some() {
+                        tc.name = "name_session".into();
                     }
                     if !tc.name.is_empty() {
                         debug_log!("chat: inferred tool name: {}", tc.name);
@@ -959,8 +1052,10 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                         msg.reasoning_content = Some(reasoning);
                     }
                     push_runtime(state, runtime, msg);
-                    let root = project_root(state);
-                    auto_execute(state, runtime, &response, &root);
+                    auto_execute(state, runtime, &response);
+                    if !response.is_empty() {
+                        auto_name_session(state, &response);
+                    }
                     if helpers::is_incomplete_task_response(&response) {
                         let max_chain = state.max_retries.max(5);
                         if runtime.continuation_chain < max_chain {
@@ -992,8 +1087,9 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     })
                     .collect(),
             );
+            let assistant_text = runtime.pending_response.clone();
             let mut assistant_msg =
-                ChatMessage::new(Role::Assistant, runtime.pending_response.clone());
+                ChatMessage::new(Role::Assistant, assistant_text.clone());
             assistant_msg.tool_calls = Some(filtered_json);
             let reasoning = std::mem::take(&mut runtime.reasoning_buf);
             if !reasoning.is_empty() {
@@ -1001,23 +1097,81 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
             }
             push_runtime(state, runtime, assistant_msg);
             runtime.pending_response.clear();
-            // Clear any partial response backup since we got a complete
-            // assistant message with tool calls.
             runtime.partial_response_backup.clear();
             runtime.stream_drop_retries = 0;
-            let project_root = project_root(state);
+            let session_id = runtime.active_session_id.as_deref().unwrap_or("");
+            let root = project_root_for_session(state, session_id);
 
-            // Capture per-provider file-escape flag so tool threads can access
-            // files outside the project root when enabled.
             let allow_escape = state
-                .active_provider()
+                .sessions
+                .iter()
+                .find(|s| s.id == session_id)
+                .and_then(|s| {
+                    let label = if !s.provider_label.is_empty() {
+                        &s.provider_label
+                    } else {
+                        &state.active_provider
+                    };
+                    state.providers.get(label)
+                })
                 .map(|p| p.allow_project_escape)
                 .unwrap_or(false);
 
-            // Separate run_shell calls (streamed live) from other tools (batch).
+            // Step 5: split name_session from everything else.
+            let mut name_session_calls: Vec<ToolCall> = Vec::new();
+            let mut normal_calls: Vec<ToolCall> = Vec::new();
+            for tc in tool_calls {
+                if tc.name == "name_session" {
+                    name_session_calls.push(tc);
+                } else {
+                    normal_calls.push(tc);
+                }
+            }
+
+            // Apply name_session synchronously on the main thread.
+            for tc in &name_session_calls {
+                let args: serde_json::Value =
+                    serde_json::from_str(&tc.arguments).unwrap_or_default();
+                if let Some(name) = args["name"].as_str()
+                    && let Some(sid) = runtime.active_session_id.as_deref()
+                    && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
+                {
+                    sess.label = name.to_string();
+                    // Persist the new label to the session file on disk.
+                    if let Some(proj) = state
+                        .projects
+                        .iter()
+                        .find(|p| Some(&p.id) == sess.project_id.as_ref())
+                    {
+                        let _ = crate::session_storage::save_session(proj, sess);
+                    }
+                }
+            }
+
+            // Auto-name from assistant text when model forgets name_session.
+            if name_session_calls.is_empty() && !assistant_text.is_empty() {
+                auto_name_session(state, &assistant_text);
+            }
+
+            // If there are no remaining tool calls after name_session,
+            // only continue if the model hadn't already produced text.
+            if normal_calls.is_empty() {
+                let already_responded = state
+                    .sessions
+                    .iter()
+                    .rfind(|s| Some(&s.id) == runtime.active_session_id.as_ref())
+                    .and_then(|s| s.messages.last())
+                    .is_some_and(|m| m.role == Role::Assistant && !m.content.trim().is_empty());
+                if !already_responded {
+                    start_completion(state, runtime);
+                }
+                return true;
+            }
+
+            // Step 6: existing shell / other split for normal_calls.
             let mut shell_calls: Vec<ToolCall> = Vec::new();
             let mut other_calls: Vec<ToolCall> = Vec::new();
-            for tc in tool_calls {
+            for tc in normal_calls {
                 if tc.name == "run_shell" {
                     shell_calls.push(tc);
                 } else {
@@ -1033,7 +1187,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 let mut path_cache = std::collections::HashMap::new();
                 std::mem::swap(&mut path_cache, &mut runtime.path_cache);
 
-                let pr_clone = project_root.clone();
+                let pr_clone = root.clone();
                 let calls_clone = other_calls.clone();
                 let fast_tools = [
                     "read_file",
@@ -1064,7 +1218,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     calls_clone.len(),
                     per_tool_timeout.as_secs()
                 );
-                let ctx_info = context_usage_info(state);
+                let ctx_info = context_usage_info_for_session(state, session_id);
                 std::thread::spawn(move || {
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         let mut results = Vec::with_capacity(calls_clone.len());
@@ -1187,7 +1341,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
             if !shell_calls.is_empty() {
                 runtime.pending_tool_remaining = shell_calls;
                 runtime.pending_tool_results = Vec::new();
-                start_next_live_shell(runtime, &project_root);
+                start_next_live_shell(runtime, &root);
             }
 
             return true;
@@ -1249,8 +1403,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
             }
             push_runtime(state, runtime, msg);
 
-            let root = project_root(state);
-            auto_execute(state, runtime, &full_response, &root);
+            auto_execute(state, runtime, &full_response);
 
             if helpers::is_incomplete_task_response(&full_response) {
                 let max_chain = state.max_retries.max(5);
@@ -1399,7 +1552,9 @@ fn poll_live_shell(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
         if runtime.pending_tool_remaining.is_empty() {
             commit_tool_results(state, runtime);
         } else {
-            start_next_live_shell(runtime, &project_root(state));
+            let root =
+                project_root_for_session(state, runtime.active_session_id.as_deref().unwrap_or(""));
+            start_next_live_shell(runtime, &root);
         }
         return true;
     }
@@ -1466,8 +1621,9 @@ fn poll_live_shell(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
         runtime.live_shell_buf.clear();
 
         if !runtime.pending_tool_remaining.is_empty() {
-            let project_root = project_root(state);
-            start_next_live_shell(runtime, &project_root);
+            let root =
+                project_root_for_session(state, runtime.active_session_id.as_deref().unwrap_or(""));
+            start_next_live_shell(runtime, &root);
         } else {
             commit_tool_results(state, runtime);
         }
@@ -1533,7 +1689,13 @@ fn commit_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) {
 /// Handle a `handoff` tool call: archive the session and start a fresh one
 /// with instructions to read RESUME.md.
 fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
-    state.new_session();
+    let handoff_was_enabled = state.handoff_enabled;
+    state.new_session_for_project(state.active_project_id.clone());
+
+    // Carry forward the handoff setting so the chain continues.
+    if let Some(sess) = state.active_session_mut() {
+        sess.handoff_enabled = handoff_was_enabled;
+    }
 
     // Point the runtime at the new session before pushing messages.
     runtime.active_session_id = state.active_session_id.clone();
@@ -1822,6 +1984,10 @@ fn build_tool_meta(tc: &ToolCall, result: &str, duration_ms: u64) -> ToolMeta {
                 ..Default::default()
             }
         }
+        "name_session" => ToolMeta {
+            tool_name: "name_session".into(),
+            ..Default::default()
+        },
         _ => ToolMeta {
             tool_name: tc.name.clone(),
             is_error,
@@ -2412,15 +2578,26 @@ fn execute_tool_with_cache(
 
 // -- Autonomous execution ------------------------------------------------------
 
-fn auto_execute(state: &mut AppState, runtime: &mut ChatRuntime, response: &str, root: &str) {
+fn auto_execute(state: &mut AppState, runtime: &mut ChatRuntime, response: &str) {
+    let session_id = runtime.active_session_id.as_deref().unwrap_or("");
     let allow_escape = state
-        .active_provider()
+        .sessions
+        .iter()
+        .find(|s| s.id == session_id)
+        .and_then(|s| {
+            let label = if !s.provider_label.is_empty() {
+                &s.provider_label
+            } else {
+                &state.active_provider
+            };
+            state.providers.get(label)
+        })
         .map(|p| p.allow_project_escape)
         .unwrap_or(false);
-
+    let root = project_root_for_session(state, session_id);
     let files = shell::extract_files(response);
     if !files.is_empty() {
-        let written = shell::write_extracted_files(root, &files, allow_escape);
+        let written = shell::write_extracted_files(&root, &files, allow_escape);
         push_runtime(
             state,
             runtime,
@@ -2504,4 +2681,41 @@ fn poll_shell_tasks(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
     }
 
     repaint
+}
+
+/// Auto-name the session from the model's response text when the model
+/// forgets to call `name_session`. Extracts a short label from the first
+/// non-empty line of text (stripping markdown), then persists silently.
+fn auto_name_session(state: &mut AppState, text: &str) {
+    let name = text
+        .lines()
+        .find(|l| {
+            let t = l.trim();
+            !t.is_empty()
+                && !t.starts_with('#')
+                && !t.starts_with('*')
+                && !t.starts_with('-')
+                && !t.starts_with('`')
+                && !t.starts_with('|')
+        })
+        .map(|l| {
+            let t = l.trim().trim_start_matches(|c: char| c == '#' || c == '*' || c == '-');
+            let t = t.trim();
+            if t.len() > 60 { t[..60].to_string() } else { t.to_string() }
+        })
+        .filter(|n| !n.is_empty());
+
+    let Some(name) = name else { return };
+
+    if let Some(ref sid) = state.active_session_id
+        && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == *sid)
+        && sess.label.starts_with('S')  // still the default label
+    {
+        sess.label = name;
+        if let Some(proj) = state.projects.iter()
+            .find(|p| Some(&p.id) == sess.project_id.as_ref())
+        {
+            let _ = crate::session_storage::save_session(proj, sess);
+        }
+    }
 }
