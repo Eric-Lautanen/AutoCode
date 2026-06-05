@@ -141,41 +141,19 @@ fn atomic_write_json<T: serde::Serialize>(path: &Path, value: &T) -> std::io::Re
     Ok(())
 }
 
-pub fn save_session(project: &Project, session: &mut Session) -> std::io::Result<()> {
-    let ram_count = session.messages.len();
-    let ram_ids: Vec<u64> = session.messages.iter().map(|m| m.id).collect();
-
-    // Prune a clone (don't modify the in-memory session used by the UI).
-    let mut clean = session.messages.clone();
-    let pre_prune = clean.len();
-    crate::session::prune_garbage_messages(&mut clean);
-    let pruned_count = pre_prune - clean.len();
-
-    // Re-number so IDs are 1..N sequential (disk format contract).
-    let pre_renumber: Vec<u64> = clean.iter().map(|m| m.id).collect();
-    for (i, m) in clean.iter_mut().enumerate() {
-        m.id = (i + 1) as u64;
-    }
-    let post_renumber: Vec<u64> = clean.iter().map(|m| m.id).collect();
-
+pub fn save_session(project: &Project, session: &Session) -> std::io::Result<()> {
+    crate::debug_log!(
+        "session_save: session={} msgs={} ids=[{}..{}] next_id={}",
+        session.id, session.messages.len(),
+        session.messages.first().map(|m| m.id).unwrap_or(0),
+        session.messages.last().map(|m| m.id).unwrap_or(0),
+        session.next_message_id,
+    );
     let dir = project_sessions_dir(project);
     if !dir.exists() {
         fsutil::create_dir_all(&dir)?;
     }
     let target = dir.join(session.filename());
-
-    crate::debug_log!(
-        "session_save: session={} ram_msgs={} ram_ids=[{}..{}] \
-         pre_prune={} pruned={} disk_msgs={} \
-         disk_before_ids=[{}..{}] disk_after_ids=[{}..{}] \
-         next_id={}",
-        session.id, ram_count,
-        ram_ids.first().copied().unwrap_or(0), ram_ids.last().copied().unwrap_or(0),
-        pre_prune, pruned_count, clean.len(),
-        pre_renumber.first().copied().unwrap_or(0), pre_renumber.last().copied().unwrap_or(0),
-        post_renumber.first().copied().unwrap_or(0), post_renumber.last().copied().unwrap_or(0),
-        session.next_message_id,
-    );
 
     // Remove stale files for this session (different label, same id).
     let prefix = format!("{}_", session.id);
@@ -200,7 +178,7 @@ pub fn save_session(project: &Project, session: &mut Session) -> std::io::Result
     let file = SessionFile {
         id: session.id.clone(),
         label: session.label.clone(),
-        messages: clean,
+        messages: session.messages.clone(),
         next_message_id: session.next_message_id,
         provider_label: session.provider_label.clone(),
         model: session.model.clone(),

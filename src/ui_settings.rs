@@ -820,9 +820,8 @@ fn show_session_settings(ui: &mut egui::Ui, state: &mut AppState) {
             ui.add_space(6.0);
             ui.label(
                 RichText::new(
-                    "Messages in RAM: controls how many are held in memory and displayed. \
-                     Full history is saved to disk and reloaded for API requests, \
-                     automatically pruned to fit the model's context window. \
+                     "Messages in RAM: controls how many are held in memory and displayed. \
+                     Full history is saved to disk and reloaded for API requests. \
                      Completion Delay: minimum pause (ms) between consecutive API calls \
                      to pace rapid tool-use loops.",
                 )

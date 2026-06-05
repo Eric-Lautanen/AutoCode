@@ -1775,15 +1775,10 @@ fn commit_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) {
 /// with instructions to read RESUME.md.
 fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     // Save the old session to disk before creating the new one.
-    let old_info = state.active_session_id.as_ref().and_then(|sid| {
-        let sess_idx = state.sessions.iter().position(|s| s.id == *sid)?;
-        let pid = state.sessions[sess_idx].project_id.clone()?;
-        let proj_idx = state.projects.iter().position(|p| p.id == pid)?;
-        Some((sess_idx, proj_idx))
-    });
-    if let Some((sess_idx, proj_idx)) = old_info {
-        let proj = &mut state.projects[proj_idx];
-        let sess = &mut state.sessions[sess_idx];
+    if let Some(sess) = state.active_session()
+        && let Some(pid) = sess.project_id.as_ref()
+        && let Some(proj) = state.projects.iter().find(|p| &p.id == pid)
+    {
         let _ = crate::session_storage::save_session(proj, sess);
     }
     let handoff_was_enabled = state.handoff_enabled;
