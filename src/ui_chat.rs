@@ -643,29 +643,6 @@ fn show_session_tabs(
                                                     .find(|s| s.id != id && !s.closed)
                                                     .map(|s| s.id.clone());
                                             }
-                                            // Load new session's messages into the display buffer.
-                                            if let Some(ref new_id) = state.active_session_id {
-                                                if let Some(new_sess) = state.sessions.iter_mut().find(|s| s.id == *new_id) {
-                                                    if new_sess.messages.is_empty() {
-                                                        if let Some(pid) = new_sess.project_id.as_ref()
-                                                            && let Some(proj) = state.projects.iter().find(|p| &p.id == pid)
-                                                        {
-                                                            crate::session_storage::load_session(proj, new_sess);
-                                                        }
-                                                    }
-                                                    let window = state.ui_display_window;
-                                                    let total = new_sess.messages.len();
-                                                    let start = total.saturating_sub(window);
-                                                    panel_state.display_buffer = new_sess.messages[start..].to_vec();
-                                                    panel_state.loaded_min_id = panel_state.display_buffer.first().map(|m| m.id).unwrap_or(0);
-                                                }
-                                            } else {
-                                                panel_state.display_buffer.clear();
-                                                panel_state.loaded_min_id = 0;
-                                            }
-                                            panel_state.prev_session_id = state.active_session_id.clone();
-                                            panel_state.prev_message_count = panel_state.display_buffer.len();
-                                            panel_state.wants_older_messages = false;
                                             runtimes.remove(&id);
                                         }
                                     }
