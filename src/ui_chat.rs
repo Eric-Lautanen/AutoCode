@@ -150,11 +150,9 @@ pub struct ChatPanelState {
 
     /// Messages currently rendered in the chat scroll area.
     pub display_buffer: Vec<ChatMessage>,
-    /// Total messages on disk for the active session.
-    pub display_total_count: usize,
-    /// How many messages from the end are in display_buffer.
-    pub display_tail_count: usize,
-    /// Set when user clicks "Load older messages".
+    /// The lowest (oldest) message ID in the display buffer. 0 = nothing loaded.
+    pub loaded_min_id: u64,
+    /// Set when user clicks "Load older messages" or auto-scroll reaches top.
     pub wants_older_messages: bool,
     /// Track message count for detecting new arrivals.
     prev_message_count: usize,
@@ -173,8 +171,7 @@ impl Default for ChatPanelState {
             scroll_offsets: std::collections::HashMap::new(),
             scroll_area_id: None,
             display_buffer: Vec::new(),
-            display_total_count: 0,
-            display_tail_count: 0,
+            loaded_min_id: 0,
             wants_older_messages: false,
             prev_message_count: 0,
             user_scrolled_up: false,
@@ -218,6 +215,7 @@ pub fn show(
             }
         }
         // Load new session: only from disk if evicted from RAM.
+        let mut purge_on_missing: Option<String> = None;
         if let Some(ref new_id) = state.active_session_id {
             if let Some(new_sess) = state.sessions.iter_mut().find(|s| s.id == *new_id)
                 && let Some(new_proj) = state
@@ -226,44 +224,56 @@ pub fn show(
                     .find(|p| Some(&p.id) == new_sess.project_id.as_ref())
             {
                 if new_sess.messages.is_empty() {
-                    crate::session_storage::load_session(new_proj, new_sess);
-                }
-                let window = state.ui_display_window;
-                let total = new_sess.messages.len();
-                let start = total.saturating_sub(window);
-                panel_state.display_buffer = new_sess.messages[start..].to_vec();
-                panel_state.display_total_count = total;
-                panel_state.display_tail_count = panel_state.display_buffer.len();
-                // Restore provider and model for this session.
-                if !new_sess.provider_label.is_empty()
-                    && state.providers.contains_key(&new_sess.provider_label)
-                {
-                    state.active_provider = new_sess.provider_label.clone();
-                    if let Some(prov) = state.providers.get_mut(&state.active_provider) {
-                        prov.model = new_sess.model.clone();
+                    let found = crate::session_storage::load_session(new_proj, new_sess);
+                    if !found {
+                        purge_on_missing = Some(new_id.clone());
                     }
                 }
-                // Sync new session's per-session state to the global working copy.
-                state.todo_list = new_sess.todo_list.clone();
-                state.show_todo = new_sess.show_todo;
-                state.todo_user_dismissed = new_sess.todo_user_dismissed;
-                state.handoff_enabled = new_sess.handoff_enabled;
-                state.show_explorer = new_sess.show_explorer;
-                state.settings_open = new_sess.settings_open;
-                if let Some(ref pid) = new_sess.project_id {
-                    state.active_project_id = Some(pid.clone());
+                if purge_on_missing.is_none() {
+                                                    let window = state.ui_display_window;
+                                                    let total = new_sess.messages.len();
+                                                    let start = total.saturating_sub(window);
+                                                    panel_state.display_buffer = new_sess.messages[start..].to_vec();
+                                                    panel_state.loaded_min_id = panel_state.display_buffer.first().map(|m| m.id).unwrap_or(0);
+                    // Restore provider and model for this session.
+                    if !new_sess.provider_label.is_empty()
+                        && state.providers.contains_key(&new_sess.provider_label)
+                    {
+                        state.active_provider = new_sess.provider_label.clone();
+                        if let Some(prov) = state.providers.get_mut(&state.active_provider) {
+                            prov.model = new_sess.model.clone();
+                        }
+                    }
+                    // Sync new session's per-session state to the global working copy.
+                    state.todo_list = new_sess.todo_list.clone();
+                    state.show_todo = new_sess.show_todo;
+                    state.todo_user_dismissed = new_sess.todo_user_dismissed;
+                    state.handoff_enabled = new_sess.handoff_enabled;
+                    state.show_explorer = new_sess.show_explorer;
+                    state.settings_open = new_sess.settings_open;
+                    if let Some(ref pid) = new_sess.project_id {
+                        state.active_project_id = Some(pid.clone());
+                    }
                 }
             }
         } else {
             panel_state.display_buffer.clear();
-            panel_state.display_total_count = 0;
-            panel_state.display_tail_count = 0;
+            panel_state.loaded_min_id = 0;
             state.todo_list.clear();
             state.show_todo = false;
             state.todo_user_dismissed = false;
             state.handoff_enabled = false;
             state.show_explorer = true;
             state.settings_open = false;
+        }
+        // Purge session stub if the file was missing on disk.
+        if let Some(sid) = purge_on_missing {
+            state.sessions.retain(|s| s.id != sid);
+            if state.active_session_id.as_deref() == Some(&sid) {
+                state.active_session_id = state.sessions.last().map(|s| s.id.clone());
+            }
+            panel_state.display_buffer.clear();
+            panel_state.loaded_min_id = 0;
         }
         panel_state.prev_message_count = panel_state.display_buffer.len();
         panel_state.wants_older_messages = false;
@@ -300,8 +310,21 @@ pub fn show(
         panel_state.prev_session_id = state.active_session_id.clone();
     }
 
-    // Phase 2: "Load older messages" click.
-    if panel_state.wants_older_messages {
+    // Phase 2: auto-load or click-to-load older messages.
+    // Check if user is near the top of the scroll area (within ~5 messages).
+    if panel_state.loaded_min_id > 1 {
+        if let Some(sa_id) = panel_state.scroll_area_id {
+            let sa_state = ui.ctx().data_mut(|d| {
+                d.get_persisted::<egui::scroll_area::State>(sa_id)
+                    .unwrap_or_default()
+            });
+            let threshold = 300.0;
+            if sa_state.offset.y < threshold && !panel_state.scroll_to_bottom {
+                panel_state.wants_older_messages = true;
+            }
+        }
+    }
+    if panel_state.wants_older_messages && panel_state.loaded_min_id > 1 {
         panel_state.wants_older_messages = false;
         let proj_id = state.active_project_id.clone();
         let sess_id = state.active_session_id.clone();
@@ -314,14 +337,34 @@ pub fn show(
                 .iter()
                 .find(|s| Some(&s.id) == sess_id.as_ref())
         {
-            let offset = panel_state.display_tail_count;
+            // Capture scroll offset to anchor view after prepending.
+            let anchor_sid = state.active_session_id.clone().unwrap_or_default();
+            let prev_offset = panel_state.scroll_area_id.and_then(|sa_id| {
+                Some(ui.ctx().data_mut(|d| {
+                    d.get_persisted::<egui::scroll_area::State>(sa_id)
+                        .unwrap_or_default()
+                        .offset
+                        .y
+                }))
+            });
             let count = state.ui_scroll_page;
-            let (older, _) = crate::session_storage::load_message_window(proj, sess, offset, count);
+            let older = crate::session_storage::load_messages_before(proj, sess, panel_state.loaded_min_id, count);
             if !older.is_empty() {
+                let added = older.len();
+                panel_state.loaded_min_id = older.first().map(|m| m.id).unwrap_or(0);
                 let mut new_buf = older;
                 new_buf.extend_from_slice(&panel_state.display_buffer);
                 panel_state.display_buffer = new_buf;
-                panel_state.display_tail_count += count;
+                // Advance scroll by estimated height of prepended content.
+                if let Some(prev_y) = prev_offset {
+                    let sa_id = egui::Id::new(("chat_scroll", anchor_sid.as_str()));
+                    let mut sa_state = ui.ctx().data_mut(|d| {
+                        d.get_persisted::<egui::scroll_area::State>(sa_id)
+                            .unwrap_or_default()
+                    });
+                    sa_state.offset.y = prev_y + added as f32 * 60.0;
+                    ui.ctx().data_mut(|d| d.insert_persisted(sa_id, sa_state));
+                }
             }
         }
     }
@@ -340,6 +383,7 @@ pub fn show(
     }
 
     // --- scoped active-runtime block ----------------------------------------
+    let active_sid_str = state.active_session_id.clone().unwrap_or_default();
     {
         let active_sid = state.active_session_id.clone();
         let mut runtime = active_sid.as_ref().and_then(|sid| runtimes.get_mut(sid));
@@ -376,13 +420,13 @@ pub fn show(
                 Frame::NONE.inner_margin(bubble_indent).show(ui, |ui| {
                     ui.set_min_width(chat_w - 12.0);
                     if !panel_state.display_buffer.is_empty() {
-                        if panel_state.display_buffer.len() < panel_state.display_total_count {
+                        if panel_state.loaded_min_id > 1 {
                             ui.horizontal(|ui| {
                                 ui.label(
                                     RichText::new(format!(
-                                        "Showing {} of {} messages",
+                                        "Showing {} messages (oldest ID: {})",
                                         panel_state.display_buffer.len(),
-                                        panel_state.display_total_count
+                                        panel_state.loaded_min_id,
                                     ))
                                     .size(11.0)
                                     .color(theme().text_muted),
@@ -404,7 +448,7 @@ pub fn show(
                                 && msg.tool_calls.is_some()
                             {
                             } else {
-                                show_bubble(ui, msg, i, chat_w, false);
+                                show_bubble(ui, msg, i, chat_w, false, active_sid.as_deref().unwrap_or(""));
                             }
                             ui.add_space(8.0);
                         }
@@ -423,7 +467,7 @@ pub fn show(
                             ui.add_space(8.0);
                         } else {
                             if !r.reasoning_buf.is_empty() {
-                                show_reasoning_bubble(ui, &r.reasoning_buf, chat_w, true);
+                                show_reasoning_bubble(ui, &r.reasoning_buf, chat_w, true, active_sid.as_deref().unwrap_or(""));
                             }
                             if !r.pending_response.is_empty() {
                                 show_streaming_bubble(ui, &r.pending_response, chat_w);
@@ -496,7 +540,7 @@ pub fn show(
     } // end scoped block — runtime borrow is released here
 
     ui.separator();
-    show_input_row(ui, state, runtimes, panel_state);
+    show_input_row(ui, state, runtimes, panel_state, &active_sid_str);
 }
 
 // -- Session tabs --------------------------------------------------------------
@@ -613,13 +657,11 @@ fn show_session_tabs(
                                                     let total = new_sess.messages.len();
                                                     let start = total.saturating_sub(window);
                                                     panel_state.display_buffer = new_sess.messages[start..].to_vec();
-                                                    panel_state.display_total_count = total;
-                                                    panel_state.display_tail_count = panel_state.display_buffer.len();
+                                                    panel_state.loaded_min_id = panel_state.display_buffer.first().map(|m| m.id).unwrap_or(0);
                                                 }
                                             } else {
                                                 panel_state.display_buffer.clear();
-                                                panel_state.display_total_count = 0;
-                                                panel_state.display_tail_count = 0;
+                                                panel_state.loaded_min_id = 0;
                                             }
                                             panel_state.prev_session_id = state.active_session_id.clone();
                                             panel_state.prev_message_count = panel_state.display_buffer.len();
@@ -649,7 +691,7 @@ fn empty_state(ui: &mut egui::Ui) {
 
 // -- Message bubbles -----------------------------------------------------------
 
-fn show_bubble(ui: &mut egui::Ui, msg: &ChatMessage, idx: usize, panel_w: f32, suppress_ts: bool) {
+fn show_bubble(ui: &mut egui::Ui, msg: &ChatMessage, idx: usize, panel_w: f32, suppress_ts: bool, sid: &str) {
     // Skip hidden tool results.
     if msg.role == Role::Tool
         && msg
@@ -663,7 +705,7 @@ fn show_bubble(ui: &mut egui::Ui, msg: &ChatMessage, idx: usize, panel_w: f32, s
     // Every widget inside a bubble — including nested ScrollAreas — gets a
     // unique parent ID derived from this message's timestamp + index.
     // This prevents scroll state from leaking between messages.
-    ui.push_id((msg.timestamp, idx), |ui| {
+    ui.push_id((msg.timestamp, sid), |ui| {
         let is_user = msg.role == Role::User;
         let is_tool = msg.role == Role::Tool;
         let max_bubble_w = (panel_w * 0.72).max(240.0);
@@ -801,7 +843,7 @@ fn show_bubble(ui: &mut egui::Ui, msg: &ChatMessage, idx: usize, panel_w: f32, s
                     })
                     .show(ui, |ui| {
                         if is_tool {
-                            render_tool_result(ui, msg, idx);
+                            render_tool_result(ui, msg, idx, sid);
                         } else {
                             if let Some(reasoning) = &msg.reasoning_content
                                 && !reasoning.is_empty()
@@ -812,7 +854,7 @@ fn show_bubble(ui: &mut egui::Ui, msg: &ChatMessage, idx: usize, panel_w: f32, s
                                         .color(theme().accent)
                                         .strong(),
                                 )
-                                .id_salt(format!("reasoning_saved_{}_{}", idx, msg.timestamp))
+                                .id_salt(format!("reasoning_saved_{}_{}_{}", idx, msg.timestamp, sid))
                                 .default_open(false)
                                 .show(ui, |ui| {
                                     Frame::NONE
@@ -836,16 +878,16 @@ fn show_bubble(ui: &mut egui::Ui, msg: &ChatMessage, idx: usize, panel_w: f32, s
 
 // -- Tool result rendering with collapsible cards + diff views -----------------
 
-fn render_tool_result(ui: &mut egui::Ui, msg: &ChatMessage, idx: usize) {
+fn render_tool_result(ui: &mut egui::Ui, msg: &ChatMessage, idx: usize, sid: &str) {
     if let Some(meta) = &msg.tool_meta {
-        render_structured_tool_result(ui, msg, idx, meta);
+        render_structured_tool_result(ui, msg, idx, meta, sid);
         return;
     }
 
     let content = &msg.content;
     let summary = ui_helpers::extract_tool_summary(content);
     if let Some(summary) = summary {
-        let id_salt = format!("tool_{}_{}", idx, msg.timestamp);
+        let id_salt = format!("tool_{}_{}_{}", idx, msg.timestamp, sid);
         CollapsingHeader::new(&summary)
             .id_salt(id_salt)
             .default_open(false)
@@ -863,6 +905,7 @@ fn render_structured_tool_result(
     msg: &ChatMessage,
     _idx: usize,
     meta: &ToolMeta,
+    sid: &str,
 ) {
     match meta.tool_name.as_str() {
         "read_file" => {
@@ -969,7 +1012,7 @@ fn render_structured_tool_result(
                 let old_text = meta.old_text.as_deref().unwrap_or("");
                 let new_text = meta.new_text.as_deref().unwrap_or("");
                 ui.push_id(format!("patch_{}", msg.timestamp), |ui| {
-                    render_unified_diff(ui, old_text, new_text);
+                    render_unified_diff(ui, old_text, new_text, sid);
                 });
             }
         }
@@ -993,7 +1036,7 @@ fn render_structured_tool_result(
             let body = ui_helpers::get_tool_body(msg);
             let display = strip_exit_code_trailer(&body);
             ui.push_id(format!("shell_{}", msg.timestamp), |ui| {
-                render_shell_terminal(ui, display);
+                render_shell_terminal(ui, display, sid);
             });
         }
         "list_dir" => {
@@ -1187,7 +1230,7 @@ fn render_structured_tool_result(
 ///
 /// Uses an LCS-based diff algorithm to produce multiple separate hunks
 /// with surrounding context lines, separated by ` [...] ` when non-adjacent.
-fn render_unified_diff(ui: &mut egui::Ui, old: &str, new: &str) {
+fn render_unified_diff(ui: &mut egui::Ui, old: &str, new: &str, sid: &str) {
     let old_lines: Vec<&str> = old.lines().collect();
     let new_lines: Vec<&str> = new.lines().collect();
 
@@ -1394,7 +1437,7 @@ fn render_unified_diff(ui: &mut egui::Ui, old: &str, new: &str) {
                 }
 
                 ScrollArea::vertical()
-                    .id_salt("diff_scroll")
+                    .id_salt(format!("diff_scroll_{}", sid))
                     .max_height(400.0)
                     .min_scrolled_height(0.0)
                     .show(ui, |ui| {
@@ -1556,20 +1599,20 @@ fn show_waiting_bubble(ui: &mut egui::Ui, status: &str, panel_w: f32) {
     });
 }
 
-fn show_reasoning_bubble(ui: &mut egui::Ui, text: &str, panel_w: f32, live: bool) {
+fn show_reasoning_bubble(ui: &mut egui::Ui, text: &str, panel_w: f32, live: bool, sid: &str) {
     let max_w = (panel_w * 0.72).max(240.0);
     ui.add_space(4.0);
     ui.vertical(|ui| {
         ui.set_max_width(max_w);
         let label = if live { "Thinking..." } else { "Thinking" };
-        ui.push_id("reasoning_live", |ui| {
+        ui.push_id(format!("reasoning_live_{}", sid), |ui| {
             CollapsingHeader::new(
                 RichText::new(label)
                     .size(11.0)
                     .color(theme().accent)
                     .strong(),
             )
-            .id_salt("reasoning_live_header")
+            .id_salt(format!("reasoning_live_header_{}", sid))
             .default_open(live)
             .show(ui, |ui| {
                 ui.set_max_height(f32::INFINITY);
@@ -1941,6 +1984,7 @@ fn show_input_row(
     state: &mut AppState,
     runtimes: &mut HashMap<String, ChatRuntime>,
     panel_state: &mut ChatPanelState,
+    sid: &str,
 ) {
     Frame::NONE
         .fill(theme().bg_base)
@@ -1951,7 +1995,7 @@ fn show_input_row(
             bottom: 6,
         })
         .show(ui, |ui| {
-            ui.push_id("input_row", |ui| {
+            ui.push_id(format!("input_row_{}", sid), |ui| {
                 ui.horizontal(|ui| {
                     let active_sid = state.active_session_id.clone();
                     let busy = active_sid
@@ -1964,7 +2008,7 @@ fn show_input_row(
                     let send_enabled = !panel_state.input.trim().is_empty() && !busy;
 
                     let te = TextEdit::multiline(&mut panel_state.input)
-                        .id(egui::Id::new("chat_input"))
+                        .id(egui::Id::new(format!("chat_input_{}", sid)))
                         .hint_text("Describe a task... Shift+Enter for newline")
                         .desired_width(input_w)
                         .font(egui::TextStyle::Body)
@@ -1983,7 +2027,7 @@ fn show_input_row(
                     // 1) User-initiated clicks ALWAYS get focus (even with popups open).
                     // 2) Programmatic reclaim only on startup or after a popup closes.
                     let ctx = ui.ctx().clone();
-                    let input_id = egui::Id::new("chat_input");
+                    let input_id = egui::Id::new(format!("chat_input_{}", sid));
 
                     // Deferred focus: wait a few frames so the widget tree settles.
                     if resp.clicked() {
@@ -2327,7 +2371,7 @@ fn strip_exit_code_trailer(body: &str) -> &str {
     }
 }
 
-fn render_shell_terminal(ui: &mut egui::Ui, code: &str) {
+fn render_shell_terminal(ui: &mut egui::Ui, code: &str, sid: &str) {
     if code.trim().is_empty() {
         return;
     }
@@ -2390,7 +2434,7 @@ fn render_shell_terminal(ui: &mut egui::Ui, code: &str) {
                 );
                 let viewport_width = ui.available_width();
                 ScrollArea::vertical()
-                    .id_salt("terminal_scroll")
+                    .id_salt(format!("terminal_scroll_{}", sid))
                     .max_height(400.0)
                     .min_scrolled_height(0.0)
                     .show(ui, |ui| {

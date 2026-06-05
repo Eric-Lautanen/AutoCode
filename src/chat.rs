@@ -118,10 +118,12 @@ fn shorten_err(msg: &str) -> String {
     msg.to_string()
 }
 
-fn push_to_session(state: &mut AppState, session_id: Option<&str>, msg: ChatMessage) {
+fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: ChatMessage) {
     if let Some(sid) = session_id
         && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
     {
+        msg.id = sess.next_message_id;
+        sess.next_message_id += 1;
         sess.total_tokens_used += msg.token_count;
         sess.messages.push(msg);
     }
@@ -1135,8 +1137,9 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 if let Some(name) = args["name"].as_str()
                     && let Some(sid) = runtime.active_session_id.as_deref()
                     && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
+                    && let Some(safe) = sanitize_session_name(name)
                 {
-                    sess.label = name.to_string();
+                    sess.label = safe;
                     // Persist the new label to the session file on disk.
                     if let Some(proj) = state
                         .projects
@@ -1689,6 +1692,13 @@ fn commit_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) {
 /// Handle a `handoff` tool call: archive the session and start a fresh one
 /// with instructions to read RESUME.md.
 fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
+    // Save the old session to disk before creating the new one.
+    if let Some(sess) = state.active_session()
+        && let Some(pid) = sess.project_id.as_ref()
+        && let Some(proj) = state.projects.iter().find(|p| &p.id == pid)
+    {
+        let _ = crate::session_storage::save_session(proj, sess);
+    }
     let handoff_was_enabled = state.handoff_enabled;
     state.new_session_for_project(state.active_project_id.clone());
 
@@ -1700,8 +1710,16 @@ fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     // Point the runtime at the new session before pushing messages.
     runtime.active_session_id = state.active_session_id.clone();
 
-    // Seed the new session with system prompt.
-    let sys_prompt = state.system_prompt.clone();
+    // Seed the new session with system prompt + host environment info.
+    let mut sys_prompt = state.system_prompt.clone();
+    if crate::sysinfo::is_ready() {
+        if !sys_prompt.ends_with('\n') {
+            sys_prompt.push('\n');
+        }
+        sys_prompt.push_str("\nHOST ENVIRONMENT\n");
+        sys_prompt.push_str(&state.sysinfo.report);
+        sys_prompt.push('\n');
+    }
     let sys = ChatMessage::new(Role::System, sys_prompt);
     push_runtime(state, runtime, sys);
 
@@ -2683,6 +2701,94 @@ fn poll_shell_tasks(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
     repaint
 }
 
+/// Common English stop words stripped from session labels.
+const STOP_WORDS: &[&str] = &[
+    "a", "about", "above", "across", "after", "afterwards", "again",
+    "against", "all", "almost", "alone", "along", "already", "also",
+    "although", "always", "am", "among", "amongst", "amoungst", "amount",
+    "an", "and", "another", "any", "anyhow", "anyone", "anything",
+    "anyway", "anywhere", "are", "around", "as", "at", "back", "be",
+    "became", "because", "become", "becomes", "becoming", "been",
+    "before", "beforehand", "behind", "being", "below", "beside",
+    "besides", "between", "beyond", "bill", "both", "bottom", "but",
+    "by", "call", "can", "cannot", "cant", "co", "con", "could",
+    "couldnt", "cry", "de", "describe", "detail", "do", "done", "down",
+    "due", "during", "each", "eg", "eight", "either", "eleven", "else",
+    "elsewhere", "empty", "enough", "etc", "even", "ever", "every",
+    "everyone", "everything", "everywhere", "except", "few", "fifteen",
+    "fify", "fill", "find", "fire", "first", "five", "for", "former",
+    "formerly", "forty", "found", "four", "from", "front", "full",
+    "further", "get", "give", "go", "had", "has", "hasnt", "have",
+    "he", "hence", "her", "here", "hereafter", "hereby", "herein",
+    "hereupon", "hers", "herself", "him", "himself", "his", "how",
+    "however", "hundred", "i", "ie", "if", "in", "inc", "indeed",
+    "interest", "into", "is", "it", "its", "itself", "just", "keep",
+    "last",     "latter", "latterly", "least", "less", "let", "like", "ltd", "made",
+    "many", "may", "me", "meanwhile", "might", "mill", "mine", "more",
+    "moreover", "most", "mostly", "move", "much", "must", "my", "myself",
+    "name", "namely", "neither", "never", "nevertheless", "next", "nine",
+    "no", "nobody", "none", "noone", "nor", "not", "nothing", "now",
+    "nowhere", "of", "off", "often", "on", "once", "one", "only", "onto",
+    "or", "other", "others", "otherwise", "our", "ours", "ourselves",
+    "out", "over", "own", "part", "per", "perhaps", "please", "put",
+    "rather", "re", "same", "see", "seem", "seemed", "seeming", "seems",
+    "serious", "several", "shall", "she", "should", "show", "side",
+    "since", "sincere", "six", "sixty", "so", "some", "somehow",
+    "someone", "something", "sometime", "sometimes", "somewhere",
+    "still", "such", "system", "take", "ten", "than", "that", "the",
+    "their", "them", "themselves", "then", "thence", "there",
+    "thereafter", "thereby", "therefore", "therein", "thereupon",
+    "these", "they", "thick", "thin", "third", "this", "those", "though",
+    "three", "through", "throughout", "thru", "thus", "to", "together",
+    "too", "top", "toward", "towards", "twelve", "twenty", "two", "un",
+    "under", "until", "up", "upon", "us", "very", "via", "was", "we",
+    "well", "were", "what", "whatever", "when", "whence", "whenever",
+    "where", "whereafter", "whereas", "whereby", "wherein", "whereupon",
+    "wherever", "whether", "which", "while", "whither", "who", "whoever",
+    "whole", "whom", "whose", "why", "will", "with", "within", "without",
+    "would", "yet", "you", "your", "yours", "yourself", "yourselves",
+];
+
+/// Sanitize a raw session name: strip special characters, remove common
+/// stop words, keep up to 3 meaningful words joined by underscores.
+/// Returns `None` if the result would be empty.
+fn sanitize_session_name(raw: &str) -> Option<String> {
+    // Replace disallowed characters with spaces.
+    let cleaned: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' {
+                c
+            } else {
+                ' '
+            }
+        })
+        .collect();
+    // Split into words, filter stop words and empties.
+    let words: Vec<&str> = cleaned
+        .split_whitespace()
+        .filter(|w| {
+            let lower = w.to_lowercase();
+            !w.is_empty() && !STOP_WORDS.contains(&lower.as_str())
+        })
+        .collect();
+    if words.is_empty() {
+        return None;
+    }
+    // Limit to 3 words.
+    let words = if words.len() > 3 { &words[..3] } else { &words };
+    let joined = words.join("_");
+    let mut s = joined;
+    if s.len() > 60 {
+        s.truncate(60);
+        // Avoid ending on a partial word.
+        if let Some(last_us) = s[..s.len()].rfind('_') {
+            s.truncate(last_us);
+        }
+    }
+    Some(s)
+}
+
 /// Auto-name the session from the model's response text when the model
 /// forgets to call `name_session`. Extracts a short label from the first
 /// non-empty line of text (stripping markdown), then persists silently.
@@ -2700,10 +2806,10 @@ fn auto_name_session(state: &mut AppState, text: &str) {
         })
         .map(|l| {
             let t = l.trim().trim_start_matches(|c: char| c == '#' || c == '*' || c == '-');
-            let t = t.trim();
-            if t.len() > 60 { t[..60].to_string() } else { t.to_string() }
+            t.trim()
         })
-        .filter(|n| !n.is_empty());
+        .filter(|n| !n.is_empty())
+        .and_then(sanitize_session_name);
 
     let Some(name) = name else { return };
 

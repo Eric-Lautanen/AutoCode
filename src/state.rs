@@ -369,6 +369,8 @@ pub struct ToolMeta {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChatMessage {
+    #[serde(default)]
+    pub id: u64,
     pub role: Role,
     pub content: String,
     #[serde(default)]
@@ -402,6 +404,7 @@ impl ChatMessage {
         }
         let token_count = crate::helpers::estimate_tokens(&content);
         Self {
+            id: 0,
             role,
             content,
             timestamp: crate::helpers::unix_now(),
@@ -422,6 +425,8 @@ pub struct Session {
     pub project_id: Option<String>,
     #[serde(skip)]
     pub messages: Vec<ChatMessage>,
+    #[serde(default)]
+    pub next_message_id: u64,
     pub total_tokens_used: usize,
     pub created_at: u64,
     pub label: String,
@@ -457,6 +462,7 @@ impl Session {
             id: crate::helpers::generate_id(),
             project_id,
             messages: Vec::new(),
+            next_message_id: 1,
             total_tokens_used: 0,
             created_at: crate::helpers::unix_now(),
             label: String::new(),

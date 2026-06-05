@@ -106,6 +106,8 @@ struct SessionFile {
     pub label: String,
     pub messages: Vec<ChatMessage>,
     #[serde(default)]
+    pub next_message_id: u64,
+    #[serde(default)]
     pub provider_label: String,
     #[serde(default)]
     pub model: String,
@@ -168,6 +170,7 @@ pub fn save_session(project: &Project, session: &Session) -> std::io::Result<()>
         id: session.id.clone(),
         label: session.label.clone(),
         messages: session.messages.clone(),
+        next_message_id: session.next_message_id,
         provider_label: session.provider_label.clone(),
         model: session.model.clone(),
         todo_list: session.todo_list.clone(),
@@ -195,8 +198,10 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
     match fsutil::read_to_string(&path) {
         Ok(json) => match serde_json::from_str::<SessionFile>(&json) {
             Ok(file) => {
+                let msg_count = file.messages.len();
                 session.label = file.label;
                 session.messages = file.messages;
+                session.next_message_id = msg_count as u64 + 1;
                 session.provider_label = file.provider_label;
                 session.model = file.model;
                 session.todo_list = file.todo_list;
@@ -242,31 +247,27 @@ pub fn delete_session_file(project: &Project, session: &Session) {
     let _ = fsutil::remove_file(&id_only);
 }
 
-/// Load a slice of messages from the session file by offset from the end.
-/// `offset_from_end` = 0 means the most recent messages.
-pub fn load_message_window(
+/// Load messages from disk with IDs less than `before_id`.
+/// Returns up to `count` messages in ascending ID order.
+pub fn load_messages_before(
     project: &Project,
     session: &Session,
-    offset_from_end: usize,
+    before_id: u64,
     count: usize,
-) -> (Vec<ChatMessage>, usize) {
+) -> Vec<ChatMessage> {
     let dir = project_sessions_dir(project);
     let path = match find_session_file(&dir, session) {
         Some(p) => p,
-        None => return (Vec::new(), 0),
+        None => return Vec::new(),
     };
-
-    let Ok(json) = fsutil::read_to_string(&path) else {
-        return (Vec::new(), 0);
-    };
-    let Ok(file) = serde_json::from_str::<SessionFile>(&json) else {
-        return (Vec::new(), 0);
-    };
-
-    let total = file.messages.len();
-    let start = total.saturating_sub(offset_from_end + count);
-    let end = total.saturating_sub(offset_from_end);
-    (file.messages[start..end].to_vec(), total)
+    let Ok(json) = fsutil::read_to_string(&path) else { return Vec::new(); };
+    let Ok(file) = serde_json::from_str::<SessionFile>(&json) else { return Vec::new(); };
+    let end = (before_id as usize).saturating_sub(1);
+    let start = end.saturating_sub(count);
+    if start >= end {
+        return Vec::new();
+    }
+    file.messages[start..end].to_vec()
 }
 
 fn cleanup_orphan_temp_files(dir: &Path, max_age_secs: u64) {
