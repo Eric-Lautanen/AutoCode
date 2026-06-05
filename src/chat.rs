@@ -119,33 +119,15 @@ fn shorten_err(msg: &str) -> String {
 }
 
 fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: ChatMessage) {
-    let sid = match session_id {
-        Some(s) => s.to_string(),
-        None => return,
-    };
-    // Find indices first to avoid simultaneous mutable borrows.
-    let (sess_idx, proj_idx) = {
-        let sess = match state.sessions.iter_mut().find(|s| s.id == sid) {
-            Some(s) => s,
-            None => return,
-        };
+    if let Some(sid) = session_id
+        && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
+    {
         msg.id = sess.next_message_id;
         sess.next_message_id += 1;
         sess.total_tokens_used += msg.token_count;
+        debug_log!("session: push msg {} (role={:?}, tokens={})", msg.id, msg.role, msg.token_count);
         sess.messages.push(msg);
-        let pi = sess.project_id.as_ref().and_then(|pid| {
-            state.projects.iter().position(|p| p.id == *pid)
-        });
-        let si = state.sessions.iter().position(|s| s.id == sid).unwrap();
-        match pi {
-            Some(p) => (si, p),
-            None => return,
-        }
-    };
-    // Persist to JSON immediately — file is the source of truth.
-    let proj = &mut state.projects[proj_idx];
-    let sess = &mut state.sessions[sess_idx];
-    let _ = crate::session_storage::save_session(proj, sess);
+    }
 }
 
 /// Trim `sess.messages` to the display window. Full history is on disk.
@@ -167,8 +149,19 @@ fn trim_session_ram(state: &mut AppState, session_id: &str) {
         return;
     }
     let keep = window;
+    let drop_count = len - keep;
+    let first_dropped_id = state.sessions[idx].messages[0].id;
+    let last_dropped_id = state.sessions[idx].messages[drop_count - 1].id;
+    let first_kept_id = state.sessions[idx].messages[drop_count].id;
+    let last_kept_id = state.sessions[idx].messages.last().map(|m| m.id).unwrap_or(0);
     let sess = &mut state.sessions[idx];
     let _ = sess.messages.split_off(len - keep);
+    let new_next_id = sess.next_message_id;
+    debug_log!(
+        "ram_evict: session={} window={} dropped={} (ids {}..{}) kept={} (ids {}..{}) next_id={}",
+        session_id, window, drop_count, first_dropped_id, last_dropped_id,
+        keep, first_kept_id, last_kept_id, new_next_id
+    );
 }
 
 /// Push a message to the runtime's active session (not necessarily the viewed one).
@@ -218,7 +211,6 @@ pub struct NetworkStatus {
     pub active: bool,
     pub idle_secs: Option<u64>,
     blink_start: Option<std::time::Instant>,
-    last_blink: bool,
 }
 
 impl NetworkStatus {
@@ -230,9 +222,9 @@ impl NetworkStatus {
         let now = std::time::Instant::now();
         let start = self.blink_start.get_or_insert(now);
         let elapsed = start.elapsed().as_millis();
-        let on = (elapsed / 500).is_multiple_of(2);
-        self.last_blink = on;
-        let ch = if on { '*' } else { 'o' };
+        const SPINNER: &[char] = &['-', '\\', '|', '/'];
+        let idx = (elapsed / 150) as usize % SPINNER.len();
+        let ch = SPINNER[idx];
         let color = if self.stalled {
             Palette::ERROR
         } else {
@@ -247,7 +239,6 @@ impl NetworkStatus {
         self.active = false;
         self.idle_secs = None;
         self.blink_start = None;
-        self.last_blink = false;
     }
 
     pub fn format_bytes(&self) -> String {

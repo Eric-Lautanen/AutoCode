@@ -383,6 +383,10 @@ pub fn show(
             if !panel_state.user_scrolled_up {
                 panel_state.scroll_to_bottom = true;
             }
+        } else if current_count < panel_state.prev_message_count {
+            // Session was trimmed (RAM eviction in start_completion).
+            // Reset tracking so future new messages are detected.
+            panel_state.prev_message_count = current_count;
         }
     }
 
@@ -502,6 +506,16 @@ pub fn show(
             });
             let max_y = (scroll_resp.content_size.y - scroll_resp.inner_rect.height()).max(0.0);
             panel_state.user_scrolled_up = sa_state.offset.y < max_y - 20.0;
+            // Evict loaded history from display_buffer when back near bottom.
+            if !panel_state.user_scrolled_up && panel_state.loaded_min_id > 1 {
+                let window = state.ui_display_window;
+                let overshoot = panel_state.display_buffer.len().saturating_sub(window);
+                if overshoot > 0 {
+                    let dropped = panel_state.display_buffer.split_off(overshoot);
+                    panel_state.display_buffer = dropped;
+                    panel_state.loaded_min_id = panel_state.display_buffer.first().map(|m| m.id).unwrap_or(0);
+                }
+            }
         }
 
         let scroll_id = scroll_resp.id;
@@ -588,14 +602,14 @@ fn show_session_tabs(
                             .get(&id)
                             .map(|r| r.net_status.active)
                             .unwrap_or(false);
-                        // Blink character matching toolbar's NetworkStatus::blink_dot timing
+                        // Spinner matching toolbar's NetworkStatus::blink_dot timing
                         let activity_char = if has_activity {
                             let ms = SystemTime::now()
                                 .duration_since(UNIX_EPOCH)
                                 .unwrap_or_default()
                                 .as_millis();
-                            const STATES: &[char] = &['.', 'o', 'O', '0'];
-                            STATES[(ms / 250) as usize % STATES.len()]
+                            const SPINNER: &[char] = &['-', '\\', '|', '/'];
+                            SPINNER[(ms / 150) as usize % SPINNER.len()]
                         } else {
                             ' '
                         };

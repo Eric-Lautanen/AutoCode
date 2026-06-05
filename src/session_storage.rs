@@ -142,17 +142,40 @@ fn atomic_write_json<T: serde::Serialize>(path: &Path, value: &T) -> std::io::Re
 }
 
 pub fn save_session(project: &Project, session: &mut Session) -> std::io::Result<()> {
+    let ram_count = session.messages.len();
+    let ram_ids: Vec<u64> = session.messages.iter().map(|m| m.id).collect();
+
     // Prune a clone (don't modify the in-memory session used by the UI).
     let mut clean = session.messages.clone();
+    let pre_prune = clean.len();
     crate::session::prune_garbage_messages(&mut clean);
+    let pruned_count = pre_prune - clean.len();
+
     // Re-number so IDs are 1..N sequential (disk format contract).
+    let pre_renumber: Vec<u64> = clean.iter().map(|m| m.id).collect();
     for (i, m) in clean.iter_mut().enumerate() {
         m.id = (i + 1) as u64;
     }
+    let post_renumber: Vec<u64> = clean.iter().map(|m| m.id).collect();
 
     let dir = project_sessions_dir(project);
-    fsutil::create_dir_all(&dir)?;
+    if !dir.exists() {
+        fsutil::create_dir_all(&dir)?;
+    }
     let target = dir.join(session.filename());
+
+    crate::debug_log!(
+        "session_save: session={} ram_msgs={} ram_ids=[{}..{}] \
+         pre_prune={} pruned={} disk_msgs={} \
+         disk_before_ids=[{}..{}] disk_after_ids=[{}..{}] \
+         next_id={}",
+        session.id, ram_count,
+        ram_ids.first().copied().unwrap_or(0), ram_ids.last().copied().unwrap_or(0),
+        pre_prune, pruned_count, clean.len(),
+        pre_renumber.first().copied().unwrap_or(0), pre_renumber.last().copied().unwrap_or(0),
+        post_renumber.first().copied().unwrap_or(0), post_renumber.last().copied().unwrap_or(0),
+        session.next_message_id,
+    );
 
     // Remove stale files for this session (different label, same id).
     let prefix = format!("{}_", session.id);
@@ -270,7 +293,7 @@ pub fn delete_session_file(project: &Project, session: &Session) {
 
 /// Load messages from disk with IDs less than `before_id`.
 /// Returns up to `count` messages in ascending ID order.
-/// Uses binary-search-by-ID rather than array-offset math so it works
+/// Uses position-search-by-ID rather than array-offset math so it works
 /// correctly even when IDs are re-numbered (e.g., after RAM trimming).
 pub fn load_messages_before(
     project: &Project,
@@ -294,7 +317,17 @@ pub fn load_messages_before(
         return Vec::new();
     }
     let start = end.saturating_sub(count);
-    file.messages[start..end].to_vec()
+    let loaded = file.messages[start..end].to_vec();
+    let loaded_ids: Vec<u64> = loaded.iter().map(|m| m.id).collect();
+    crate::debug_log!(
+        "load_before: session={} before_id={} disk_total={} \
+         loaded={} ids=[{}..{}]",
+        session.id, before_id, file.messages.len(),
+        loaded.len(),
+        loaded_ids.first().copied().unwrap_or(0),
+        loaded_ids.last().copied().unwrap_or(0),
+    );
+    loaded
 }
 
 fn cleanup_orphan_temp_files(dir: &Path, max_age_secs: u64) {

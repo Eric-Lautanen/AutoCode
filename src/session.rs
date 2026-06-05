@@ -64,6 +64,15 @@ pub fn prune_garbage_messages(messages: &mut Vec<ChatMessage>) {
     if drop_tool.is_empty() {
         return;
     }
+    let tool_details: Vec<String> = drop_tool
+        .iter()
+        .filter_map(|i| {
+            let m = &messages[*i];
+            let name = m.tool_meta.as_ref().map(|tm| tm.tool_name.as_str()).unwrap_or("?");
+            let id = m.tool_call_id.as_deref().unwrap_or("?");
+            Some(format!("{}[{}]", name, id))
+        })
+        .collect();
 
     // Build a set of tool_call_ids to remove.
     let drop_ids: std::collections::HashSet<String> = drop_tool
@@ -96,6 +105,12 @@ pub fn prune_garbage_messages(messages: &mut Vec<ChatMessage>) {
             }
         }
     }
+
+    let remove_total = drop_tool.len() + drop_assistant.len();
+    crate::debug_log!(
+        "prune_garbage: dropped {} tool results ({}), {} assistant tool_calls, removed {} total",
+        drop_tool.len(), tool_details.join(", "), drop_assistant.len(), remove_total,
+    );
 
     // Remove from highest index first so indices stay valid.
     let mut remove: Vec<usize> = drop_tool;
@@ -228,7 +243,17 @@ pub fn prepare_request_messages_for_session(
         let defs = state.providers.get(&prov_label).map(|p| crate::state::model_or_safe(&p.kind, &p.model));
         (defs.map(|m| m.context_window as f64 * 0.9).unwrap_or(100_000.0)) as usize
     };
+    let disk_count = full_messages.len();
+    let disk_ids: Vec<u64> = full_messages.iter().map(|m| m.id).collect();
     let pruned = token_prune_for_api(&full_messages, budget);
+
+    crate::debug_log!(
+        "api_prep: session={} disk_msgs={} disk_ids=[{}..{}] \
+         budget_tok={} api_msgs={}",
+        session_id, disk_count,
+        disk_ids.first().copied().unwrap_or(0), disk_ids.last().copied().unwrap_or(0),
+        budget, pruned.len(),
+    );
 
     pruned
         .iter()

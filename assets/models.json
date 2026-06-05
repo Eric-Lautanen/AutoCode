@@ -21,7 +21,7 @@
       "supports_parallel_tool_calls": false,
       "default_model": "meta/llama-3.1-70b-instruct",
       "models": {
-        "meta/llama-3.1-70b-instruct": { "context_window": 128000, "max_output_tokens": 16384, "thinking_api": "off", "reasoning_efforts": [], "supports_cache_control": false }
+        "meta/llama-3.1-70b-instruct": { "context_window": 262144, "max_output_tokens": 16384, "thinking_api": "off", "reasoning_efforts": [], "supports_cache_control": false }
       }
     },
     "openai-compatible": {
