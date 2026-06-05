@@ -453,19 +453,13 @@ pub struct Session {
 
 impl Session {
     pub fn new(project_id: Option<String>, provider_label: String, model: String) -> Self {
-        let id = crate::helpers::generate_id();
-        let short = if id.len() > 8 {
-            &id[id.len() - 8..]
-        } else {
-            &id
-        };
         Self {
-            id: id.clone(),
+            id: crate::helpers::generate_id(),
             project_id,
             messages: Vec::new(),
             total_tokens_used: 0,
             created_at: crate::helpers::unix_now(),
-            label: format!("S{}", short),
+            label: String::new(),
             actual_tokens_used: 0,
             provider_label,
             model,
@@ -491,11 +485,6 @@ impl Session {
     }
 
     pub fn filename(&self) -> String {
-        let short = if self.id.len() > 8 {
-            &self.id[..8]
-        } else {
-            &self.id
-        };
         let safe_label: String = self
             .label
             .chars()
@@ -512,7 +501,7 @@ impl Session {
         } else {
             safe_label
         };
-        format!("{}_{}.json", short, safe_label)
+        format!("{}_{}.json", self.id, safe_label)
     }
 }
 
@@ -1016,7 +1005,11 @@ impl AppState {
             .active_provider()
             .map(|p| p.model.clone())
             .unwrap_or_default();
-        let sess = Session::new(project_id, prov_label, model);
+        let existing_ids: Vec<String> = self.sessions.iter().map(|s| s.id.clone()).collect();
+        let id = crate::helpers::generate_session_id(&existing_ids);
+        let mut sess = Session::new(project_id, prov_label, model);
+        sess.id = id.clone();
+        sess.label = format!("S{}", id);
         self.active_session_id = Some(sess.id.clone());
         self.sessions.push(sess);
     }

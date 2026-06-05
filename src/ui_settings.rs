@@ -686,7 +686,10 @@ fn show_projects(ui: &mut egui::Ui, state: &mut AppState) {
                 let proj_sessions: Vec<&Session> = state
                     .sessions
                     .iter()
-                    .filter(|s| s.project_id.as_deref() == Some(&p.id))
+                    .filter(|s| {
+                        s.project_id.as_deref() == Some(&p.id)
+                            && crate::session_storage::session_exists(&p, s)
+                    })
                     .collect();
                 if !proj_sessions.is_empty() {
                     CollapsingHeader::new(format!("Sessions ({})", proj_sessions.len()))
@@ -696,7 +699,7 @@ fn show_projects(ui: &mut egui::Ui, state: &mut AppState) {
                                 ui.push_id(("session", &sess.id), |ui| {
                                 ui.horizontal(|ui| {
                                     ui.label(
-                                        RichText::new(&sess.id[..sess.id.len().min(8)])
+                                        RichText::new(&sess.id)
                                             .monospace()
                                             .size(11.0),
                                     );

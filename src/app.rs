@@ -110,6 +110,40 @@ impl AutocodeApp {
             let _ = crate::session_storage::ensure_project_dirs(p);
         }
 
+        // Purge session stubs whose files no longer exist on disk.
+        let sessions_to_remove: Vec<String> = state
+            .sessions
+            .iter()
+            .filter(|s| {
+                s.project_id.as_ref().and_then(|pid| {
+                    state.projects.iter().find(|p| &p.id == pid).map(|proj| {
+                        let dir = crate::session_storage::project_sessions_dir(proj);
+                        let candidate = dir.join(s.filename());
+                        if candidate.exists() {
+                            return false;
+                        }
+                        // Fallback: scan for {short_id}_*.json prefix.
+                        let prefix = format!("{}_", s.id);
+                        if let Ok(entries) = std::fs::read_dir(&dir) {
+                            !entries.flatten().any(|e| {
+                                let name = e.file_name().to_string_lossy().to_string();
+                                name.starts_with(&prefix) && name.ends_with(".json")
+                            })
+                        } else {
+                            true
+                        }
+                    })
+                }).unwrap_or(true)
+            })
+            .map(|s| s.id.clone())
+            .collect();
+        for sid in &sessions_to_remove {
+            state.sessions.retain(|s| s.id != *sid);
+        }
+        if !sessions_to_remove.is_empty() {
+            crate::debug_log!("app: purged {} stale session stub(s) from ron", sessions_to_remove.len());
+        }
+
         // Load messages for whichever session was active at shutdown.
         if let Some(ref sid) = state.active_session_id
             && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == *sid)
@@ -357,16 +391,28 @@ impl eframe::App for AutocodeApp {
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         {
-            // Sync current provider/model into the active session before saving.
+            // Sync current session state into the active session before saving.
             let prov_label = self.state.active_provider.clone();
             let model = self
                 .state
                 .active_provider()
                 .map(|p| p.model.clone())
                 .unwrap_or_default();
+            let todo_list = self.state.todo_list.clone();
+            let show_todo = self.state.show_todo;
+            let todo_user_dismissed = self.state.todo_user_dismissed;
+            let handoff_enabled = self.state.handoff_enabled;
+            let show_explorer = self.state.show_explorer;
+            let settings_open = self.state.settings_open;
             if let Some(sess) = self.state.active_session_mut() {
                 sess.provider_label = prov_label;
                 sess.model = model;
+                sess.todo_list = todo_list;
+                sess.show_todo = show_todo;
+                sess.todo_user_dismissed = todo_user_dismissed;
+                sess.handoff_enabled = handoff_enabled;
+                sess.show_explorer = show_explorer;
+                sess.settings_open = settings_open;
             }
         }
         for sess in &self.state.sessions {

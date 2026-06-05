@@ -4,19 +4,14 @@ use std::path::{Path, PathBuf};
 use crate::fsutil;
 use crate::state::{AppState, ChatMessage, Project, Role, Session};
 
-/// Find a session file on disk by its 8-char short ID prefix.
-/// Tries `filename()` first, then scans for `{short}_` prefix.
+/// Find a session file on disk by its ID prefix.
+/// Tries `filename()` first, then scans for `{id}_` prefix.
 fn find_session_file(dir: &Path, session: &Session) -> Option<PathBuf> {
     let candidate = dir.join(session.filename());
     if candidate.exists() {
         return Some(candidate);
     }
-    let short = if session.id.len() > 8 {
-        &session.id[..8]
-    } else {
-        &session.id
-    };
-    let prefix = format!("{}_", short);
+    let prefix = format!("{}_", session.id);
     if let Ok(entries) = fsutil::read_dir(dir) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
@@ -26,6 +21,13 @@ fn find_session_file(dir: &Path, session: &Session) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Check whether a session's JSON file exists on disk (exact match or
+/// `{short}_` prefix fallback).
+pub fn session_exists(project: &Project, session: &Session) -> bool {
+    let dir = project_sessions_dir(project);
+    find_session_file(&dir, session).is_some()
 }
 
 pub fn project_sessions_dir(project: &Project) -> PathBuf {
@@ -142,13 +144,8 @@ pub fn save_session(project: &Project, session: &Session) -> std::io::Result<()>
     fsutil::create_dir_all(&dir)?;
     let target = dir.join(session.filename());
 
-    // Remove stale files for this session (different label, same short id).
-    let short = if session.id.len() > 8 {
-        &session.id[..8]
-    } else {
-        &session.id
-    };
-    let prefix = format!("{}_", short);
+    // Remove stale files for this session (different label, same id).
+    let prefix = format!("{}_", session.id);
     if let Ok(entries) = fsutil::read_dir(&dir) {
         for entry in entries.flatten() {
             let name = entry.file_name();
@@ -161,10 +158,10 @@ pub fn save_session(project: &Project, session: &Session) -> std::io::Result<()>
             }
         }
     }
-    // Also remove short-only files (e.g., from prior format migration).
-    let short_only = dir.join(format!("{}.json", short));
-    if short_only != target {
-        let _ = fsutil::remove_file(&short_only);
+    // Also remove id-only files (e.g., from prior format migration).
+    let id_only = dir.join(format!("{}.json", session.id));
+    if id_only != target {
+        let _ = fsutil::remove_file(&id_only);
     }
 
     let file = SessionFile {
@@ -183,17 +180,15 @@ pub fn save_session(project: &Project, session: &Session) -> std::io::Result<()>
     atomic_write_json(&target, &file)
 }
 
-pub fn load_session(project: &Project, session: &mut Session) {
+/// Load session messages from disk. Returns `true` if the file was found
+/// and loaded, `false` if the file is missing (caller should purge the stub).
+pub fn load_session(project: &Project, session: &mut Session) -> bool {
     let dir = project_sessions_dir(project);
     let path = match find_session_file(&dir, session) {
         Some(p) => p,
         None => {
-            // Session file was deleted from disk — clear stale in-memory state.
-            session.messages.clear();
-            session.todo_list.clear();
-            session.show_todo = false;
-            session.todo_user_dismissed = false;
-            return;
+            // Session file was deleted from disk — caller should purge the stub.
+            return false;
         }
     };
 
@@ -215,28 +210,25 @@ pub fn load_session(project: &Project, session: &mut Session) {
                 crate::debug_log!("session_storage: corrupt JSON for {}: {}", session.id, e);
             }
         },
-        Err(e) => {
-            crate::debug_log!("session_storage: read error for {}: {}", session.id, e);
+            Err(e) => {
+                crate::debug_log!("session_storage: read error for {}: {}", session.id, e);
+            }
         }
-    }
+    true
 }
+
 
 pub fn delete_session_file(project: &Project, session: &Session) {
     let dir = project_sessions_dir(project);
-    // Remove ALL files with this session's short-id prefix.
-    let short = if session.id.len() > 8 {
-        &session.id[..8]
-    } else {
-        &session.id
-    };
-    let prefix = format!("{}_", short);
-    let short_len = short.len();
+    // Remove ALL files with this session's id prefix.
+    let prefix = format!("{}_", session.id);
+    let id_len = session.id.len();
     if let Ok(entries) = fsutil::read_dir(&dir) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
             if name.starts_with(&prefix)
                 && name.ends_with(".json")
-                && name[short_len..].starts_with('_')
+                && name[id_len..].starts_with('_')
             {
                 let _ = fsutil::remove_file(&entry.path());
             }
@@ -245,9 +237,9 @@ pub fn delete_session_file(project: &Project, session: &Session) {
     // Also try the exact filename (backward compat).
     let target = dir.join(session.filename());
     let _ = fsutil::remove_file(&target);
-    // Also remove short-only file (from prior format migration).
-    let short_only = dir.join(format!("{}.json", short));
-    let _ = fsutil::remove_file(&short_only);
+    // Also remove id-only file (from prior format migration).
+    let id_only = dir.join(format!("{}.json", session.id));
+    let _ = fsutil::remove_file(&id_only);
 }
 
 /// Load a slice of messages from the session file by offset from the end.
