@@ -223,7 +223,10 @@ pub fn show(
                     .iter()
                     .find(|p| Some(&p.id) == new_sess.project_id.as_ref())
             {
-                if new_sess.messages.is_empty() {
+                // Only load from disk if this session previously had messages
+                // (next_message_id > 1). Brand-new sessions have next_message_id == 1
+                // and no file on disk yet — don't purge them.
+                if new_sess.messages.is_empty() && new_sess.next_message_id > 1 {
                     let found = crate::session_storage::load_session(new_proj, new_sess);
                     if !found {
                         purge_on_missing = Some(new_id.clone());
