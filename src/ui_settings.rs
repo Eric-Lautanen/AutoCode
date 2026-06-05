@@ -288,6 +288,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
     });
 
     let mut to_remove: Vec<String> = Vec::new();
+    let mut set_active_key: Option<(String, String)> = None;
 
     for key in keys {
         ui.push_id(("provider", &key), |ui| {
@@ -307,7 +308,6 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
         } else {
             Palette::BG_SURFACE
         };
-
         Frame::NONE
             .fill(bg_color)
             .corner_radius(ROUND_MD)
@@ -325,7 +325,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                     if is_active {
                         ui.label(RichText::new("Active").size(10.0).color(Palette::SUCCESS));
                     } else if ui.small_button("Set Active").clicked() {
-                        state.active_provider = key.clone();
+                        set_active_key = Some((key.clone(), p.model.clone()));
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
@@ -610,6 +610,13 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
         state.providers.remove(&key);
         if state.active_provider == key {
             state.active_provider = state.providers.keys().next().cloned().unwrap_or_default();
+        }
+    }
+    if let Some((label, model)) = set_active_key {
+        state.active_provider = label.clone();
+        if let Some(sess) = state.active_session_mut() {
+            sess.provider_label = label;
+            sess.model = model;
         }
     }
 }
