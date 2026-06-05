@@ -1280,16 +1280,12 @@ pub fn default_max_retry_wait() -> u64 {
     900
 }
 
-pub fn default_max_session_messages() -> usize {
-    200
-}
-
 pub fn default_ui_display_window() -> usize {
     50
 }
 
-pub fn default_ui_scroll_page() -> usize {
-    30
+pub fn default_disk_read_delay_ms() -> u64 {
+    300
 }
 
 // -- Todo parsing from tool args -----------------------------------------------

@@ -851,17 +851,15 @@ pub struct AppState {
     #[serde(default = "crate::helpers::default_max_retry_wait")]
     pub max_retry_wait_secs: u64,
 
-    /// Maximum messages kept in a single session before pruning.
-    #[serde(default = "crate::helpers::default_max_session_messages")]
-    pub max_session_messages: usize,
-
-    /// How many messages the chat panel renders initially (UI window).
+    /// How many messages to keep in RAM and display in the chat panel.
+    /// Full history is persisted to disk and reloaded for API requests.
     #[serde(default = "crate::helpers::default_ui_display_window")]
     pub ui_display_window: usize,
 
-    /// How many older messages to load per "Load older" click (UI paging).
-    #[serde(default = "crate::helpers::default_ui_scroll_page")]
-    pub ui_scroll_page: usize,
+    /// Minimum delay (ms) enforced between completion starts.
+    /// Paces rapid tool-call loops to reduce disk/RAM pressure.
+    #[serde(default = "crate::helpers::default_disk_read_delay_ms")]
+    pub disk_read_delay_ms: u64,
 }
 
 use std::collections::{HashMap, HashSet};
@@ -909,9 +907,8 @@ impl Default for AppState {
             shell_timeout_max_secs: crate::helpers::default_shell_timeout_max(),
             max_retries: crate::helpers::default_max_retries(),
             max_retry_wait_secs: crate::helpers::default_max_retry_wait(),
-            max_session_messages: crate::helpers::default_max_session_messages(),
             ui_display_window: crate::helpers::default_ui_display_window(),
-            ui_scroll_page: crate::helpers::default_ui_scroll_page(),
+            disk_read_delay_ms: crate::helpers::default_disk_read_delay_ms(),
         }
     }
 }

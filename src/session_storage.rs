@@ -141,7 +141,15 @@ fn atomic_write_json<T: serde::Serialize>(path: &Path, value: &T) -> std::io::Re
     Ok(())
 }
 
-pub fn save_session(project: &Project, session: &Session) -> std::io::Result<()> {
+pub fn save_session(project: &Project, session: &mut Session) -> std::io::Result<()> {
+    // Prune a clone (don't modify the in-memory session used by the UI).
+    let mut clean = session.messages.clone();
+    crate::session::prune_garbage_messages(&mut clean);
+    // Re-number so IDs are 1..N sequential (disk format contract).
+    for (i, m) in clean.iter_mut().enumerate() {
+        m.id = (i + 1) as u64;
+    }
+
     let dir = project_sessions_dir(project);
     fsutil::create_dir_all(&dir)?;
     let target = dir.join(session.filename());
@@ -169,7 +177,7 @@ pub fn save_session(project: &Project, session: &Session) -> std::io::Result<()>
     let file = SessionFile {
         id: session.id.clone(),
         label: session.label.clone(),
-        messages: session.messages.clone(),
+        messages: clean,
         next_message_id: session.next_message_id,
         provider_label: session.provider_label.clone(),
         model: session.model.clone(),
@@ -181,6 +189,19 @@ pub fn save_session(project: &Project, session: &Session) -> std::io::Result<()>
         settings_open: session.settings_open,
     };
     atomic_write_json(&target, &file)
+}
+
+/// Load all messages from disk for a session, without modifying the session.
+/// Returns an empty vec if the file is missing.
+pub fn load_all_messages(project: &Project, session: &Session) -> Vec<ChatMessage> {
+    let dir = project_sessions_dir(project);
+    let path = match find_session_file(&dir, session) {
+        Some(p) => p,
+        None => return Vec::new(),
+    };
+    let Ok(json) = fsutil::read_to_string(&path) else { return Vec::new(); };
+    let Ok(file) = serde_json::from_str::<SessionFile>(&json) else { return Vec::new(); };
+    file.messages
 }
 
 /// Load session messages from disk. Returns `true` if the file was found
@@ -249,6 +270,8 @@ pub fn delete_session_file(project: &Project, session: &Session) {
 
 /// Load messages from disk with IDs less than `before_id`.
 /// Returns up to `count` messages in ascending ID order.
+/// Uses binary-search-by-ID rather than array-offset math so it works
+/// correctly even when IDs are re-numbered (e.g., after RAM trimming).
 pub fn load_messages_before(
     project: &Project,
     session: &Session,
@@ -262,11 +285,15 @@ pub fn load_messages_before(
     };
     let Ok(json) = fsutil::read_to_string(&path) else { return Vec::new(); };
     let Ok(file) = serde_json::from_str::<SessionFile>(&json) else { return Vec::new(); };
-    let end = (before_id as usize).saturating_sub(1);
-    let start = end.saturating_sub(count);
-    if start >= end {
+    let end = file
+        .messages
+        .iter()
+        .position(|m| m.id >= before_id)
+        .unwrap_or(file.messages.len());
+    if end == 0 {
         return Vec::new();
     }
+    let start = end.saturating_sub(count);
     file.messages[start..end].to_vec()
 }
 

@@ -119,14 +119,56 @@ fn shorten_err(msg: &str) -> String {
 }
 
 fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: ChatMessage) {
-    if let Some(sid) = session_id
-        && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
-    {
+    let sid = match session_id {
+        Some(s) => s.to_string(),
+        None => return,
+    };
+    // Find indices first to avoid simultaneous mutable borrows.
+    let (sess_idx, proj_idx) = {
+        let sess = match state.sessions.iter_mut().find(|s| s.id == sid) {
+            Some(s) => s,
+            None => return,
+        };
         msg.id = sess.next_message_id;
         sess.next_message_id += 1;
         sess.total_tokens_used += msg.token_count;
         sess.messages.push(msg);
+        let pi = sess.project_id.as_ref().and_then(|pid| {
+            state.projects.iter().position(|p| p.id == *pid)
+        });
+        let si = state.sessions.iter().position(|s| s.id == sid).unwrap();
+        match pi {
+            Some(p) => (si, p),
+            None => return,
+        }
+    };
+    // Persist to JSON immediately — file is the source of truth.
+    let proj = &mut state.projects[proj_idx];
+    let sess = &mut state.sessions[sess_idx];
+    let _ = crate::session_storage::save_session(proj, sess);
+}
+
+/// Trim `sess.messages` to the display window. Full history is on disk.
+/// Only trims when messages exceed 2x the window to avoid thrashing.
+/// Re-numbers remaining messages so IDs stay sequential (load_messages_before
+/// relies on 1-based sequential IDs for its offset math).
+/// Caller must have already checkpointed to disk via prepare_request_messages_for_session.
+fn trim_session_ram(state: &mut AppState, session_id: &str) {
+    let window = state.ui_display_window;
+    if window == 0 {
+        return;
     }
+    let idx = match state.sessions.iter().position(|s| s.id == session_id) {
+        Some(i) => i,
+        None => return,
+    };
+    let len = state.sessions[idx].messages.len();
+    if len <= window * 2 {
+        return;
+    }
+    let keep = window;
+    let sess = &mut state.sessions[idx];
+    let _ = sess.messages.split_off(len - keep);
 }
 
 /// Push a message to the runtime's active session (not necessarily the viewed one).
@@ -261,6 +303,8 @@ pub struct ChatRuntime {
     pub recovery_attempts: u8,
     /// When to attempt the next recovery. None = not waiting.
     pub recovery_after: Option<std::time::Instant>,
+    /// Earliest time the next completion may start (rate limiting).
+    pub next_completion_allowed: Option<std::time::Instant>,
 }
 
 impl Default for ChatRuntime {
@@ -293,6 +337,7 @@ impl Default for ChatRuntime {
             continuation_chain: 0,
             recovery_attempts: 0,
             recovery_after: None,
+            next_completion_allowed: None,
         }
     }
 }
@@ -464,6 +509,19 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
         debug_log!("chat: start_completion skipped — stream already active");
         return;
     }
+    // Rate limit: enforce minimum delay between completion starts.
+    // If we're called before the delay has elapsed, sleep the remainder
+    // so rapid tool-call loops are naturally paced.
+    if state.disk_read_delay_ms > 0 {
+        if let Some(allowed) = runtime.next_completion_allowed {
+            let now = std::time::Instant::now();
+            if now < allowed {
+                std::thread::sleep(allowed - now);
+            }
+        }
+        runtime.next_completion_allowed =
+            Some(std::time::Instant::now() + std::time::Duration::from_millis(state.disk_read_delay_ms));
+    }
     let session_id = match runtime.active_session_id.as_deref() {
         Some(id) => id,
         None => {
@@ -498,6 +556,9 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
     };
 
     let mut messages = session::prepare_request_messages_for_session(state, session_id);
+
+    // Trim RAM now that the full history is safely checkpointed to disk.
+    trim_session_ram(state, session_id);
 
     // If we have a partial response from a previous dropped stream,
     // prepend it as context so the model can continue rather than
@@ -1723,10 +1784,15 @@ fn commit_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) {
 /// with instructions to read RESUME.md.
 fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     // Save the old session to disk before creating the new one.
-    if let Some(sess) = state.active_session()
-        && let Some(pid) = sess.project_id.as_ref()
-        && let Some(proj) = state.projects.iter().find(|p| &p.id == pid)
-    {
+    let old_info = state.active_session_id.as_ref().and_then(|sid| {
+        let sess_idx = state.sessions.iter().position(|s| s.id == *sid)?;
+        let pid = state.sessions[sess_idx].project_id.clone()?;
+        let proj_idx = state.projects.iter().position(|p| p.id == pid)?;
+        Some((sess_idx, proj_idx))
+    });
+    if let Some((sess_idx, proj_idx)) = old_info {
+        let proj = &mut state.projects[proj_idx];
+        let sess = &mut state.sessions[sess_idx];
         let _ = crate::session_storage::save_session(proj, sess);
     }
     let handoff_was_enabled = state.handoff_enabled;

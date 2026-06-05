@@ -128,33 +128,6 @@ pub fn show_window(ctx: &egui::Context, state: &mut AppState, settings: &mut Set
                                 state.max_retry_wait_secs =
                                     crate::helpers::default_max_retry_wait();
                             }
-
-                            if settings.tab == Tab::Projects
-                                && ui
-                                    .add(
-                                        egui::Button::new(
-                                            RichText::new("Browse...")
-                                                .size(11.0)
-                                                .color(Palette::TEXT_MUTED),
-                                        )
-                                        .fill(Color32::TRANSPARENT)
-                                        .stroke(Stroke::NONE)
-                                        .min_size(Vec2::new(66.0, 20.0)),
-                                    )
-                                    .on_hover_text("Browse for a project folder")
-                                    .clicked()
-                            {
-                                let current_dir = std::env::current_dir()
-                                    .map(|p| p.to_string_lossy().to_string())
-                                    .unwrap_or_else(|_| ".".to_string());
-                                ctx.data_mut(|d| {
-                                    d.insert_temp(egui::Id::new("open_new_project"), true);
-                                    d.insert_temp(
-                                        egui::Id::new("new_project_dialog_path"),
-                                        current_dir,
-                                    );
-                                });
-                            }
                         });
                     });
                 });
@@ -813,22 +786,7 @@ fn show_session_settings(ui: &mut egui::Ui, state: &mut AppState) {
                 .spacing([12.0, 8.0])
                 .min_col_width(180.0)
                 .show(ui, |ui| {
-                    ui.label(ui_helpers::field_label("API Tail Size"));
-                    ui.horizontal(|ui| {
-                        ui.add(
-                            egui::DragValue::new(&mut state.max_session_messages)
-                                .speed(10.0)
-                                .range(20..=1000),
-                        );
-                        ui.label(
-                            RichText::new("messages")
-                                .size(10.5)
-                                .color(Palette::TEXT_MUTED),
-                        );
-                    });
-                    ui.end_row();
-
-                    ui.label(ui_helpers::field_label("Display Window"));
+                    ui.label(ui_helpers::field_label("Messages in RAM"));
                     ui.horizontal(|ui| {
                         ui.add(
                             egui::DragValue::new(&mut state.ui_display_window)
@@ -843,15 +801,15 @@ fn show_session_settings(ui: &mut egui::Ui, state: &mut AppState) {
                     });
                     ui.end_row();
 
-                    ui.label(ui_helpers::field_label("Scroll Page"));
+                    ui.label(ui_helpers::field_label("Completion Delay"));
                     ui.horizontal(|ui| {
                         ui.add(
-                            egui::DragValue::new(&mut state.ui_scroll_page)
-                                .speed(5.0)
-                                .range(5..=200),
+                            egui::DragValue::new(&mut state.disk_read_delay_ms)
+                                .speed(10.0)
+                                .range(50..=5000),
                         );
                         ui.label(
-                            RichText::new("messages")
+                            RichText::new("ms")
                                 .size(10.5)
                                 .color(Palette::TEXT_MUTED),
                         );
@@ -862,9 +820,11 @@ fn show_session_settings(ui: &mut egui::Ui, state: &mut AppState) {
             ui.add_space(6.0);
             ui.label(
                 RichText::new(
-                    "API Tail: how many recent messages the model sees. \
-                     Display Window: how many are rendered in the chat panel. \
-                     Scroll Page: how many older messages load per click.",
+                    "Messages in RAM: controls how many are held in memory and displayed. \
+                     Full history is saved to disk and reloaded for API requests, \
+                     automatically pruned to fit the model's context window. \
+                     Completion Delay: minimum pause (ms) between consecutive API calls \
+                     to pace rapid tool-use loops.",
                 )
                 .size(10.0)
                 .color(Palette::TEXT_MUTED),

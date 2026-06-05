@@ -415,17 +415,23 @@ impl eframe::App for AutocodeApp {
                 sess.settings_open = settings_open;
             }
         }
-        for sess in &self.state.sessions {
-            let should_save = self.state.active_session_id.as_ref() == Some(&sess.id)
-                || self.runtimes.contains_key(&sess.id);
-            if !should_save {
-                continue;
-            }
+        let to_save: Vec<(String, Option<String>)> = self
+            .state
+            .sessions
+            .iter()
+            .filter(|sess| {
+                self.state.active_session_id.as_ref() == Some(&sess.id)
+                    || self.runtimes.contains_key(&sess.id)
+            })
+            .map(|sess| (sess.id.clone(), sess.project_id.clone()))
+            .collect();
+        for (sid, pid) in to_save {
             if let Some(proj) = self
                 .state
                 .projects
                 .iter()
-                .find(|p| Some(&p.id) == sess.project_id.as_ref())
+                .find(|p| Some(&p.id) == pid.as_ref())
+                && let Some(sess) = self.state.sessions.iter_mut().find(|s| s.id == sid)
             {
                 let _ = crate::session_storage::save_session(proj, sess);
             }
@@ -455,17 +461,23 @@ impl eframe::App for AutocodeApp {
                 sess.model = model;
             }
         }
-        for sess in &self.state.sessions {
-            let should_save = self.state.active_session_id.as_ref() == Some(&sess.id)
-                || self.runtimes.contains_key(&sess.id);
-            if !should_save {
-                continue;
-            }
+        let to_save: Vec<(String, Option<String>)> = self
+            .state
+            .sessions
+            .iter()
+            .filter(|sess| {
+                self.state.active_session_id.as_ref() == Some(&sess.id)
+                    || self.runtimes.contains_key(&sess.id)
+            })
+            .map(|sess| (sess.id.clone(), sess.project_id.clone()))
+            .collect();
+        for (sid, pid) in to_save {
             if let Some(proj) = self
                 .state
                 .projects
                 .iter()
-                .find(|p| Some(&p.id) == sess.project_id.as_ref())
+                .find(|p| Some(&p.id) == pid.as_ref())
+                && let Some(sess) = self.state.sessions.iter_mut().find(|s| s.id == sid)
             {
                 let _ = crate::session_storage::save_session(proj, sess);
             }

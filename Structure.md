@@ -24,7 +24,7 @@
   - `Role`, `ChatMessage`, `ToolMeta` — message types with reasoning support.
   - `Session` — `id`, `project_id`, `#[serde(skip)] messages`, `total_tokens_used`, `actual_tokens_used`, `created_at`, `label`. Methods: `new`, `token_count`, `record_actual_usage`, `filename()` (derives on-disk filename from sanitized label + 5-char id).
   - `ShellTask`, `ShellStatus`, `TodoItem`, `TodoList`, `DesignSettings`.
-  - `AppState` — fields include: `projects`, `active_project_id`, `providers`, `active_provider`, `sessions`, `active_session_id`, `system_prompt`, `handoff_prompt`, `shell_tasks`, `explorer` flags, `todo_list`, `sysinfo`, `design`, configurable timeouts, `ui_display_window` (default 50), `ui_scroll_page` (default 30).
+  - `AppState` — fields include: `projects`, `active_project_id`, `providers`, `active_provider`, `sessions`, `active_session_id`, `system_prompt`, `handoff_prompt`, `shell_tasks`, `explorer` flags, `todo_list`, `sysinfo`, `design`, configurable timeouts, `ui_display_window` (default 50), `disk_read_delay_ms` (default 300).
   - `load()`: inserts missing `ProviderKind` entries, prunes stale providers, migrates `data_dir_name` for old projects (via `unique_data_dir_name`), loads active session messages from disk.
   - `new_session_for_project(project_id)`: creates session, sets active, syncs project.
   - `sync_active_project()`: derives `active_project_id` from active session.
@@ -101,7 +101,7 @@
 
 - **ui_toolbar.rs** (273 lines): Project picker (uses `switch_to_project`), session picker (project-scoped ComboBox), provider picker, token meter, network indicator, Settings/+Session/Files/Handoff buttons. `+ Session` uses `new_session_for_project`.
 
-- **ui_settings.rs** (1418 lines): 7 tabs — Providers, Projects (with collapsible session lists per project: rename label, delete session, delete all; project removal purges sessions dir), Prompt, Session (API Tail Size, Display Window, Scroll Page), Timeouts, Design (full color picker + eyedropper), About.
+- **ui_settings.rs** (1418 lines): 7 tabs — Providers, Projects (with collapsible session lists per project: rename label, delete session, delete all; project removal purges sessions dir), Prompt, Session (Messages in RAM, Completion Delay), Timeouts, Design (full color picker + eyedropper), About.
 
 - **ui_explorer.rs** (590 lines): Recursive directory tree, file preview (text + images), context menu.
 

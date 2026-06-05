@@ -4,6 +4,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use egui::{
     CollapsingHeader, Color32, FontId, Frame, Key, Margin, RichText, ScrollArea, Stroke, TextEdit,
@@ -350,7 +351,7 @@ pub fn show(
                         .y
                 }))
             });
-            let count = state.ui_scroll_page;
+            let count = state.ui_display_window;
             let older = crate::session_storage::load_messages_before(proj, sess, panel_state.loaded_min_id, count);
             if !older.is_empty() {
                 let added = older.len();
@@ -582,6 +583,22 @@ fn show_session_tabs(
                 for (id, label) in sessions {
                     ui.push_id(("session_tab", &id), |ui| {
                         let active = state.active_session_id.as_deref() == Some(&id);
+                        // Check if this session has a running stream
+                        let has_activity = runtimes
+                            .get(&id)
+                            .map(|r| r.net_status.active)
+                            .unwrap_or(false);
+                        // Blink character matching toolbar's NetworkStatus::blink_dot timing
+                        let activity_char = if has_activity {
+                            let ms = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis();
+                            const STATES: &[char] = &['.', 'o', 'O', '0'];
+                            STATES[(ms / 250) as usize % STATES.len()]
+                        } else {
+                            ' '
+                        };
                         Frame::NONE
                             .fill(Color32::TRANSPARENT)
                             .stroke(Stroke::new(
@@ -601,7 +618,17 @@ fn show_session_tabs(
                             })
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
-                                    ui.spacing_mut().item_spacing.x = 4.0;
+                                    ui.spacing_mut().item_spacing.x = 2.0;
+                                    // Activity indicator before the label
+                                    if has_activity {
+                                        let ind_color = if active { Palette::TAB_ACCENT } else { theme().text_muted };
+                                        ui.label(
+                                            RichText::new(activity_char.to_string())
+                                                .size(11.5)
+                                                .color(ind_color)
+                                                .monospace(),
+                                        );
+                                    }
                                     let tab_resp = ui.add(
                                         egui::Button::new(RichText::new(&label).size(11.5).color(
                                             if active {
