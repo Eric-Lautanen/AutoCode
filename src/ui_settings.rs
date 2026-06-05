@@ -1450,6 +1450,62 @@ fn show_about(ui: &mut egui::Ui, state: &mut AppState) {
     ui.separator();
     ui.add_space(8.0);
 
+    // OpenGL / Renderer info.
+    ui_helpers::section_heading(ui, "Renderer");
+    ui.add_space(4.0);
+    if crate::has_opengl() {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("OpenGL").size(12.0).color(Palette::SUCCESS).strong());
+            ui.label(RichText::new("(Glow backend)").size(11.0).color(Palette::TEXT_MUTED));
+        });
+    } else {
+        Frame::NONE
+            .fill(egui::Color32::from_rgba_premultiplied(80, 30, 30, 40))
+            .corner_radius(ROUND_SM)
+            .stroke(egui::Stroke::new(1.0, Palette::ERROR))
+            .inner_margin(Margin::same(10))
+            .show(ui, |ui| {
+                ui.label(
+                    RichText::new("OpenGL not found — using Wgpu fallback (higher RAM usage).")
+                        .size(11.0)
+                        .color(Palette::ERROR),
+                );
+                ui.add_space(6.0);
+                ui.label(
+                    RichText::new(
+                        "AutoCode runs best with the Glow (OpenGL) renderer.\n\
+                        Install Mesa/OpenGL drivers for your system:",
+                    )
+                    .size(11.0)
+                    .color(Palette::TEXT_PRIMARY),
+                );
+                ui.add_space(4.0);
+                if ui.link("OpenGL installation guide (docs.mesa3d.org)").clicked() {
+                    #[cfg(target_os = "windows")]
+                    { let _ = std::process::Command::new("cmd").args(["/c", "start", "https://docs.mesa3d.org/install.html"]).spawn(); }
+                    #[cfg(target_os = "macos")]
+                    { let _ = std::process::Command::new("open").arg("https://docs.mesa3d.org/install.html").spawn(); }
+                    #[cfg(target_os = "linux")]
+                    { let _ = std::process::Command::new("xdg-open").arg("https://docs.mesa3d.org/install.html").spawn(); }
+                }
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(
+                        "Debian/Ubuntu:  sudo apt install libgl1-mesa-glx\n\
+                        Fedora:          sudo dnf install mesa-libGL\n\
+                        Arch:            sudo pacman -S mesa",
+                    )
+                    .size(11.0)
+                    .color(Palette::TEXT_MUTED)
+                    .monospace(),
+                );
+            });
+    }
+
+    ui.add_space(14.0);
+    ui.separator();
+    ui.add_space(8.0);
+
     Frame::NONE
         .fill(egui::Color32::from_rgba_premultiplied(80, 50, 20, 30))
         .corner_radius(ROUND_SM)

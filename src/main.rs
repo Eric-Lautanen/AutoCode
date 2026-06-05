@@ -29,8 +29,9 @@ use eframe::NativeOptions;
 use egui::Vec2;
 
 /// Returns true if the system has a usable OpenGL library available.
-/// On Windows/macOS, OpenGL is always present. On Linux, checks for libGL.so.
-fn has_opengl() -> bool {
+/// On Windows/macOS, OpenGL is always present. On Linux, checks for libGL.so
+/// across common paths and falls back to `ldconfig -p`.
+pub fn has_opengl() -> bool {
     #[cfg(target_os = "windows")]
     {
         // opengl32.dll ships with every Windows install (including minimal/container).
@@ -44,9 +45,26 @@ fn has_opengl() -> bool {
     #[cfg(target_os = "linux")]
     {
         // Check common locations for libGL.so.1 (mesa / vendor driver).
-        std::path::Path::new("/usr/lib/libGL.so.1").exists()
-            || std::path::Path::new("/usr/lib/x86_64-linux-gnu/libGL.so.1").exists()
-            || std::path::Path::new("/usr/lib/aarch64-linux-gnu/libGL.so.1").exists()
+        let known_paths = [
+            "/usr/lib/libGL.so.1",
+            "/usr/lib/libGL.so",
+            "/usr/lib/x86_64-linux-gnu/libGL.so.1",
+            "/usr/lib/aarch64-linux-gnu/libGL.so.1",
+            "/usr/lib/i386-linux-gnu/libGL.so.1",
+            "/usr/lib32/libGL.so.1",
+            "/usr/lib64/libGL.so.1",
+        ];
+        if known_paths.iter().any(|p| std::path::Path::new(p).exists()) {
+            return true;
+        }
+        // Fallback: check if ldconfig knows about libGL.
+        if let Ok(output) = std::process::Command::new("ldconfig").arg("-p").output() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if stdout.lines().any(|l| l.contains("libGL.so")) {
+                return true;
+            }
+        }
+        false
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
     {
