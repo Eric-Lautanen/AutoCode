@@ -8,39 +8,42 @@ Write code, run commands, edit files, search your codebase, and iterate — all 
 
 - **AI-Powered Autonomous Coding** — The AI can read, write, edit, search, and execute code across your projects
 - **Multi-Provider Support** — OpenRouter, NVIDIA NIM, or any OpenAI-compatible API endpoint
-- **13 Built-in Tools** — Shell execution, file I/O, grep, patch (with fuzzy matching), directory listing, file operations, web search, URL fetching, and task tracking
+- **17 Built-in Tools** — Shell execution, file I/O, grep, patch (with fuzzy matching), directory listing, file operations, web search, URL fetching, task tracking, handoff, and session naming
 - **Streaming Responses** — Real-time SSE streaming with automatic recovery and retry logic
-- **Session Management** — Multiple conversation sessions with full history preservation via summarization
+- **Session Management** — Multiple conversation sessions with full history preservation via per-session JSON storage
 - **File Explorer** — Browse your projects with gitignore-aware tree view
 - **Task Tracking** — Built-in todo list with progress tracking and priority indicators
-- **Token Budgeting** — Automatic conversation summarization when approaching context limits
+- **Token Budgeting** — Automatic message pruning when approaching context limits
 - **Dark Theme** — Custom dark color palette throughout
 - **Cross-Platform** — Windows, macOS, and Linux (via egui/eframe)
 
 ## Architecture
 
-Built in **Rust** with the **egui** immediate-mode GUI framework. The application runs as a single native binary with zero async dependencies — all concurrency is handled via `std::thread` and `std::sync::mpsc` channels. HTTP communication uses `curl` (HTTPS) or raw `TcpStream` (HTTP) with manual SSE parsing.
+Built in **Rust** with the **egui** immediate-mode GUI framework. The application runs as a single native binary with zero async dependencies — all concurrency is handled via `std::thread` and `std::sync::mpsc` channels. HTTP communication uses raw `TcpStream` + `rustls` with manual SSE parsing.
 
 ```
 src/
-├── main.rs          # Entry point
-├── app.rs           # Application setup and frame loop
-├── state.rs         # All persistent data structures
-├── chat.rs          # Chat orchestration, tool execution, summarization
-├── provider.rs      # HTTP API client for AI providers
-├── shell.rs         # Shell command execution
-├── fsutil.rs        # Filesystem utilities (Windows extended paths)
-├── explorer.rs      # File system traversal and gitignore parsing
-├── helpers.rs       # Token estimation, fuzzy matching, ID generation
-├── sysinfo.rs       # OS/hardware/tool detection
-├── theme.rs         # Custom dark theme
-├── debug.rs         # Debug logging
-├── ui_chat.rs       # Chat panel
-├── ui_explorer.rs   # File explorer panel
-├── ui_todo.rs       # Task list overlay
-├── ui_toolbar.rs    # Top toolbar
-├── ui_settings.rs   # Settings window
-└── ui_helpers.rs    # Shared UI utilities
+├── main.rs              # Entry point
+├── app.rs               # Application setup and frame loop
+├── state.rs             # All persistent data structures
+├── chat.rs              # Chat orchestration, tool execution, handoff
+├── session.rs           # Session lifecycle (prune, prepare, delete)
+├── session_storage.rs   # JSON file I/O for session persistence
+├── provider.rs          # HTTP API client for AI providers
+├── shell.rs             # Shell command execution
+├── fsutil.rs            # Filesystem utilities (Windows extended paths)
+├── explorer.rs          # File system traversal and gitignore parsing
+├── extract.rs           # HTML content extraction (scraper)
+├── helpers.rs           # Token estimation, fuzzy matching, ID generation
+├── sysinfo.rs           # OS/hardware/tool detection
+├── theme.rs             # Custom dark theme
+├── debug.rs             # Debug logging
+├── ui_chat.rs           # Chat panel
+├── ui_explorer.rs       # File explorer panel
+├── ui_todo.rs           # Task list overlay
+├── ui_toolbar.rs        # Top toolbar
+├── ui_settings.rs       # Settings window
+└── ui_helpers.rs        # Shared UI utilities
 ```
 
 ## Building
