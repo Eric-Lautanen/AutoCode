@@ -735,7 +735,7 @@ fn show_bubble(ui: &mut egui::Ui, msg: &ChatMessage, idx: usize, panel_w: f32, s
                             bottom: 8,
                         })
                         .show(ui, |ui| {
-                            render_markdown(ui, &msg.content);
+                            render_markdown(ui, &msg.content, true);
                         });
                 });
             });
@@ -843,12 +843,12 @@ fn show_bubble(ui: &mut egui::Ui, msg: &ChatMessage, idx: usize, panel_w: f32, s
                                         .stroke(Stroke::new(1.0, theme().reason_border))
                                         .inner_margin(Margin::same(8))
                                         .show(ui, |ui| {
-                                            render_markdown(ui, reasoning);
+                                            render_markdown(ui, reasoning, true);
                                         });
                                 });
                                 ui.add_space(6.0);
                             }
-                            render_markdown(ui, &msg.content);
+                            render_markdown(ui, &msg.content, true);
                         }
                     });
             });
@@ -876,7 +876,7 @@ fn render_tool_result(ui: &mut egui::Ui, msg: &ChatMessage, idx: usize, sid: &st
                 render_code_block(ui, "", &body);
             });
     } else {
-        render_markdown(ui, content);
+        render_markdown(ui, content, false);
     }
 }
 
@@ -1128,7 +1128,7 @@ fn render_structured_tool_result(
                         .color(theme().accent)
                         .strong(),
                 );
-                render_markdown(ui, &msg.content);
+                render_markdown(ui, &msg.content, false);
             } else {
                 ui.label(
                     RichText::new("[web] Fetched URL")
@@ -1143,7 +1143,7 @@ fn render_structured_tool_result(
                         .min_scrolled_height(0.0)
                         .show(ui, |ui| {
                             ui.set_min_width(ui.available_width());
-                            render_markdown(ui, &msg.content);
+                            render_markdown(ui, &msg.content, false);
                         });
                 });
             }
@@ -1200,7 +1200,7 @@ fn render_structured_tool_result(
             }
         }
         _ => {
-            render_markdown(ui, &msg.content);
+            render_markdown(ui, &msg.content, false);
         }
     }
 }
@@ -1608,9 +1608,9 @@ fn show_reasoning_bubble(ui: &mut egui::Ui, text: &str, panel_w: f32, live: bool
                             .inner_margin(Margin::same(8))
                             .show(ui, |ui| {
                                 if live {
-                                    render_markdown_streaming(ui, text);
+                                    render_markdown_streaming(ui, text, false);
                                 } else {
-                                    render_markdown(ui, text);
+                                    render_markdown(ui, text, false);
                                 }
                             });
                     });
@@ -1644,7 +1644,7 @@ fn show_streaming_bubble(ui: &mut egui::Ui, text: &str, panel_w: f32) {
             .stroke(Stroke::new(1.0, theme().accent_dim))
             .inner_margin(Margin::same(10))
             .show(ui, |ui| {
-                render_markdown_streaming(ui, text);
+                render_markdown_streaming(ui, text, true);
                 ui.label(RichText::new("|").color(theme().accent).size(13.0));
             });
     });
@@ -1797,7 +1797,7 @@ fn render_code_block_impl(ui: &mut egui::Ui, lang: &str, code: &str, _streaming:
     ui.add_space(4.0);
 }
 
-fn render_inline(ui: &mut egui::Ui, line: &str) {
+fn render_inline(ui: &mut egui::Ui, line: &str, word_wrap: bool) {
     // Headings
     if let Some(rest) = line.strip_prefix("### ") {
         ui.label(
@@ -1848,7 +1848,7 @@ fn render_inline(ui: &mut egui::Ui, line: &str) {
         let mut job = egui::text::LayoutJob {
             wrap: egui::text::TextWrapping {
                 max_width: ui.available_width(),
-                break_anywhere: true,
+                break_anywhere: !word_wrap,
                 ..Default::default()
             },
             ..Default::default()
@@ -1874,7 +1874,7 @@ fn render_inline(ui: &mut egui::Ui, line: &str) {
         let mut job = egui::text::LayoutJob {
             wrap: egui::text::TextWrapping {
                 max_width: ui.available_width(),
-                break_anywhere: true,
+                break_anywhere: !word_wrap,
                 ..Default::default()
             },
             ..Default::default()
@@ -1914,7 +1914,7 @@ fn render_inline(ui: &mut egui::Ui, line: &str) {
                     let mut job = egui::text::LayoutJob {
                         wrap: egui::text::TextWrapping {
                             max_width: max_cell_w,
-                            break_anywhere: true,
+                            break_anywhere: !word_wrap,
                             ..Default::default()
                         },
                         ..Default::default()
@@ -1940,15 +1940,15 @@ fn render_inline(ui: &mut egui::Ui, line: &str) {
         return;
     }
 
-    render_rich_inline(ui, line);
+    render_rich_inline(ui, line, word_wrap);
 }
 
 /// Render inline text with bold, italic, and inline code support.
-fn render_rich_inline(ui: &mut egui::Ui, text: &str) {
+fn render_rich_inline(ui: &mut egui::Ui, text: &str, word_wrap: bool) {
     let mut job = egui::text::LayoutJob {
         wrap: egui::text::TextWrapping {
             max_width: ui.available_width(),
-            break_anywhere: true,
+            break_anywhere: !word_wrap,
             ..Default::default()
         },
         ..Default::default()
@@ -2275,7 +2275,7 @@ fn show_system_pill(ui: &mut egui::Ui, msg: &ChatMessage) {
 
 // -- Markdown-lite renderer with bold, italic, inline code, tables -------------
 
-fn render_markdown(ui: &mut egui::Ui, text: &str) {
+fn render_markdown(ui: &mut egui::Ui, text: &str, word_wrap: bool) {
     let mut in_code = false;
     let mut code_lang = String::new();
     let mut code_buf = String::new();
@@ -2300,7 +2300,7 @@ fn render_markdown(ui: &mut egui::Ui, text: &str) {
             }
             continue;
         }
-        render_inline(ui, line);
+        render_inline(ui, line, word_wrap);
     }
 
     if in_code && !code_buf.is_empty() {
@@ -2308,7 +2308,7 @@ fn render_markdown(ui: &mut egui::Ui, text: &str) {
     }
 }
 
-fn render_markdown_streaming(ui: &mut egui::Ui, text: &str) {
+fn render_markdown_streaming(ui: &mut egui::Ui, text: &str, word_wrap: bool) {
     let mut in_code = false;
     let mut code_lang = String::new();
     let mut code_buf = String::new();
@@ -2333,7 +2333,7 @@ fn render_markdown_streaming(ui: &mut egui::Ui, text: &str) {
             }
             continue;
         }
-        render_inline(ui, line);
+        render_inline(ui, line, word_wrap);
     }
 
     if in_code && !code_buf.is_empty() {

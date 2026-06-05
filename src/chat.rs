@@ -1131,15 +1131,36 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
             }
 
             // Apply name_session synchronously on the main thread.
+            // If the session already has a meaningful label (not the default S{hash}),
+            // reject with a message to avoid infinite loops.
             for tc in &name_session_calls {
                 let args: serde_json::Value =
                     serde_json::from_str(&tc.arguments).unwrap_or_default();
-                if let Some(name) = args["name"].as_str()
-                    && let Some(sid) = runtime.active_session_id.as_deref()
-                    && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
+                let name_arg = args["name"].as_str();
+                let Some(sid) = runtime.active_session_id.as_deref() else { continue };
+                let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) else { continue };
+
+                if !sess.label.starts_with('S') {
+                    // Session already has a meaningful name — reject.
+                    let content = format!(
+                        "Session already named as '{}', ignoring duplicate name_session call.",
+                        sess.label
+                    );
+                    let mut msg = ChatMessage::new(Role::Tool, content);
+                    msg.tool_call_id = Some(tc.id.clone());
+                    msg.tool_meta = Some(ToolMeta {
+                        tool_name: "name_session".into(),
+                        is_error: true,
+                        ..Default::default()
+                    });
+                    push_to_session(state, runtime.active_session_id.as_deref(), msg);
+                    continue;
+                }
+
+                if let Some(name) = name_arg
                     && let Some(safe) = sanitize_session_name(name)
                 {
-                    sess.label = safe;
+                    sess.label = safe.clone();
                     // Persist the new label to the session file on disk.
                     if let Some(proj) = state
                         .projects
@@ -1148,6 +1169,15 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     {
                         let _ = crate::session_storage::save_session(proj, sess);
                     }
+                    // Push a confirmation result so the AI knows it succeeded.
+                    let content = format!("Session named as '{}'.", safe);
+                    let mut msg = ChatMessage::new(Role::Tool, content);
+                    msg.tool_call_id = Some(tc.id.clone());
+                    msg.tool_meta = Some(ToolMeta {
+                        tool_name: "name_session".into(),
+                        ..Default::default()
+                    });
+                    push_to_session(state, runtime.active_session_id.as_deref(), msg);
                 }
             }
 

@@ -68,7 +68,12 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                     let sessions_here: Vec<(String, String)> = state
                         .sessions
                         .iter()
-                        .filter(|s| s.project_id.as_ref() == Some(pid))
+                        .filter(|s| {
+                            s.project_id.as_ref() == Some(pid)
+                                && state.projects.iter().find(|p| &p.id == pid)
+                                    .map(|proj| crate::session_storage::session_exists(proj, s))
+                                    .unwrap_or(true)
+                        })
                         .map(|s| (s.id.clone(), s.label.clone()))
                         .collect();
                     if !sessions_here.is_empty() {
@@ -96,6 +101,11 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                                     });
                                 }
                             });
+                    }
+                    // New session button next to the session picker.
+                    if lit_btn(ui, "+ Session", false).clicked() {
+                        state.new_session_for_project(Some(pid.clone()));
+                        session::ensure_session(state);
                     }
                 }
 
@@ -159,12 +169,6 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                     // Settings (lights up when settings window is open).
                     if lit_btn(ui, "Settings", state.settings_open).clicked() {
                         state.settings_open = !state.settings_open;
-                    }
-
-                    // New session (momentary, no persistent state).
-                    if lit_btn(ui, "+ Session", false).clicked() {
-                        state.new_session_for_project(state.active_project_id.clone());
-                        session::ensure_session(state);
                     }
 
                     // Explorer toggle (lights up when explorer is open).
