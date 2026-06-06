@@ -9,7 +9,7 @@ use crate::state::{AppState, Project, SecretString};
 
 // -- ID & Time -----------------------------------------------------------------
 
-static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
+pub(crate) static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 const ID_CHARSET: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
 

@@ -444,6 +444,8 @@ impl eframe::App for AutocodeApp {
             }
         }
 
+        std::thread::yield_now();
+
         if let Some(lock) = autocode_core::fsutil::TEMP_FILES.get() {
             let mut temp_files = match lock.lock() {
                 Ok(guard) => guard,

@@ -42,7 +42,7 @@ pub fn run_command_in_dir(command: &str, cwd: Option<&str>) -> (ShellTask, Recei
     });
 
     // Receive the child PID once the os process is spawned.
-    let pid = pid_rx.recv().ok();
+    let pid = pid_rx.recv_timeout(std::time::Duration::from_secs(5)).ok();
 
     let task = ShellTask {
         id: task_id,

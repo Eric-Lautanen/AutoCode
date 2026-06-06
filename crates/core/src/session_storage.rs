@@ -102,7 +102,8 @@ struct SessionFile {
 fn atomic_write_json<T: serde::Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     let pid = std::process::id();
-    let tmp = dir.join(format!(".tmp_{}_{}.json", pid, crate::helpers::unix_now()));
+    let n = crate::helpers::ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = dir.join(format!(".tmp_{}_{}.json", pid, n));
     let json = serde_json::to_string_pretty(value)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     {

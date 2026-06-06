@@ -54,13 +54,11 @@ fn write_log(s: &str) {
             && meta.len() > 1024 * 1024
         {
             let path = log_path();
-            drop(f);
             rotate_log(&path);
             if let Ok(new_file) = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(&path)
-                && let Ok(mut f) = LOG.lock()
             {
                 *f = new_file;
             }
