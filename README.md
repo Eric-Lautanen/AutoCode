@@ -1,10 +1,8 @@
 # AutoCode
 
-> **⚠️ Development Status** — This project is under active development and not yet ready for general use. A stable release is coming soon.
+**AutoCode** is an autonomous AI agent — a native desktop application that connects to large language models and gives them full access to your filesystem and shell, enabling them to independently perform software engineering tasks.
 
-**AutoCode** is an autonomous AI coding assistant — a native desktop application that connects to large language models and gives them full access to your filesystem and shell, enabling them to independently perform software engineering tasks.
-
-Write code, run commands, edit files, search your codebase, and iterate — all through a chat interface where the AI acts as your autonomous agent.
+Write code, run commands, edit files, search your codebase, and iterate — all through a chat interface where the AI operates as your autonomous agent. Not a harness or scaffold — a single self-contained agent application.
 
 ## Features
 
@@ -36,8 +34,8 @@ Built in **Rust** (edition 2024) with the **egui** immediate-mode GUI framework.
 │   └── linux/icon-256.png
 ├── crates/
 │   ├── core/          — autocode-core
-│   │   ├── state.rs              (914) # AppState, Project, Session, ApiProvider, ChatMessage, manifest
-│   │   ├── helpers.rs           (1941) # ID gen, token estimation, path resolution, fuzzy matching, regex
+│   │   ├── state.rs              (921) # AppState, Project, Session, ApiProvider, ChatMessage, manifest
+│   │   ├── helpers.rs           (929) # ID gen, token estimation, path resolution, fuzzy matching, regex
 │   │   ├── fsutil.rs              (128) # exe_dir, extended_path, read/write wrappers, TEMP_FILES
 │   │   ├── debug.rs                (85) # file logging, debug_log! macro, panic_msg
 │   │   ├── theme.rs               (147) # dark Visuals+Style, Palette (20 colors), font loader
@@ -45,21 +43,21 @@ Built in **Rust** (edition 2024) with the **egui** immediate-mode GUI framework.
 │   │   ├── sysinfo.rs             (677) # OS/CPU/GPU/RAM/tool detection, has_opengl
 │   │   └── session_storage.rs    (289) # JSON session persistence, atomic writes, orphan scavenge
 │   ├── ai/            — autocode-ai
-│   │   ├── chat.rs             (2764) # orchestration: send_message, streaming, 16 tool handlers
-│   │   ├── provider.rs         (1473) # raw TCP+rustls HTTP client, SSE parsing, model list fetch
+│   │   ├── chat.rs             (2847) # orchestration: send_message, streaming, 17 tool handlers
+│   │   ├── provider.rs         (1512) # raw TCP+rustls HTTP client, SSE parsing, model list fetch
 │   │   └── session.rs           (122) # system prompt seeding, message prep, session delete
 │   ├── fs/             — autocode-fs
 │   │   ├── shell.rs             (296) # async shell execution via channels, file extraction
-│   │   └── explorer.rs          (468) # gitignore-aware list_dir/read_file/glob/grep
+│   │   └── explorer.rs          (471) # gitignore-aware list_dir/read_file/glob/grep
 │   ├── ui/             — autocode-ui
-│   │   ├── ui_chat.rs          (2352) # chat panel: bubbles, markdown, diff, streaming
+│   │   ├── ui_chat.rs          (2353) # chat panel: bubbles, markdown, diff, streaming
 │   │   ├── ui_settings.rs     (1441) # 7-tab settings window
 │   │   ├── ui_explorer.rs      (586) # file tree, preview, rename
 │   │   ├── ui_toolbar.rs       (273) # project/session/provider pickers
 │   │   ├── ui_helpers.rs       (422) # shared UI utilities
 │   │   └── ui_todo.rs          (271) # floating task list
 │   └── autocode/     — binary
-│       ├── main.rs               (51) # entry point, rustls init, eframe::run_native
+│       ├── main.rs               (39) # entry point, rustls init, eframe::run_native
 │       └── app.rs               (427) # AutocodeApp (eframe::App), frame loop, state wiring
 ```
 
