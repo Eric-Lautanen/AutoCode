@@ -2780,9 +2780,9 @@ fn auto_execute(state: &mut AppState, runtime: &mut ChatRuntime, response: &str)
         .map(|p| p.allow_project_escape)
         .unwrap_or(false);
     let root = project_root_for_session(state, session_id);
-    let files = shell::extract_files(response);
+    let files = autocode_fs::helpers::extract_files(response);
     if !files.is_empty() {
-        let written = shell::write_extracted_files(&root, &files, allow_escape);
+        let written = autocode_fs::helpers::write_extracted_files(&root, &files, allow_escape);
         push_runtime(
             state,
             runtime,
