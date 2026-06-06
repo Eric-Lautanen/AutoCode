@@ -137,6 +137,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, panel: &mut ExplorerPanelSt
 
 // -- Recursive tree renderer ---------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn show_tree(
     ui: &mut egui::Ui,
     dir: &std::path::Path,

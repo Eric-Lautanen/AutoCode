@@ -204,16 +204,16 @@ pub fn show(
 
     // Phase 2: auto-load or click-to-load older messages.
     // Check if user is near the top of the scroll area (within ~5 messages).
-    if panel_state.loaded_min_id > 1 {
-        if let Some(sa_id) = panel_state.scroll_area_id {
-            let sa_state = ui.ctx().data_mut(|d| {
-                d.get_persisted::<egui::scroll_area::State>(sa_id)
-                    .unwrap_or_default()
-            });
-            let threshold = 300.0;
-            if sa_state.offset.y < threshold && !panel_state.scroll_to_bottom {
-                panel_state.wants_older_messages = true;
-            }
+    if panel_state.loaded_min_id > 1
+        && let Some(sa_id) = panel_state.scroll_area_id
+    {
+        let sa_state = ui.ctx().data_mut(|d| {
+            d.get_persisted::<egui::scroll_area::State>(sa_id)
+                .unwrap_or_default()
+        });
+        let threshold = 300.0;
+        if sa_state.offset.y < threshold && !panel_state.scroll_to_bottom {
+            panel_state.wants_older_messages = true;
         }
     }
     if panel_state.wants_older_messages && panel_state.loaded_min_id > 1 {
@@ -231,13 +231,13 @@ pub fn show(
         {
             // Capture scroll offset to anchor view after prepending.
             let anchor_sid = state.active_session_id.clone().unwrap_or_default();
-            let prev_offset = panel_state.scroll_area_id.and_then(|sa_id| {
-                Some(ui.ctx().data_mut(|d| {
+            let prev_offset = panel_state.scroll_area_id.map(|sa_id| {
+                ui.ctx().data_mut(|d| {
                     d.get_persisted::<egui::scroll_area::State>(sa_id)
                         .unwrap_or_default()
                         .offset
                         .y
-                }))
+                })
             });
             let count = state.ui_display_window;
             let older = autocode_core::session_storage::load_messages_before(proj, sess, panel_state.loaded_min_id, count);

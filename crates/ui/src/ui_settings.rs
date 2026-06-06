@@ -668,7 +668,7 @@ fn show_projects(ui: &mut egui::Ui, state: &mut AppState) {
                     .iter()
                     .filter(|s| {
                         s.project_id.as_deref() == Some(&p.id)
-                            && autocode_core::session_storage::session_exists(&p, s)
+                            && autocode_core::session_storage::session_exists(p, s)
                     })
                     .collect();
                 if !proj_sessions.is_empty() {

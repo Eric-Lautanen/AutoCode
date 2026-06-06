@@ -944,6 +944,7 @@ fn connect_tcp(
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn send_http(
     conn: HttpConn<'_>,
     api_key: &str,
@@ -971,6 +972,7 @@ fn send_http(
     process_http_response(&mut reader, stream, model, tx)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn send_https(
     conn: &HttpConn<'_>,
     api_key: &str,

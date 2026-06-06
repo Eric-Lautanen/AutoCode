@@ -2909,7 +2909,7 @@ fn auto_name_session(state: &mut AppState, text: &str) {
                 && !t.starts_with('|')
         })
         .map(|l| {
-            let t = l.trim().trim_start_matches(|c: char| c == '#' || c == '*' || c == '-');
+            let t = l.trim().trim_start_matches(['#', '*', '-']);
             t.trim()
         })
         .filter(|n| !n.is_empty())

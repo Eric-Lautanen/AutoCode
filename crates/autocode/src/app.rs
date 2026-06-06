@@ -215,22 +215,16 @@ impl eframe::App for AutocodeApp {
 
         // Prune old completed shell tasks to prevent unbounded growth.
         // Keep at most 200 entries; remove the oldest completed/failed ones first.
+        use autocode_core::state::ShellStatus;
         if self.state.shell_tasks.len() > 200 {
-            let mut i = 0;
-            self.state.shell_tasks.retain(|t| {
-                i += 1;
-                i <= 150
-                    || !matches!(
-                        t.status,
-                        autocode_core::state::ShellStatus::Done { .. }
-                            | autocode_core::state::ShellStatus::Failed(_)
-                    )
-            });
-            // If still over the cap, keep only the most recent 200.
+            let excess = self.state.shell_tasks.len() - 200;
+            self.state.shell_tasks.extract_if(
+                0..excess,
+                |t| matches!(t.status, ShellStatus::Done { .. } | ShellStatus::Failed(_)),
+            ).for_each(drop);
             if self.state.shell_tasks.len() > 200 {
-                self.state
-                    .shell_tasks
-                    .drain(..self.state.shell_tasks.len() - 200);
+                let extra = self.state.shell_tasks.len() - 200;
+                self.state.shell_tasks.drain(0..extra);
             }
         }
 
