@@ -486,6 +486,12 @@ pub struct Session {
     /// Messages are evicted from RAM until the session is reopened.
     #[serde(default)]
     pub closed: bool,
+    /// Estimated token count for the full disk-backed message list + tool definitions.
+    /// Populated by prepare_request_messages_for_session(). More accurate than
+    /// token_count() (which only covers in-RAM messages) but less accurate than
+    /// actual_tokens_used (which is the provider's official count).
+    #[serde(default)]
+    pub estimated_full_tokens: usize,
 }
 
 impl Session {
@@ -507,6 +513,7 @@ impl Session {
             show_explorer: true,
             settings_open: false,
             closed: false,
+            estimated_full_tokens: 0,
         }
     }
 

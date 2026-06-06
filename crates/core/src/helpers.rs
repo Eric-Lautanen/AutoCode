@@ -845,6 +845,8 @@ pub fn budget_fraction(state: &AppState) -> f32 {
         .map(|s| {
             if s.actual_tokens_used > 0 {
                 s.actual_tokens_used
+            } else if s.estimated_full_tokens > 0 {
+                s.estimated_full_tokens
             } else {
                 s.token_count()
             }
@@ -869,6 +871,8 @@ pub fn usage_display(state: &AppState) -> String {
     let (used, label) = if let Some(s) = sess {
         if s.actual_tokens_used > 0 {
             (s.actual_tokens_used, "actual")
+        } else if s.estimated_full_tokens > 0 {
+            (s.estimated_full_tokens, "est")
         } else {
             (s.token_count(), "est")
         }

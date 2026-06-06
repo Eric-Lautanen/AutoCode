@@ -1,6 +1,6 @@
 // session.rs -- Session management.
 
-use crate::provider::ApiMessage;
+use crate::provider::{ApiMessage, tool_definitions};
 use autocode_core::state::{AppState, ChatMessage, Role};
 
 /// Seed the system prompt into the active session if its messages are empty.
@@ -92,6 +92,22 @@ pub fn prepare_request_messages_for_session(
         })
         .unwrap_or_default()
     };
+
+    // Compute an estimate for the full disk-backed message list + tool definitions.
+    // This is stored on the session so the UI can display it instead of the
+    // in-RAM-only token_count().
+    {
+        let filtered: Vec<ChatMessage> = full_messages
+            .iter()
+            .filter(|m| m.role != Role::Error)
+            .cloned()
+            .collect();
+        let tools = tool_definitions();
+        let estimated = autocode_core::helpers::estimate_full_request_tokens(&filtered, Some(&tools));
+        if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == session_id) {
+            sess.estimated_full_tokens = estimated;
+        }
+    }
 
     autocode_core::debug_log!(
         "api_prep: session={} disk_msgs={} ids=[{}..{}]",

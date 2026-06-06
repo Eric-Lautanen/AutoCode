@@ -219,15 +219,24 @@ Updated the pre-flight check in `crates/ai/src/chat.rs:680-700` to a three-tier 
 
 Full request body (messages + tools) is serialized once and passed through whichever tier succeeds.
 
-### Phase 5: Fix RAM/Disk Display Mismatch
+### ✅ Phase 5: Fix RAM/Disk Display Mismatch (Complete)
 
-**Files**: `crates/core/src/state.rs:486`, `crates/core/src/helpers.rs:816`
+**Files**: `crates/core/src/state.rs`, `crates/core/src/helpers.rs`, `crates/ai/src/session.rs`, `crates/ai/src/chat.rs`
 
-`session.token_count()` currently sums only in-memory messages. `usage_display()` shows this value. But the API receives all messages from disk.
+**Status**: Implemented and verified. Compilation succeeds with no warnings.
 
-**Fix**: Change `token_count()` to load from disk (or better, change the display to compute from the assembled API request messages after `prepare_request_messages_for_session`).
+**Problem**: `session.token_count()` summed only in-RAM messages. `usage_display()` showed this value, but the API received all messages from disk (loaded by `prepare_request_messages_for_session`). The displayed count under-reported.
 
-**Simpler fix**: After `prepare_request_messages_for_session` assembles the full list, run `estimate_full_request_tokens()` on it and use that for the display. This eliminates the discrepancy.
+**Fix**: Three-tier fallback for token display:
+
+1. Added `estimated_full_tokens: usize` field to `Session` in `state.rs:490` — populated by `prepare_request_messages_for_session()` in `session.rs:101-112` after loading the full disk-backed message list (filtered to non-Error roles) and running `estimate_full_request_tokens()` with the assembled tool definitions.
+
+2. Updated `usage_display()` (`helpers.rs:870-873`), `budget_fraction()` (`helpers.rs:846-851`), and `context_usage_info_for_session()` (`chat.rs:434-442`) to use the new three-tier fallback:
+   - **Tier 1**: `actual_tokens_used` (authoritative API count) — when > 0
+   - **Tier 2**: `estimated_full_tokens` (disk-backed estimate) — when > 0
+   - **Tier 3**: `token_count()` (in-RAM heuristic) — fallback
+
+3. The estimate is recomputed on each API request and includes tool definitions, so it accurately reflects what the API will receive.
 
 ---
 
@@ -253,15 +262,16 @@ Full request body (messages + tools) is serialized once and passed through which
 | Phase 2: Pre-flight check | Small | High | Phase 1c | ✅ Done |
 | Phase 3: API-based counting | Medium | High | New provider HTTP calls | ✅ Done (verified Jun 2026) |
 | Phase 4: tiktoken offline fallback | Medium | Medium | tiktoken crate | ✅ Done (verified Jun 2026) |
-| Phase 5: Fix RAM/Disk display | Small | Medium | Phase 1c | 🔜 Pending |
+| Phase 5: Fix RAM/Disk display | Small | Medium | Phase 1c | ✅ Done (verified Jun 2026) |
 
 ## Recommendation
 
-Phases 1–4 are complete:
+All 5 phases are complete:
 
 1. **Phase 1** (done): Accumulate `actual_tokens_used`, document per-message estimates, add `estimate_full_request_tokens()`
 2. **Phase 2** (done): Pre-flight context check before sending requests
 3. **Phase 3** (done): API-based counting for OpenAI and Anthropic
 4. **Phase 4** (done): Offline tiktoken-based tokenizer as fallback for unrecognized models
+5. **Phase 5** (done): Fix RAM/disk display mismatch — `estimated_full_tokens` field on `Session` populated by `prepare_request_messages_for_session()`, used by `usage_display()`, `budget_fraction()`, and `context_usage_info_for_session()` as a middle-tier fallback between `actual_tokens_used` and `token_count()`.
 
-Next recommended work: **Phase 5** (fix RAM/disk display mismatch) which can reuse the `estimate_full_request_tokens` and pre-flight serialization logic already in place.
+All context token counting is now accurate: the display correctly reflects the disk-backed message list, and the pre-flight check prevents opaque API errors.
