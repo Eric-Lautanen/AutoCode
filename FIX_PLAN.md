@@ -110,22 +110,26 @@ New function in `helpers.rs`:
 - Serializes the relevant API-facing message fields (role, content, tool_call_id, tool_calls, reasoning_content) into JSON, optionally includes tool definitions, then applies the heuristic text token estimator to the full serialized string
 - Provides a better upper bound for the Phase 2 pre-flight check by accounting for JSON structural overhead and tool call tokens that `estimate_tokens(&content)` misses
 
-### Phase 2: Pre-Flight Context Check
+### ✅ Phase 2: Pre-Flight Context Check (Complete)
 
-**Files**: `crates/ai/src/chat.rs:613`
+**Files**: `crates/ai/src/chat.rs:654`, `crates/ai/src/provider.rs:264`
 
-Before `start_completion` sends the request:
+**Status**: Implemented and verified. Compilation succeeds with no warnings.
 
-```rust
-let messages = session::prepare_request_messages_for_session(state, session_id);
-let estimated = estimate_full_request_tokens(&messages, &estimate_tool_defs_tokens());
-let max_context = provider.max_context_tokens as usize;
-let max_output = max_tokens as usize;
+#### 2a. Made `tool_definitions()` accessible
 
-if estimated + max_output > max_context {
-    // Emit warning, trigger handoff, or truncate.
-}
-```
+Changed visibility from `fn tool_definitions()` to `pub(crate) fn tool_definitions()` in `provider.rs:264` so the pre-flight check in `chat.rs` can call it to estimate tool definition tokens.
+
+#### 2b. Pre-flight check in `start_completion`
+
+Inserted before `CompletionRequest` construction at `chat.rs:654-709`:
+
+1. Serializes messages (role, content, tool_call_id, tool_calls, reasoning_content) + tool definitions into the same JSON format the API will receive
+2. Estimates tokens using `core_helpers::estimate_tokens()` on the full serialized JSON
+3. Calculates `estimated + max_output > max_context` using the provider's configured `max_context_tokens` and the computed `max_tokens`
+4. On overflow:
+   - If `handoff_enabled` → calls `handle_handoff()` to create a fresh session and continues there
+   - If handoff is disabled → pushes an error message with estimated/context/max details and returns early
 
 This prevents the opaque API error the user currently gets when context overflows.
 
@@ -244,11 +248,13 @@ When no counting API is available, use the offline tokenizer to count the full s
 | Phase 1a: Accumulate actual_tokens_used | Small | Medium | None | ✅ Done (verified Jun 2026) |
 | Phase 1b: Per-message token count docs | Small | Low | None | ✅ Done (verified Jun 2026) |
 | Phase 1c: Full-request serialization counting | Medium | Medium | None | ✅ Done (verified Jun 2026) |
-| Phase 2: Pre-flight check | Small | High | Phase 1c | 🔜 Pending |
+| Phase 2: Pre-flight check | Small | High | Phase 1c | ✅ Done |
 | Phase 3: API-based counting | Medium | High | New provider HTTP calls | 🔜 Pending |
 | Phase 4: tiktoken offline fallback | Medium | Medium | Add crate dependency | 🔜 Pending |
 | Phase 5: Fix RAM/Disk display | Small | Medium | Phase 1c | 🔜 Pending |
 
 ## Recommendation
 
-Start with Phase 1a + 2 (quick wins: fix accumulation, add pre-flight check), then Phase 5 (fix display mismatch), then Phase 3 (API counting for highest accuracy), then Phase 4 (offline fallback for models without counting APIs).
+Start with Phase 1 + 2 (quick wins done: fix accumulation, full-request counting, pre-flight check), then Phase 5 (fix display mismatch), then Phase 3 (API counting for highest accuracy), then Phase 4 (offline fallback for models without counting APIs).
+
+Phases 1 and 2 are complete. Next recommended work: Phase 5 (fix RAM/disk display mismatch) which can reuse the `estimate_full_request_tokens` and pre-flight serialization logic already in place.

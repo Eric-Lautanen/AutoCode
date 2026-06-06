@@ -10,7 +10,7 @@ use std::sync::mpsc::Receiver;
 use crate::{
     helpers,
     provider::{
-        ApiMessage, CompletionRequest, ProviderClient, ProviderEvent, ToolCall, ToolChoice,
+        ApiMessage, CompletionRequest, ProviderClient, ProviderEvent, ToolCall, ToolChoice, tool_definitions,
     },
     session,
 };
@@ -650,6 +650,63 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
     } else {
         provider.reasoning_effort.clone()
     };
+
+    // Pre-flight context check: estimate if this request fits within the
+    // model's context window before sending. Prevents opaque API errors.
+    {
+        let tools_json = tool_definitions();
+        let msgs: Vec<serde_json::Value> = messages.iter().map(|m| {
+            let mut obj = serde_json::json!({
+                "role": m.role,
+                "content": m.content,
+            });
+            if let Some(id) = &m.tool_call_id {
+                obj["tool_call_id"] = serde_json::json!(id);
+            }
+            if let Some(tc) = &m.tool_calls {
+                obj["tool_calls"] = tc.clone();
+            }
+            if let Some(rc) = &m.reasoning_content {
+                obj["reasoning_content"] = serde_json::json!(rc);
+            }
+            obj
+        }).collect();
+        let body = serde_json::json!({
+            "messages": msgs,
+            "tools": tools_json,
+        });
+        let json_str = serde_json::to_string(&body).unwrap_or_default();
+        let estimated = core_helpers::estimate_tokens(&json_str);
+        let max_context = provider.max_context_tokens as usize;
+        let max_output = max_tokens as usize;
+
+        if estimated + max_output > max_context {
+            debug_log!(
+                "chat: pre-flight context check FAILED: estimated={} max_output={} max_context={}",
+                estimated, max_output, max_context
+            );
+            if state.handoff_enabled {
+                handle_handoff(state, runtime);
+                return;
+            } else {
+                runtime.status = "Context window would be exceeded.".into();
+                push_runtime(
+                    state,
+                    runtime,
+                    ChatMessage::new(
+                        Role::Error,
+                        format!(
+                            "This request would exceed the model's context window \
+                             (estimated {} + {} output > {} max). \
+                             Enable auto-handoff in Settings or reduce conversation length.",
+                            estimated, max_output, max_context
+                        ),
+                    ),
+                );
+                return;
+            }
+        }
+    }
 
     let req = CompletionRequest {
         messages,
