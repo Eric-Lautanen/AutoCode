@@ -24,56 +24,42 @@ Write code, run commands, edit files, search your codebase, and iterate — all 
 
 Built in **Rust** (edition 2024) with the **egui** immediate-mode GUI framework. The application runs as a single native binary with zero async dependencies — all concurrency is handled via `std::thread` and `std::sync::mpsc` channels. HTTP communication uses raw `TcpStream` + `rustls` (ring provider) with manual SSE parsing.
 
-```
-src/
-├── main.rs              # Entry point, OpenGL detection, renderer selection
-├── app.rs               # Application setup, frame loop, temp file tracking
-├── state.rs             # All persistent data structures, provider/model manifests
-├── chat.rs              # Chat orchestration, streaming, tool execution (16+ handlers)
-├── session.rs           # Session lifecycle (seed, prune, prepare, delete)
-├── session_storage.rs   # JSON file I/O with atomic writes, orphan scavenger
-├── provider.rs          # HTTP API client, SSE streaming, tool definitions
-├── shell.rs             # Shell command execution in background threads
-├── fsutil.rs            # Filesystem utilities (Windows extended \\?\ paths)
-├── explorer.rs          # File system traversal with gitignore parsing
-├── extract.rs           # HTML content extraction with search cache (TTL)
-├── helpers.rs           # Token estimation, fuzzy matching, ID generation, path resolution
-├── sysinfo.rs           # OS/hardware/tool detection (Win32 FFI, /proc, subprocess)
-├── theme.rs             # Custom dark theme with system emoji font support
-├── debug.rs             # File-based debug logging with rotation (~1 MB)
-├── ui_chat.rs           # Chat panel: markdown rendering, diff views, streaming bubbles
-├── ui_explorer.rs       # File explorer panel with rename support
-├── ui_todo.rs           # Task list overlay window
-├── ui_toolbar.rs        # Top toolbar: project/session/provider pickers, action buttons
-├── ui_settings.rs       # Settings window: 7 tabs (Providers, Projects, Prompt, Session, Timeouts, Design, About)
-└── ui_helpers.rs        # Shared UI utilities (time formatting, tool summary, screen sampling)
-```
+### Workspace
 
-### Module Sizes (LOC)
-
-| Module | Lines | Purpose |
-|--------|-------|---------|
-| `helpers.rs` | 1,923 | Utility functions (ID gen, fuzzy match, token estimation) |
-| `chat.rs` | 2,827 | Core AI orchestration loop |
-| `ui_chat.rs` | 2,427 | Chat panel UI |
-| `ui_settings.rs` | 1,599 | Settings window |
-| `provider.rs` | 1,561 | HTTP/SSE client |
-| `state.rs` | 1,042 | Persistent state |
-| `sysinfo.rs` | 698 | System detection |
-| `ui_explorer.rs` | 630 | File explorer |
-| `explorer.rs` | 516 | Gitignore-aware traversal |
-| `app.rs` | 487 | App shell |
-| `ui_helpers.rs` | 454 | Shared UI utilities |
-| `extract.rs` | 327 | HTML extraction |
-| `shell.rs` | 313 | Background command execution |
-| `session_storage.rs` | 296 | JSON persistence |
-| `ui_todo.rs` | 290 | Task list overlay |
-| `ui_toolbar.rs` | 303 | Top toolbar |
-| `theme.rs` | 180 | Dark theme styling |
-| `session.rs` | 158 | Session lifecycle |
-| `main.rs` | 123 | Entry point |
-| `debug.rs` | 95 | Debug logging |
-| `fsutil.rs` | 108 | Extended path filesystem wrappers |
+```
+├── Cargo.toml                          # workspace root (5 crate members)
+├── .cargo/config.toml                  # +crt-static for MSVC + musl targets
+├── assets/
+│   ├── models.json                     # provider/model manifest
+│   └── linux/icon-256.png
+├── crates/
+│   ├── core/          — autocode-core
+│   │   ├── state.rs              (914) # AppState, Project, Session, ApiProvider, ChatMessage, manifest
+│   │   ├── helpers.rs           (1941) # ID gen, token estimation, path resolution, fuzzy matching, regex
+│   │   ├── fsutil.rs              (128) # exe_dir, extended_path, read/write wrappers, TEMP_FILES
+│   │   ├── debug.rs                (85) # file logging, debug_log! macro, panic_msg
+│   │   ├── theme.rs               (147) # dark Visuals+Style, Palette (20 colors), font loader
+│   │   ├── extract.rs             (298) # HTML scraping (scraper), DDG results, search cache
+│   │   ├── sysinfo.rs             (677) # OS/CPU/GPU/RAM/tool detection, has_opengl
+│   │   └── session_storage.rs    (289) # JSON session persistence, atomic writes, orphan scavenge
+│   ├── ai/            — autocode-ai
+│   │   ├── chat.rs             (2764) # orchestration: send_message, streaming, 16 tool handlers
+│   │   ├── provider.rs         (1473) # raw TCP+rustls HTTP client, SSE parsing, model list fetch
+│   │   └── session.rs           (122) # system prompt seeding, message prep, session delete
+│   ├── fs/             — autocode-fs
+│   │   ├── shell.rs             (296) # async shell execution via channels, file extraction
+│   │   └── explorer.rs          (468) # gitignore-aware list_dir/read_file/glob/grep
+│   ├── ui/             — autocode-ui
+│   │   ├── ui_chat.rs          (2352) # chat panel: bubbles, markdown, diff, streaming
+│   │   ├── ui_settings.rs     (1441) # 7-tab settings window
+│   │   ├── ui_explorer.rs      (586) # file tree, preview, rename
+│   │   ├── ui_toolbar.rs       (273) # project/session/provider pickers
+│   │   ├── ui_helpers.rs       (422) # shared UI utilities
+│   │   └── ui_todo.rs          (271) # floating task list
+│   └── autocode/     — binary
+│       ├── main.rs               (51) # entry point, rustls init, eframe::run_native
+│       └── app.rs               (427) # AutocodeApp (eframe::App), frame loop, state wiring
+```
 
 ## Building
 
@@ -89,6 +75,19 @@ cargo build --release
 ```
 
 The binary will be at `target/release/autocode`.
+
+### Static Linking
+
+```sh
+# Windows — single .exe, no vc_redist
+cargo build --target x86_64-pc-windows-msvc --release
+
+# Linux — static musl libc (still needs GPU drivers + display server at runtime)
+cargo build --target x86_64-unknown-linux-musl --release
+
+# macOS — system frameworks remain dynamic; distribute as .app bundle
+cargo build --release
+```
 
 ### Renderer Selection
 
@@ -137,7 +136,7 @@ AutoCode persists its state (API keys, provider settings, projects, prompts, ses
 - API keys are stored using a `SecretString` type that zeroes heap memory on drop
 - Shell commands are scoped to the project directory
 - Path traversal attacks (e.g., `../../etc/passwd`) are detected and blocked with a cached resolver
-- Temporary files (shell scripts, extracted content) are tracked in `TEMP_FILES` and cleaned up on exit
+- Temporary files (shell scripts, extracted content) are tracked and cleaned up on exit
 - Session files use atomic writes (temp file + rename) to prevent corruption
 
 ## Tools
