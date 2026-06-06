@@ -20,7 +20,7 @@
 
 ### Dedicated Token Counting APIs
 
-Every major provider now offers a server-side counting endpoint:
+Every major provider now offers a server-side counting endpoint (confirmed June 2026):
 
 | Provider | Endpoint | What it counts |
 |----------|----------|-----------------|
@@ -30,6 +30,8 @@ Every major provider now offers a server-side counting endpoint:
 | **Google Gemini** | `countTokens()` in SDK | Contents, tools — SentencePiece-based |
 | **Mistral** | `mistral_common` package | SentencePiece BPE — text only |
 
+**New (2026)**: The `tiktoken` Rust crate v3.x now supports `deepseek_v3`, `llama3`, `qwen2`, and `mistral_v3` encodings natively — no separate tokenizer needed for these models.
+
 **Key finding**: Both OpenAI and Anthropic explicitly state that local tokenizers are insufficient:
 
 > OpenAI: *"Local tokenizers like tiktoken work for plain text, but they have limitations — images and files are not supported, tools and schemas add tokens that are hard to count locally, model-specific behavior can change tokenization."*
@@ -38,10 +40,10 @@ Every major provider now offers a server-side counting endpoint:
 
 ### Open-Source Tokenizer Libraries
 
-| Library | Lang | Stars | Notes |
-|---------|------|-------|-------|
-| **tiktoken** (OpenAI) | Rust + Python | 18.4k | Fast BPE, covers o200k_base / cl100k_base etc. Pure Rust core, cdylib. |
-| **tokenizers** (HuggingFace) | Rust + Python | 10.8k | General-purpose: BPE, WordPiece, Unigram. 71.9% Rust. |
+| Library | Lang | Version (Jun 2026) | Notes |
+|---------|------|-------------------|-------|
+| **tiktoken** (rust-tiktoken) | Rust | **3.3.0** | Fast BPE, covers 11 encodings across 6 providers: OpenAI (`cl100k_base`, `o200k_base`, `o200k_harmony`, `p50k_base`, `p50k_edit`, `r50k_base`, `gpt2`), Meta (`llama3`), DeepSeek (`deepseek_v3`), Alibaba (`qwen2`), Mistral (`mistral_v3`). Pure Rust (edition 2024). Deps: base64 0.22, regex 1, rustc-hash 2, ruzstd 0.8. Optional: rayon 1 for parallel. |
+| **tokenizers** (HuggingFace) | Rust | **0.23.1** | General-purpose: BPE, WordPiece, Unigram. Heavier dependency tree (ahash, onig, rand 0.9, serde, thiserror 2, unicode-segmentation, etc.) |
 | **anthropic-tokenizer-typescript** | TypeScript | 106 | Explicitly marked inaccurate for Claude 3+. API usage recommended. |
 | **deepseek_tokenizer** | Python zip | N/A | Model-specific, distributed as downloadable zip. |
 
@@ -178,14 +180,16 @@ Each endpoint accepts the same request body but with `stream: false` and reads `
 
 #### 4a. Add tiktoken as a Rust dependency for OpenAI models
 
-tiktoken's Rust crate can be used directly as a library:
+The `tiktoken` Rust crate (v3.3.0 as of June 2026) can be used directly as a library.
+Notably, v3.x supports **11 encodings** across **6 providers** — including `deepseek_v3`,
+`llama3`, `qwen2`, and `mistral_v3` natively — so a single dependency covers most models.
 
 ```toml
-tiktoken = "0.13"
-fancy-regex = "0.17"
+tiktoken = "3.3"
 ```
 
-This provides access to `o200k_base`, `cl100k_base`, etc. encoding tables.
+This provides access to `o200k_base`, `cl100k_base`, etc. encoding tables via
+`tiktoken::encoding_for_model("gpt-4o")` and `enc.count("hello world")`.
 
 #### 4b. Tokenizer registry
 
@@ -237,9 +241,9 @@ When no counting API is available, use the offline tokenizer to count the full s
 
 | Fix | Effort | Impact | Dependencies | Status |
 |-----|--------|--------|-------------|--------|
-| Phase 1a: Accumulate actual_tokens_used | Small | Medium | None | ✅ Done |
-| Phase 1b: Per-message token count docs | Small | Low | None | ✅ Done |
-| Phase 1c: Full-request serialization counting | Medium | Medium | None | ✅ Done |
+| Phase 1a: Accumulate actual_tokens_used | Small | Medium | None | ✅ Done (verified Jun 2026) |
+| Phase 1b: Per-message token count docs | Small | Low | None | ✅ Done (verified Jun 2026) |
+| Phase 1c: Full-request serialization counting | Medium | Medium | None | ✅ Done (verified Jun 2026) |
 | Phase 2: Pre-flight check | Small | High | Phase 1c | 🔜 Pending |
 | Phase 3: API-based counting | Medium | High | New provider HTTP calls | 🔜 Pending |
 | Phase 4: tiktoken offline fallback | Medium | Medium | Add crate dependency | 🔜 Pending |

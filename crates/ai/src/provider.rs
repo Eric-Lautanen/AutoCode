@@ -261,7 +261,7 @@ pub enum ProviderEvent {
 
 // -- Tool definitions (sent to the API) ---------------------------------------
 
-fn tool_definitions() -> serde_json::Value {
+pub(crate) fn tool_definitions() -> serde_json::Value {
     let grep_note = autocode_core::sysinfo::grep_note();
     let grep_desc = if grep_note.is_empty() {
         "Fast code search. Returns matching file paths with line numbers. Supports regex, glob filtering. Respects .gitignore.".to_string()
