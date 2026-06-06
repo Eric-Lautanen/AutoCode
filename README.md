@@ -157,7 +157,7 @@ AutoCode provides 17 tools to the AI agent:
 | `create_dir` | Create directories (mkdir -p) |
 | `delete_file` | Delete files or empty directories |
 | `rename_file` | Move/rename files or directories |
-| `grep` | Fast code search via ripgrep with regex/glob support |
+| `grep` | Fast code search with regex/glob support |
 | `glob` | Find files matching a glob pattern |
 | `web_search` | Search the web (DuckDuckGo) with cached results |
 | `fetch_url` | Fetch a URL's text content |

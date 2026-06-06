@@ -6,7 +6,7 @@ use autocode_core::{
     state::{AppState, Project, Session},
     theme::{Palette, ROUND_MD, ROUND_SM},
 };
-use crate::ui_helpers;
+use crate::helpers;
 use egui::{
     CollapsingHeader, Color32, CornerRadius, Frame, Grid, Margin, RichText, ScrollArea, Stroke,
     TextEdit, Vec2,
@@ -230,7 +230,7 @@ fn tab_btn(ui: &mut egui::Ui, current: &mut Tab, target: Tab, label: &str) {
 // -- Providers -----------------------------------------------------------------
 
 fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut SettingsState) {
-    ui_helpers::section_heading(ui, "API Providers");
+    helpers::section_heading(ui, "API Providers");
 
     ui.add_space(4.0);
     if ui.button("+ Add Provider").clicked() {
@@ -340,7 +340,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                     .min_col_width(60.0)
                     .show(ui, |ui| {
                         // API Key.
-                        ui.label(ui_helpers::field_label("API Key"));
+                        ui.label(helpers::field_label("API Key"));
                         let mut key_buf = p.api_key.clone_inner();
                         if ui
                             .add(
@@ -357,7 +357,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                         ui.end_row();
 
                         // Base URL.
-                        ui.label(ui_helpers::field_label("Base URL"));
+                        ui.label(helpers::field_label("Base URL"));
                         let mut url = p.base_url.clone();
                         if ui
                             .add(
@@ -372,7 +372,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                         ui.end_row();
 
                         // Model.
-                        ui.label(ui_helpers::field_label("Model"));
+                        ui.label(helpers::field_label("Model"));
                         ui.horizontal(|ui| {
                             let mut model = p.model.clone();
                             let input_w = ui.available_width() - 100.0;
@@ -435,7 +435,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                         ui.end_row();
 
                         // Context window (max tokens).
-                        ui.label(ui_helpers::field_label("Context Window"));
+                        ui.label(helpers::field_label("Context Window"));
                         ui.horizontal(|ui| {
                             ui.add(
                                 egui::DragValue::new(&mut p.max_context_tokens)
@@ -451,7 +451,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                         ui.end_row();
 
                         // Thinking API style.
-                        ui.label(ui_helpers::field_label("Thinking API"));
+                        ui.label(helpers::field_label("Thinking API"));
                         {
                             let mut current = p.thinking_api.clone();
                             egui::ComboBox::from_id_salt(format!("thinking_api_{}", key))
@@ -475,7 +475,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                         ui.end_row();
 
                         // Handoff percentage.
-                        ui.label(ui_helpers::field_label("Handoff"));
+                        ui.label(helpers::field_label("Handoff"));
                         ui.horizontal(|ui| {
                             let mut pct = p.handoff_percent as f32;
                             ui.add(
@@ -509,7 +509,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                         ui.end_row();
 
                         // Allow project escape (access files outside project root).
-                        ui.label(ui_helpers::field_label("Allow Outside Access"));
+                        ui.label(helpers::field_label("Allow Outside Access"));
                         ui.horizontal(|ui| {
                             let mut val = p.allow_project_escape;
                             if ui
@@ -542,7 +542,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                         ui.end_row();
 
                         // Max output tokens.
-                        ui.label(ui_helpers::field_label("Max Output"));
+                        ui.label(helpers::field_label("Max Output"));
                         ui.horizontal(|ui| {
                             ui.add(
                                 egui::DragValue::new(&mut p.max_output_tokens)
@@ -558,7 +558,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                         ui.end_row();
 
                         // Max output tokens when thinking is enabled.
-                        ui.label(ui_helpers::field_label("Max Output (Thinking)"));
+                        ui.label(helpers::field_label("Max Output (Thinking)"));
                         ui.horizontal(|ui| {
                             ui.add(
                                 egui::DragValue::new(&mut p.max_output_tokens_thinking)
@@ -597,7 +597,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
 // -- Projects ------------------------------------------------------------------
 
 fn show_projects(ui: &mut egui::Ui, state: &mut AppState) {
-    ui_helpers::section_heading(ui, "Projects");
+    helpers::section_heading(ui, "Projects");
 
     let projects: Vec<Project> = state.projects.clone();
     let mut to_remove: Option<String> = None;
@@ -766,7 +766,7 @@ fn show_projects(ui: &mut egui::Ui, state: &mut AppState) {
 // -- Session Settings ----------------------------------------------------------
 
 fn show_session_settings(ui: &mut egui::Ui, state: &mut AppState) {
-    ui_helpers::section_heading(ui, "Session Settings");
+    helpers::section_heading(ui, "Session Settings");
 
     ui.label(
         RichText::new("Control how many messages are kept in memory and rendered.")
@@ -786,7 +786,7 @@ fn show_session_settings(ui: &mut egui::Ui, state: &mut AppState) {
                 .spacing([12.0, 8.0])
                 .min_col_width(180.0)
                 .show(ui, |ui| {
-                    ui.label(ui_helpers::field_label("Messages in RAM"));
+                    ui.label(helpers::field_label("Messages in RAM"));
                     ui.horizontal(|ui| {
                         ui.add(
                             egui::DragValue::new(&mut state.ui_display_window)
@@ -801,7 +801,7 @@ fn show_session_settings(ui: &mut egui::Ui, state: &mut AppState) {
                     });
                     ui.end_row();
 
-                    ui.label(ui_helpers::field_label("Completion Delay"));
+                    ui.label(helpers::field_label("Completion Delay"));
                     ui.horizontal(|ui| {
                         ui.add(
                             egui::DragValue::new(&mut state.disk_read_delay_ms)
@@ -834,7 +834,7 @@ fn show_session_settings(ui: &mut egui::Ui, state: &mut AppState) {
 // -- Prompt --------------------------------------------------------------------
 
 fn show_prompt(ui: &mut egui::Ui, state: &mut AppState) {
-    ui_helpers::section_heading(ui, "System Prompt");
+    helpers::section_heading(ui, "System Prompt");
 
     ui.label(
         RichText::new("Injected as the first message of every new session.")
@@ -900,7 +900,7 @@ fn show_prompt(ui: &mut egui::Ui, state: &mut AppState) {
 // -- Timeouts ------------------------------------------------------------------
 
 fn show_timeouts(ui: &mut egui::Ui, state: &mut AppState) {
-    ui_helpers::section_heading(ui, "Timeouts");
+    helpers::section_heading(ui, "Timeouts");
 
     ui.label(
         RichText::new(
@@ -934,7 +934,7 @@ fn show_timeouts(ui: &mut egui::Ui, state: &mut AppState) {
                 .spacing([12.0, 6.0])
                 .min_col_width(60.0)
                 .show(ui, |ui| {
-                    ui.label(ui_helpers::field_label("Stream Idle"));
+                    ui.label(helpers::field_label("Stream Idle"));
                     ui.add(
                         egui::DragValue::new(&mut state.stream_idle_timeout_secs)
                             .speed(5.0)
@@ -943,7 +943,7 @@ fn show_timeouts(ui: &mut egui::Ui, state: &mut AppState) {
                     ui.label(RichText::new("s").size(10.5).color(Palette::TEXT_MUTED));
                     ui.end_row();
 
-                    ui.label(ui_helpers::field_label("Request Max"));
+                    ui.label(helpers::field_label("Request Max"));
                     ui.add(
                         egui::DragValue::new(&mut state.request_timeout_secs)
                             .speed(10.0)
@@ -952,7 +952,7 @@ fn show_timeouts(ui: &mut egui::Ui, state: &mut AppState) {
                     ui.label(RichText::new("s").size(10.5).color(Palette::TEXT_MUTED));
                     ui.end_row();
 
-                    ui.label(ui_helpers::field_label("Tool Timeout"));
+                    ui.label(helpers::field_label("Tool Timeout"));
                     ui.add(
                         egui::DragValue::new(&mut state.tool_timeout_secs)
                             .speed(5.0)
@@ -961,7 +961,7 @@ fn show_timeouts(ui: &mut egui::Ui, state: &mut AppState) {
                     ui.label(RichText::new("s").size(10.5).color(Palette::TEXT_MUTED));
                     ui.end_row();
 
-                    ui.label(ui_helpers::field_label("Max Retries"));
+                    ui.label(helpers::field_label("Max Retries"));
                     ui.add(
                         egui::DragValue::new(&mut state.max_retries)
                             .speed(1.0)
@@ -970,7 +970,7 @@ fn show_timeouts(ui: &mut egui::Ui, state: &mut AppState) {
                     ui.label(RichText::new("").size(10.5).color(Palette::TEXT_MUTED));
                     ui.end_row();
 
-                    ui.label(ui_helpers::field_label("Retry Wait Cap"));
+                    ui.label(helpers::field_label("Retry Wait Cap"));
                     ui.add(
                         egui::DragValue::new(&mut state.max_retry_wait_secs)
                             .speed(30.0)
@@ -1015,7 +1015,7 @@ fn show_timeouts(ui: &mut egui::Ui, state: &mut AppState) {
                 .spacing([12.0, 6.0])
                 .min_col_width(60.0)
                 .show(ui, |ui| {
-                    ui.label(ui_helpers::field_label("Default Timeout"));
+                    ui.label(helpers::field_label("Default Timeout"));
                     ui.add(
                         egui::DragValue::new(&mut state.shell_timeout_secs)
                             .speed(10.0)
@@ -1024,7 +1024,7 @@ fn show_timeouts(ui: &mut egui::Ui, state: &mut AppState) {
                     ui.label(RichText::new("s").size(10.5).color(Palette::TEXT_MUTED));
                     ui.end_row();
 
-                    ui.label(ui_helpers::field_label("Maximum Timeout"));
+                    ui.label(helpers::field_label("Maximum Timeout"));
                     ui.add(
                         egui::DragValue::new(&mut state.shell_timeout_max_secs)
                             .speed(30.0)
@@ -1061,7 +1061,7 @@ fn show_timeouts(ui: &mut egui::Ui, state: &mut AppState) {
 
 macro_rules! color_row {
     ($ui:expr, $target:expr, $d:expr, $label:expr, $field:ident) => {
-        $ui.label(ui_helpers::field_label($label));
+        $ui.label(helpers::field_label($label));
         $ui.horizontal(|ui| {
             ui.color_edit_button_rgb(&mut $d.$field);
             dropper_btn(ui, $target, stringify!($field));
@@ -1104,7 +1104,7 @@ fn show_design(ui: &mut egui::Ui, state: &mut AppState) {
             let label_w = 160.0;
 
             // --- Colors: Bubbles ---
-            ui_helpers::section_heading(ui, "Bubble Colors");
+            helpers::section_heading(ui, "Bubble Colors");
             Grid::new("design_bubble_colors")
                 .num_columns(2)
                 .spacing([12.0, 5.0])
@@ -1129,7 +1129,7 @@ fn show_design(ui: &mut egui::Ui, state: &mut AppState) {
 
             // --- Colors: Terminal ---
             ui.add_space(8.0);
-            ui_helpers::section_heading(ui, "Terminal Colors");
+            helpers::section_heading(ui, "Terminal Colors");
             Grid::new("design_terminal")
                 .num_columns(2)
                 .spacing([12.0, 5.0])
@@ -1145,7 +1145,7 @@ fn show_design(ui: &mut egui::Ui, state: &mut AppState) {
 
             // --- Colors: Code Blocks ---
             ui.add_space(8.0);
-            ui_helpers::section_heading(ui, "Code Block Colors");
+            helpers::section_heading(ui, "Code Block Colors");
             Grid::new("design_code")
                 .num_columns(2)
                 .spacing([12.0, 5.0])
@@ -1158,7 +1158,7 @@ fn show_design(ui: &mut egui::Ui, state: &mut AppState) {
 
             // --- Colors: Diff ---
             ui.add_space(8.0);
-            ui_helpers::section_heading(ui, "Diff Colors");
+            helpers::section_heading(ui, "Diff Colors");
             Grid::new("design_diff")
                 .num_columns(2)
                 .spacing([12.0, 5.0])
@@ -1177,7 +1177,7 @@ fn show_design(ui: &mut egui::Ui, state: &mut AppState) {
 
             // --- Colors: Reasoning ---
             ui.add_space(8.0);
-            ui_helpers::section_heading(ui, "Reasoning / Thinking Colors");
+            helpers::section_heading(ui, "Reasoning / Thinking Colors");
             Grid::new("design_reason")
                 .num_columns(2)
                 .spacing([12.0, 5.0])
@@ -1190,7 +1190,7 @@ fn show_design(ui: &mut egui::Ui, state: &mut AppState) {
 
             // --- Colors: Badges ---
             ui.add_space(8.0);
-            ui_helpers::section_heading(ui, "Badge Colors");
+            helpers::section_heading(ui, "Badge Colors");
             Grid::new("design_badges")
                 .num_columns(2)
                 .spacing([12.0, 5.0])
@@ -1204,7 +1204,7 @@ fn show_design(ui: &mut egui::Ui, state: &mut AppState) {
 
             // --- Colors: Semantic / Text ---
             ui.add_space(8.0);
-            ui_helpers::section_heading(ui, "Semantic / Text Colors");
+            helpers::section_heading(ui, "Semantic / Text Colors");
             Grid::new("design_tool_labels")
                 .num_columns(2)
                 .spacing([12.0, 5.0])
@@ -1221,7 +1221,7 @@ fn show_design(ui: &mut egui::Ui, state: &mut AppState) {
 
             // --- Colors: Code Blocks ---
             ui.add_space(8.0);
-            ui_helpers::section_heading(ui, "Code Block Colors");
+            helpers::section_heading(ui, "Code Block Colors");
             Grid::new("design_code_1")
                 .num_columns(2)
                 .spacing([12.0, 5.0])
@@ -1234,7 +1234,7 @@ fn show_design(ui: &mut egui::Ui, state: &mut AppState) {
 
             // --- Colors: Diff ---
             ui.add_space(8.0);
-            ui_helpers::section_heading(ui, "Diff Colors");
+            helpers::section_heading(ui, "Diff Colors");
             Grid::new("design_diff_1")
                 .num_columns(2)
                 .spacing([12.0, 5.0])
@@ -1253,7 +1253,7 @@ fn show_design(ui: &mut egui::Ui, state: &mut AppState) {
 
             // --- Colors: Reasoning ---
             ui.add_space(8.0);
-            ui_helpers::section_heading(ui, "Reasoning / Thinking Colors");
+            helpers::section_heading(ui, "Reasoning / Thinking Colors");
             Grid::new("design_reason_1")
                 .num_columns(2)
                 .spacing([12.0, 5.0])
@@ -1266,7 +1266,7 @@ fn show_design(ui: &mut egui::Ui, state: &mut AppState) {
 
             // --- Colors: Badges ---
             ui.add_space(8.0);
-            ui_helpers::section_heading(ui, "Badge Colors");
+            helpers::section_heading(ui, "Badge Colors");
             Grid::new("design_badges_1")
                 .num_columns(2)
                 .spacing([12.0, 5.0])
@@ -1280,7 +1280,7 @@ fn show_design(ui: &mut egui::Ui, state: &mut AppState) {
 
             // --- Colors: Tool Labels ---
             ui.add_space(8.0);
-            ui_helpers::section_heading(ui, "Tool Label & Text Colors");
+            helpers::section_heading(ui, "Tool Label & Text Colors");
             Grid::new("design_tool_labels_1")
                 .num_columns(2)
                 .spacing([12.0, 5.0])
@@ -1345,7 +1345,7 @@ fn show_about(ui: &mut egui::Ui, state: &mut AppState) {
     ui.separator();
     ui.add_space(8.0);
 
-    ui_helpers::section_heading(ui, "System Information");
+    helpers::section_heading(ui, "System Information");
     ui.add_space(4.0);
 
     ui.checkbox(
@@ -1410,7 +1410,7 @@ fn show_about(ui: &mut egui::Ui, state: &mut AppState) {
     ui.add_space(8.0);
 
     // OpenGL / Renderer info.
-    ui_helpers::section_heading(ui, "Renderer");
+    helpers::section_heading(ui, "Renderer");
     ui.add_space(4.0);
     if autocode_core::sysinfo::has_opengl() {
         ui.horizontal(|ui| {

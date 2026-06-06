@@ -284,7 +284,7 @@ impl eframe::App for AutocodeApp {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
             self.state.sampling_activated_frame += 1;
             if self.state.sampling_activated_frame > 2 && ui.input(|i| i.pointer.any_click()) {
-                let color = autocode_ui::ui_helpers::sample_screen_pixel();
+                let color = autocode_ui::helpers::sample_screen_pixel();
                 let field = self.state.sampling_target.take();
                 self.state.sampling_activated_frame = 0;
                 if let (Some(f), Some(c)) = (field, color) {

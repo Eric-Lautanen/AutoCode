@@ -16,7 +16,7 @@ use autocode_core::{
     state::{AppState, ChatMessage, DesignSettings, Role, ToolMeta},
     theme::{Palette, ROUND_LG, ROUND_MD, ROUND_SM},
 };
-use crate::ui_helpers;
+use crate::helpers;
 
 thread_local! {
     static CURRENT_DESIGN: RefCell<Option<DesignSettings>> = const { RefCell::new(None) };
@@ -746,7 +746,7 @@ fn show_bubble(ui: &mut egui::Ui, msg: &ChatMessage, idx: usize, panel_w: f32, s
                         );
                         if !suppress_ts {
                             ui.label(
-                                RichText::new(ui_helpers::format_time(msg.timestamp))
+                                RichText::new(helpers::format_time(msg.timestamp))
                                     .size(9.0)
                                     .color(theme().text_muted),
                             );
@@ -799,7 +799,7 @@ fn show_bubble(ui: &mut egui::Ui, msg: &ChatMessage, idx: usize, panel_w: f32, s
                     );
                     if !suppress_ts {
                         ui.label(
-                            RichText::new(ui_helpers::format_time(msg.timestamp))
+                            RichText::new(helpers::format_time(msg.timestamp))
                                 .size(9.0)
                                 .color(theme().text_muted),
                         );
@@ -906,14 +906,14 @@ fn render_tool_result(ui: &mut egui::Ui, msg: &ChatMessage, idx: usize, sid: &st
     }
 
     let content = &msg.content;
-    let summary = ui_helpers::extract_tool_summary(content);
+    let summary = helpers::extract_tool_summary(content);
     if let Some(summary) = summary {
         let id_salt = format!("tool_{}_{}_{}", idx, msg.timestamp, sid);
         CollapsingHeader::new(&summary)
             .id_salt(id_salt)
             .default_open(false)
             .show(ui, |ui| {
-                let body = ui_helpers::get_tool_body(msg);
+                let body = helpers::get_tool_body(msg);
                 render_code_block(ui, "", &body);
             });
     } else {
@@ -941,7 +941,7 @@ fn render_structured_tool_result(
                     .strong(),
             );
             ui.push_id(format!("code_{}", msg.timestamp), |ui| {
-                let body = ui_helpers::get_tool_body(msg);
+                let body = helpers::get_tool_body(msg);
                 let name = std::path::Path::new(path)
                     .file_name()
                     .and_then(|n| n.to_str())
@@ -964,7 +964,7 @@ fn render_structured_tool_result(
                     .strong(),
             );
             ui.push_id(format!("code_{}", msg.timestamp), |ui| {
-                let body = ui_helpers::get_tool_body(msg);
+                let body = helpers::get_tool_body(msg);
                 let name = std::path::Path::new(path)
                     .file_name()
                     .and_then(|n| n.to_str())
@@ -973,7 +973,7 @@ fn render_structured_tool_result(
             });
         }
         "read_files" => {
-            let body = ui_helpers::get_tool_body(msg);
+            let body = helpers::get_tool_body(msg);
             let file_list = meta.file_path.as_deref().unwrap_or("");
             let file_count = if file_list.is_empty() {
                 // Parse file paths from body for backwards compatibility
@@ -1008,7 +1008,7 @@ fn render_structured_tool_result(
                     .italics(),
             );
             if meta.is_error {
-                let body = ui_helpers::get_tool_body(msg);
+                let body = helpers::get_tool_body(msg);
                 ui.label(RichText::new(body).size(11.0).color(theme().error));
             }
         }
@@ -1021,7 +1021,7 @@ fn render_structured_tool_result(
                         .color(theme().error)
                         .italics(),
                 );
-                let body = ui_helpers::get_tool_body(msg);
+                let body = helpers::get_tool_body(msg);
                 ui.label(RichText::new(body).size(11.0).color(theme().error));
             } else {
                 ui.label(
@@ -1054,7 +1054,7 @@ fn render_structured_tool_result(
                     })
                     .strong(),
             );
-            let body = ui_helpers::get_tool_body(msg);
+            let body = helpers::get_tool_body(msg);
             let display = strip_exit_code_trailer(&body);
             ui.push_id(format!("shell_{}", msg.timestamp), |ui| {
                 render_shell_terminal(ui, display, sid);
@@ -1069,7 +1069,7 @@ fn render_structured_tool_result(
                     .color(theme().accent)
                     .strong(),
             );
-            let body = ui_helpers::get_tool_body(msg);
+            let body = helpers::get_tool_body(msg);
             ui.push_id(format!("list_{}", msg.timestamp), |ui| {
                 render_code_block(ui, path, &body);
             });
@@ -1083,7 +1083,7 @@ fn render_structured_tool_result(
                         .color(theme().error)
                         .italics(),
                 );
-                let body = ui_helpers::get_tool_body(msg);
+                let body = helpers::get_tool_body(msg);
                 ui.label(RichText::new(body).size(11.0).color(theme().error));
             } else {
                 ui.label(
@@ -1104,7 +1104,7 @@ fn render_structured_tool_result(
                         .color(theme().error)
                         .italics(),
                 );
-                let body = ui_helpers::get_tool_body(msg);
+                let body = helpers::get_tool_body(msg);
                 ui.label(RichText::new(body).size(11.0).color(theme().error));
             } else {
                 ui.label(
@@ -1124,7 +1124,7 @@ fn render_structured_tool_result(
                         .color(theme().error)
                         .italics(),
                 );
-                let body = ui_helpers::get_tool_body(msg);
+                let body = helpers::get_tool_body(msg);
                 ui.label(RichText::new(body).size(11.0).color(theme().error));
             } else {
                 ui.label(
@@ -1155,7 +1155,7 @@ fn render_structured_tool_result(
                     .strong(),
             );
             if matches > 0 {
-                let body = ui_helpers::get_tool_body(msg);
+                let body = helpers::get_tool_body(msg);
                 ui.push_id(format!("grep_{}", msg.timestamp), |ui| {
                     render_code_block(ui, "grep", &body);
                 });
@@ -1234,7 +1234,7 @@ fn render_structured_tool_result(
                     .strong(),
             );
             if matches > 0 {
-                let body = ui_helpers::get_tool_body(msg);
+                let body = helpers::get_tool_body(msg);
                 ui.push_id(format!("glob_{}", msg.timestamp), |ui| {
                     render_code_block(ui, "glob", &body);
                 });
@@ -1842,7 +1842,7 @@ fn render_inline(ui: &mut egui::Ui, line: &str, word_wrap: bool) {
     // Headings
     if let Some(rest) = line.strip_prefix("### ") {
         ui.label(
-            RichText::new(ui_helpers::parse_inline_formatting(rest))
+            RichText::new(helpers::parse_inline_formatting(rest))
                 .size(13.5)
                 .strong()
                 .color(theme().text_primary),
@@ -1851,7 +1851,7 @@ fn render_inline(ui: &mut egui::Ui, line: &str, word_wrap: bool) {
     }
     if let Some(rest) = line.strip_prefix("## ") {
         ui.label(
-            RichText::new(ui_helpers::parse_inline_formatting(rest))
+            RichText::new(helpers::parse_inline_formatting(rest))
                 .size(14.5)
                 .strong()
                 .color(theme().text_primary),
@@ -1860,7 +1860,7 @@ fn render_inline(ui: &mut egui::Ui, line: &str, word_wrap: bool) {
     }
     if let Some(rest) = line.strip_prefix("# ") {
         ui.label(
-            RichText::new(ui_helpers::parse_inline_formatting(rest))
+            RichText::new(helpers::parse_inline_formatting(rest))
                 .size(16.0)
                 .strong()
                 .color(theme().accent),
@@ -1876,7 +1876,7 @@ fn render_inline(ui: &mut egui::Ui, line: &str, word_wrap: bool) {
             .inner_margin(Margin::same(6))
             .show(ui, |ui| {
                 ui.label(
-                    RichText::new(ui_helpers::parse_inline_formatting(rest))
+                    RichText::new(helpers::parse_inline_formatting(rest))
                         .size(13.0)
                         .color(theme().text_secondary),
                 );
@@ -1903,7 +1903,7 @@ fn render_inline(ui: &mut egui::Ui, line: &str, word_wrap: bool) {
                 ..Default::default()
             },
         );
-        ui_helpers::append_rich_inline_to_job(&mut job, rest.trim());
+        helpers::append_rich_inline_to_job(&mut job, rest.trim());
         ui.add_space(6.0);
         ui.label(job);
         return;
@@ -1929,7 +1929,7 @@ fn render_inline(ui: &mut egui::Ui, line: &str, word_wrap: bool) {
                 ..Default::default()
             },
         );
-        ui_helpers::append_rich_inline_to_job(&mut job, rest.trim());
+        helpers::append_rich_inline_to_job(&mut job, rest.trim());
         ui.add_space(6.0);
         ui.label(job);
         return;
@@ -1994,7 +1994,7 @@ fn render_rich_inline(ui: &mut egui::Ui, text: &str, word_wrap: bool) {
         },
         ..Default::default()
     };
-    ui_helpers::append_rich_inline_to_job(&mut job, text);
+    helpers::append_rich_inline_to_job(&mut job, text);
     ui.label(job);
 }
 

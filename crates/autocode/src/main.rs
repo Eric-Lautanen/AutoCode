@@ -4,6 +4,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
+mod helpers;
 
 use eframe::NativeOptions;
 use egui::Vec2;

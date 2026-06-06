@@ -310,13 +310,13 @@ pub fn grep_files(
             format!(
                 "No matches for \"{}\" in {}",
                 pattern,
-                search_path.display()
+                autocode_core::fsutil::display_path(search_path).display()
             )
         } else {
             format!(
                 "Searched for \"{}\" in {}\n{} match(es):\n{}",
                 pattern,
-                search_path.display(),
+                autocode_core::fsutil::display_path(search_path).display(),
                 results.len(),
                 results.join("\n")
             )
@@ -347,13 +347,13 @@ pub fn grep_files(
             format!(
                 "No matches for \"{}\" in {}",
                 pattern,
-                search_path.display()
+                autocode_core::fsutil::display_path(search_path).display()
             )
         } else {
             format!(
                 "Searched for \"{}\" in {}\n{} match(es):\n{}",
                 pattern,
-                search_path.display(),
+                autocode_core::fsutil::display_path(search_path).display(),
                 results.len(),
                 results.join("\n")
             )
@@ -399,7 +399,10 @@ fn search_file_for_pattern(
         None
     };
 
-    let file_name = path.to_string_lossy().to_string();
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
 
     for (i, line) in content.lines().enumerate() {
         if results.len() >= max_results {

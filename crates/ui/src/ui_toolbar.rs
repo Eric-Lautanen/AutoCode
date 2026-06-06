@@ -8,11 +8,11 @@ use std::collections::HashMap;
 
 use autocode_ai::{chat::ChatRuntime, session};
 use autocode_core::{
-    helpers,
+    helpers as core_helpers,
     state::{AppState, Project},
     theme::Palette,
 };
-use crate::ui_helpers;
+use crate::helpers;
 
 pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<String, ChatRuntime>) {
     Frame::NONE
@@ -109,7 +109,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                     }
                 }
 
-                ui_helpers::toolbar_separator(ui);
+                helpers::toolbar_separator(ui);
 
                 // -- Provider / model pill -----------------------------
                 let active_model = state
@@ -149,10 +149,10 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                         }
                     });
 
-                ui_helpers::toolbar_separator(ui);
+                helpers::toolbar_separator(ui);
 
                 // -- Context budget meter ------------------------------
-                let frac = helpers::budget_fraction(state).clamp(0.0, 1.0);
+                let frac = core_helpers::budget_fraction(state).clamp(0.0, 1.0);
                 show_token_meter(ui, state, frac);
 
                 // -- Network status indicator -------------------------
@@ -217,7 +217,7 @@ fn show_token_meter(ui: &mut egui::Ui, state: &AppState, frac: f32) {
 
     ui.add_space(4.0);
     ui.label(
-        RichText::new(helpers::usage_display(state))
+        RichText::new(core_helpers::usage_display(state))
             .size(10.0)
             .color(Palette::TEXT_MUTED),
     );
@@ -229,7 +229,7 @@ fn show_network_status(ui: &mut egui::Ui, net: &mut autocode_ai::chat::NetworkSt
 
     let show = net.active || !byte_str.is_empty();
 
-    ui_helpers::toolbar_separator(ui);
+    helpers::toolbar_separator(ui);
 
     let dot_color = if show { dot_color } else { Palette::BG_BASE };
     let dot_text = RichText::new(dot.to_string())

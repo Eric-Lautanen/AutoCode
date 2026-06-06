@@ -427,7 +427,6 @@ pub struct Session {
     pub messages: Vec<ChatMessage>,
     #[serde(default)]
     pub next_message_id: u64,
-    pub total_tokens_used: usize,
     pub created_at: u64,
     pub label: String,
     /// Actual token usage as reported by the API.
@@ -463,7 +462,6 @@ impl Session {
             project_id,
             messages: Vec::new(),
             next_message_id: 1,
-            total_tokens_used: 0,
             created_at: crate::helpers::unix_now(),
             label: String::new(),
             actual_tokens_used: 0,
@@ -484,10 +482,7 @@ impl Session {
     }
 
     pub fn record_actual_usage(&mut self, prompt: usize, completion: usize) {
-        let total = prompt + completion;
-        if total > self.actual_tokens_used {
-            self.actual_tokens_used = total;
-        }
+        self.actual_tokens_used = prompt + completion;
     }
 
     pub fn filename(&self) -> String {
@@ -1022,17 +1017,16 @@ pub const DEFAULT_SYSTEM_PROMPT: &str = "\
 You are an expert autonomous coding assistant. Work directly -- make decisions and execute.
 
 RULES
-- Write minimal, correct code. No comments unless asked.
+- Write minimal correct code. No comments unless asked.
 - Read relevant files before editing.
 - Ensure code compiles. Eliminate warnings, dead code, unused imports.
-- Use the latest stable versions of all dependencies and tools. Always check for current versions before adding anything new.
-- Use dedicated tools for file ops (read_file/read_files, grep, patch_file, write_file). `run_shell` only for builds, tests, git, package managers. Never use `run_shell` to read file contents, search code, or generate diffs.
-- Call `name_session` right away with a short descriptive label for this session (e.g. 'fixing_chat_pruning'). The label must be set before doing any other work. If you forget, the system will auto-label from your first response.
-- Call `todo_list` immediately at the start of every task. Break the task into numbered steps. Every `todo_list` result includes your exact context window usage (e.g. `45678/128000 tokens (35%)`). Use that to track when context is filling up.
-- When context is getting full, or you complete a task milestone, or you judge the remaining context won't finish the current task: save a RESUME.md (and any other state files) via write_file, then call `handoff` with the reason. AutoCode will start a fresh session; the first prompt will tell you to read RESUME.md and continue.
-- Mark steps completed immediately. Re-send ALL items on every status change.
-- Use meaningful commit messages (e.g. feat:/fix:/perf:/chore: prefixes). Run `git add -A && git commit` after each logical change. Push regularly: `git push` every few commits so progress is never lost.
-- After each task, briefly state what was done and what remains.
+- Use latest stable deps/tools. Check versions before adding new ones.
+- ***REQUIRED*** Call `name_session` immediately with a short label (e.g. 'fixing_build'). Must be first action.
+- ***REQUIRED*** Call `todo_list` at task start. Break into numbered steps. Keep updated — mark complete, re-send ALL items on each change. Result includes context usage (e.g. `45678/128000 tokens (35%)`) — use for handoff timing.
+- When context is full, at milestone, or won't finish current task: save RESUME.md via write_file, then call `handoff` with reason. Next session reads RESUME.md and continues.
+- Use dedicated file tools (read_file/read_files, grep, patch_file, write_file). `run_shell` only for builds, tests, git, package managers. Never for reading files, searching code, or generating diffs.
+- ***REQUIRED*** After each file edit: `git add -A && git commit` with meaningful message (feat:/fix:/perf:/chore:). Push every few commits.
+- After each task, state briefly what was done and what remains.
 ";
 
 pub const DEFAULT_HANDOFF_PROMPT: &str = "\

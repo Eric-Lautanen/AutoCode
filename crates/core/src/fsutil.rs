@@ -63,7 +63,7 @@ pub fn remove_file(path: &Path) -> std::io::Result<()> {
     std::fs::remove_file(extended_path(path))
 }
 pub fn remove_dir(path: &Path) -> std::io::Result<()> {
-    std::fs::remove_dir(extended_path(path))
+    std::fs::remove_dir_all(extended_path(path))
 }
 pub fn rename(from: &Path, to: &Path) -> std::io::Result<()> {
     std::fs::rename(extended_path(from), extended_path(to))

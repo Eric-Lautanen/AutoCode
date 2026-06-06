@@ -8,11 +8,13 @@ use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
 
 use autocode_core::{
-    fsutil, helpers,
+    fsutil,
+    helpers as core_helpers,
     state::{AppState, ChatMessage, Role, ShellStatus, TodoItem, TodoStatus, ToolMeta},
 };
 use autocode_fs::shell::{self, ShellEvent};
 use crate::{
+    helpers,
     provider::{
         ApiMessage, CompletionRequest, ProviderClient, ProviderEvent, ToolCall, ToolChoice,
     },
@@ -126,7 +128,6 @@ fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: Chat
     {
         msg.id = sess.next_message_id;
         sess.next_message_id += 1;
-        sess.total_tokens_used += msg.token_count;
         debug_log!("session: push msg {} (role={:?}, tokens={})", msg.id, msg.role, msg.token_count);
         sess.messages.push(msg);
     }
@@ -290,12 +291,9 @@ pub struct ChatRuntime {
     /// exponential backoff on the idle timeout.
     pub stream_drop_retries: u8,
     pub continuation_chain: u8,
-    /// Recovery phase: after fast retries are exhausted, enter a slower
-    /// exponential-backoff recovery loop so the agent auto-resumes when
-    /// the provider comes back online. 0 = not in recovery.
-    pub recovery_attempts: u8,
-    /// When to attempt the next recovery. None = not waiting.
-    pub recovery_after: Option<std::time::Instant>,
+    /// Retry phase: non-blocking backoff before the first retry.
+    /// None = not waiting for a retry.
+    pub retry_after: Option<std::time::Instant>,
     /// Earliest time the next completion may start (rate limiting).
     pub next_completion_allowed: Option<std::time::Instant>,
 }
@@ -328,8 +326,7 @@ impl Default for ChatRuntime {
             partial_response_backup: String::new(),
             stream_drop_retries: 0,
             continuation_chain: 0,
-            recovery_attempts: 0,
-            recovery_after: None,
+            retry_after: None,
             next_completion_allowed: None,
         }
     }
@@ -369,8 +366,7 @@ impl ChatRuntime {
         self.partial_response_backup.clear();
         self.stream_drop_retries = 0;
         self.continuation_chain = 0;
-        self.recovery_attempts = 0;
-        self.recovery_after = None;
+        self.retry_after = None;
 
         // Force deallocation of large buffers
         self.pending_response = String::new();
@@ -490,8 +486,7 @@ pub fn send_message(
     runtime.partial_response_backup.clear();
     runtime.stream_drop_retries = 0;
     runtime.continuation_chain = 0;
-    runtime.recovery_attempts = 0;
-    runtime.recovery_after = None;
+    runtime.retry_after = None;
     runtime.active_session_id = Some(sid);
     start_completion(state, runtime);
 }
@@ -602,6 +597,7 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
         tool_choice: ToolChoice::Auto,
         parallel_tool_calls: provider.kind.supports_parallel_tool_calls(),
         request_timeout_secs: state.request_timeout_secs,
+        stream_idle_timeout_secs: state.stream_idle_timeout_secs,
         thinking_mode: thinking,
         reasoning_effort,
         thinking_api,
@@ -641,17 +637,16 @@ fn update_runtime(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
     repaint |= poll_live_shell(state, runtime);
     repaint |= poll_network(runtime);
 
-    // Recovery: if we're in a recovery backoff and the timer has elapsed,
-    // re-issue the completion to auto-resume autonomous operations.
-    // While waiting, keep repaint=true so the app polls the timer.
-    if let Some(after) = runtime.recovery_after {
+    // Retry backoff: non-blocking timer. Retries forever for transient errors,
+    // only stopped by user interaction (stop button → drain()).
+    if let Some(after) = runtime.retry_after {
         repaint = true;
         if std::time::Instant::now() >= after
             && runtime.stream_rx.is_none()
             && runtime.tool_rx.is_none()
             && runtime.live_shell_rx.is_none()
         {
-            runtime.recovery_after = None;
+            runtime.retry_after = None;
             start_completion(state, runtime);
         }
     }
@@ -756,23 +751,12 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 );
                 done = true;
                 runtime.retry_count = 0;
-                let was_recovering = runtime.recovery_attempts > 0;
-                runtime.recovery_attempts = 0;
                 if let Some(sid) = runtime.active_session_id.as_deref()
                     && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
                 {
                     sess.record_actual_usage(prompt_tokens, completion_tokens);
-                }
-                // Clear error messages now that we've recovered.
-                if was_recovering {
-                    let sid = runtime.active_session_id.clone();
-                    if let Some(sess) = state
-                        .sessions
-                        .iter_mut()
-                        .find(|s| Some(&s.id) == sid.as_ref())
-                    {
-                        sess.messages.retain(|m| m.role != Role::Error);
-                    }
+                    // Clear transient error messages on any successful completion.
+                    sess.messages.retain(|m| m.role != Role::Error);
                 }
                 let elapsed = runtime
                     .request_start
@@ -904,44 +888,49 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
 
             // Only retry transient errors (network issues, rate limits, etc).
             // Permanent errors (auth, content filter, invalid model) are not
-            // retryable and should be shown to the user immediately.
-            let max_retries = state.max_retries;
-            let should_retry = is_transient_error(&err_msg) && runtime.retry_count < max_retries;
-            if should_retry {
-                runtime.retry_count += 1;
+            // retryable — show them and let the user take action.
+            // Transient errors retry forever with capped exponential backoff,
+            // only stopped by user interaction (stop button → drain()).
+            let orphaned = err_msg.contains("insufficient tool messages")
+                || err_msg.contains("tool_calls")
+                    && err_msg.contains("must be followed by tool messages");
+            if orphaned {
                 debug_log!(
-                    "chat: retry {}/{}: {}",
-                    runtime.retry_count,
-                    max_retries,
+                    "chat: orphaned tool_calls detected, stripping and retrying: {}",
                     err_msg
                 );
-                // Brief delay before retry to avoid hammering the provider.
-                // Exponential backoff: 1s, 2s, 4s... capped at 5 min.
-                let backoff_secs = (1u64 << (runtime.retry_count - 1).min(9)).min(300);
-                runtime.status = format!(
-                    "{} — retrying ({}/{}) in {}s...",
-                    shorten_err(&err_msg),
-                    runtime.retry_count,
-                    max_retries,
-                    backoff_secs
-                );
-                std::thread::sleep(std::time::Duration::from_secs(backoff_secs));
+                runtime.retry_count = 0;
+                runtime.status =
+                    "Orphaned tool calls detected -- removing and retrying...".to_string();
+                if let Some(sid) = runtime.active_session_id.as_deref()
+                    && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
+                {
+                    for i in (0..sess.messages.len()).rev() {
+                        if sess.messages[i].role == Role::Assistant
+                            && sess.messages[i].tool_calls.is_some()
+                        {
+                            let has_results =
+                                sess.messages[i + 1..].iter().any(|m| m.role == Role::Tool);
+                            if !has_results {
+                                sess.messages.remove(i);
+                            }
+                            break;
+                        }
+                    }
+                }
                 start_completion(state, runtime);
             } else if is_transient_error(&err_msg) {
-                // Fast retries exhausted, but error is transient (network/overload).
-                // Enter a slower recovery phase with exponential backoff so the
-                // agent auto-resumes when the provider comes back online.
-                // Never gives up — backoff grows to ~32 min and stays there.
-                runtime.recovery_attempts += 1;
-                let backoff_secs =
-                    (30u64 * (1u64 << (runtime.recovery_attempts - 1).min(4))).min(300);
-                runtime.recovery_after =
-                    Some(std::time::Instant::now() + std::time::Duration::from_secs(backoff_secs));
-                runtime.retry_count = 0;
-                runtime.stream_drop_retries = 0;
+                // Forever retry: exponential backoff 5s → 180s cap, never gives up.
+                let backoff_secs = (5u64 << runtime.retry_count.min(6)).min(180);
+                runtime.retry_count = runtime.retry_count.saturating_add(1);
+                runtime.retry_after = Some(
+                    std::time::Instant::now() + std::time::Duration::from_secs(backoff_secs),
+                );
                 runtime.status = format!(
-                    "Recovering — attempt {} in {}s...",
-                    runtime.recovery_attempts, backoff_secs
+                    "{} — retry {} in {}s...",
+                    shorten_err(&err_msg),
+                    runtime.retry_count,
+                    backoff_secs,
                 );
                 push_runtime(
                     state,
@@ -949,64 +938,27 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     ChatMessage::new(
                         Role::Error,
                         format!(
-                            "⚠ Provider error (attempt {}): {} — retrying in {}s",
-                            runtime.recovery_attempts,
+                            "Provider error (retry {}): {} — retrying in {}s",
+                            runtime.retry_count,
                             shorten_err(&err_msg),
-                            backoff_secs
+                            backoff_secs,
                         ),
                     ),
                 );
             } else {
-                // The provider rejected the request because the conversation
-                // has an assistant tool_calls message with no matching Tool
-                // results.  Strip the offending message and try once more.
-                let orphaned = err_msg.contains("insufficient tool messages")
-                    || err_msg.contains("tool_calls")
-                        && err_msg.contains("must be followed by tool messages");
-                if orphaned {
-                    debug_log!(
-                        "chat: orphaned tool_calls detected, stripping and retrying: {}",
-                        err_msg
-                    );
-                    runtime.retry_count = 0;
-                    runtime.status =
-                        "Orphaned tool calls detected -- removing and retrying...".to_string();
-                    // Walk backwards to find the last assistant(tool_calls)
-                    // that has no Tool results after it, and remove it.
-                    if let Some(sid) = runtime.active_session_id.as_deref()
-                        && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
-                    {
-                        for i in (0..sess.messages.len()).rev() {
-                            if sess.messages[i].role == Role::Assistant
-                                && sess.messages[i].tool_calls.is_some()
-                            {
-                                let has_results =
-                                    sess.messages[i + 1..].iter().any(|m| m.role == Role::Tool);
-                                if !has_results {
-                                    sess.messages.remove(i);
-                                }
-                                break;
-                            }
-                        }
-                    }
-                    start_completion(state, runtime);
-                } else {
-                    debug_log!("chat: retries exhausted, giving up after {}", max_retries);
-                    runtime.retry_count = 0;
-                    runtime.partial_response_backup.clear();
-                    runtime.stream_drop_retries = 0;
-                    push_runtime(
-                        state,
-                        runtime,
-                        ChatMessage::new(
-                            Role::Error,
-                            format!(
-                                "Provider error (gave up after {} retries): {}",
-                                max_retries, err_msg
-                            ),
-                        ),
-                    );
-                }
+                // Permanent error — show and stop. User can fix and retry manually.
+                debug_log!("chat: permanent error, not retrying: {}", err_msg);
+                runtime.retry_count = 0;
+                runtime.partial_response_backup.clear();
+                runtime.stream_drop_retries = 0;
+                push_runtime(
+                    state,
+                    runtime,
+                    ChatMessage::new(
+                        Role::Error,
+                        format!("Provider error: {}", err_msg),
+                    ),
+                );
             }
             return true;
         }
@@ -1078,28 +1030,12 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     runtime.reasoning_buf.clear();
                     runtime.pending_response.clear();
                     debug_log!("chat: all tool calls dropped and no text -- retrying");
-                    let max_retries = state.max_retries;
-                    if runtime.retry_count < max_retries {
-                        runtime.retry_count += 1;
-                        runtime.status = format!(
-                            "Provider returned invalid tool calls -- retrying ({}/{})...",
-                            runtime.retry_count, max_retries
-                        );
-                        start_completion(state, runtime);
-                    } else {
-                        runtime.retry_count = 0;
-                        push_runtime(
-                            state,
-                            runtime,
-                            ChatMessage::new(
-                                Role::Error,
-                                format!(
-                                    "Provider returned invalid tool calls (gave up after {} retries).",
-                                    max_retries
-                                ),
-                            ),
-                        );
-                    }
+                    runtime.retry_count += 1;
+                    runtime.status = format!(
+                        "Invalid tool calls — retrying (attempt {})...",
+                        runtime.retry_count,
+                    );
+                    start_completion(state, runtime);
                     return true;
                 } else {
                     // Has text but no valid tool calls — treat as text message.
@@ -1585,7 +1521,7 @@ fn start_next_live_shell(runtime: &mut ChatRuntime, project_root: &str) {
         runtime.live_shell_pid = task.pid;
         runtime.live_shell_start = Some(std::time::Instant::now());
         runtime.live_shell_rx = Some(rx);
-        runtime.status = format!("Running: {}...", helpers::truncate_str(&command, 60));
+        runtime.status = format!("Running: {}...", core_helpers::truncate_str(&command, 60));
         return;
     }
 }
@@ -1824,8 +1760,6 @@ fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     runtime.assistant_tool_calls_json = None;
     runtime.provider_error = None;
     runtime.retry_count = 0;
-    runtime.recovery_attempts = 0;
-    runtime.recovery_after = None;
     runtime.continuation_chain = 0;
     runtime.status = "Session handed off — starting fresh.".into();
     runtime.request_start = None;
@@ -2127,9 +2061,9 @@ fn execute_tool_with_cache(
                 None => return "Error: missing 'path' argument".to_string(),
             };
             let path =
-                helpers::resolve_path_cached(raw_path, project_root, path_cache, allow_escape);
-            if helpers::is_blocked_path(&path) {
-                return helpers::blocked_error(raw_path);
+                core_helpers::resolve_path_cached(raw_path, project_root, path_cache, allow_escape);
+            if core_helpers::is_blocked_path(&path) {
+                return core_helpers::blocked_error(raw_path);
             }
             match fsutil::read_to_string(&path) {
                 Ok(content) => {
@@ -2195,9 +2129,9 @@ fn execute_tool_with_cache(
                 None => return "Error: missing 'path' argument".to_string(),
             };
             let path =
-                helpers::resolve_path_cached(raw_path, project_root, path_cache, allow_escape);
-            if helpers::is_blocked_path(&path) {
-                return helpers::blocked_error(raw_path);
+                core_helpers::resolve_path_cached(raw_path, project_root, path_cache, allow_escape);
+            if core_helpers::is_blocked_path(&path) {
+                return core_helpers::blocked_error(raw_path);
             }
             match fsutil::read_to_string(&path) {
                 Ok(content) => {
@@ -2249,16 +2183,16 @@ fn execute_tool_with_cache(
                     None => continue,
                 };
                 let path =
-                    helpers::resolve_path_cached(raw, project_root, path_cache, allow_escape);
-                if helpers::is_blocked_path(&path) {
-                    out.push_str(&helpers::blocked_error(raw));
+                    core_helpers::resolve_path_cached(raw, project_root, path_cache, allow_escape);
+                if core_helpers::is_blocked_path(&path) {
+                    out.push_str(&core_helpers::blocked_error(raw));
                     out.push_str("\n---\n");
                     continue;
                 }
                 out.push_str(&format!("path:{}\n", path.display()));
                 match fsutil::read_to_string(&path) {
                     Ok(content) => {
-                        out.push_str(&helpers::truncate_middle(&content, 32 * 1024));
+                        out.push_str(&core_helpers::truncate_middle(&content, 32 * 1024));
                     }
                     Err(e) => {
                         out.push_str(&helpers::tool_error(
@@ -2278,14 +2212,14 @@ fn execute_tool_with_cache(
                 None => return "Error: missing 'path' argument".to_string(),
             };
             let content = args["content"].as_str().unwrap_or("");
-            let path = helpers::resolve_path_write_cached(
+            let path = core_helpers::resolve_path_write_cached(
                 raw_path,
                 project_root,
                 path_cache,
                 allow_escape,
             );
-            if helpers::is_blocked_path(&path) {
-                return helpers::blocked_error(raw_path);
+            if core_helpers::is_blocked_path(&path) {
+                return core_helpers::blocked_error(raw_path);
             }
             if let Some(parent) = path.parent() {
                 let _ = fsutil::create_dir_all(parent);
@@ -2305,9 +2239,9 @@ fn execute_tool_with_cache(
                 None => return "Error: missing 'path' argument".to_string(),
             };
             let path =
-                helpers::resolve_path_cached(raw_path, project_root, path_cache, allow_escape);
-            if helpers::is_blocked_path(&path) {
-                return helpers::blocked_error(raw_path);
+                core_helpers::resolve_path_cached(raw_path, project_root, path_cache, allow_escape);
+            if core_helpers::is_blocked_path(&path) {
+                return core_helpers::blocked_error(raw_path);
             }
             if !path.exists() {
                 return format!("Error listing {}: path does not exist", path.display());
@@ -2338,14 +2272,14 @@ fn execute_tool_with_cache(
                 Some(p) => p,
                 None => return "Error: missing 'path' argument".to_string(),
             };
-            let path = helpers::resolve_path_write_cached(
+            let path = core_helpers::resolve_path_write_cached(
                 raw_path,
                 project_root,
                 path_cache,
                 allow_escape,
             );
-            if helpers::is_blocked_path(&path) {
-                return helpers::blocked_error(raw_path);
+            if core_helpers::is_blocked_path(&path) {
+                return core_helpers::blocked_error(raw_path);
             }
             let result = if fsutil::is_dir(&path) {
                 fsutil::remove_dir(&path)
@@ -2371,14 +2305,14 @@ fn execute_tool_with_cache(
                 None => return "Error: missing 'to' argument".to_string(),
             };
             let from =
-                helpers::resolve_path_cached(raw_from, project_root, path_cache, allow_escape);
-            if helpers::is_blocked_path(&from) {
-                return helpers::blocked_error(raw_from);
+                core_helpers::resolve_path_cached(raw_from, project_root, path_cache, allow_escape);
+            if core_helpers::is_blocked_path(&from) {
+                return core_helpers::blocked_error(raw_from);
             }
             let to =
-                helpers::resolve_path_write_cached(raw_to, project_root, path_cache, allow_escape);
-            if helpers::is_blocked_path(&to) {
-                return helpers::blocked_error(raw_to);
+                core_helpers::resolve_path_write_cached(raw_to, project_root, path_cache, allow_escape);
+            if core_helpers::is_blocked_path(&to) {
+                return core_helpers::blocked_error(raw_to);
             }
             if let Some(parent) = to.parent() {
                 let _ = fsutil::create_dir_all(parent);
@@ -2402,14 +2336,14 @@ fn execute_tool_with_cache(
                 Some(p) => p,
                 None => return "Error: missing 'path' argument".to_string(),
             };
-            let path = helpers::resolve_path_write_cached(
+            let path = core_helpers::resolve_path_write_cached(
                 raw_path,
                 project_root,
                 path_cache,
                 allow_escape,
             );
-            if helpers::is_blocked_path(&path) {
-                return helpers::blocked_error(raw_path);
+            if core_helpers::is_blocked_path(&path) {
+                return core_helpers::blocked_error(raw_path);
             }
             match fsutil::create_dir_all(&path) {
                 Ok(_) => format!("Created directory: {}", path.display()),
@@ -2424,9 +2358,9 @@ fn execute_tool_with_cache(
             };
             let search_root = args["path"].as_str().unwrap_or(project_root);
             let search_path =
-                helpers::resolve_path_cached(search_root, project_root, path_cache, allow_escape);
-            if helpers::is_blocked_path(&search_path) {
-                return helpers::blocked_error(search_root);
+                core_helpers::resolve_path_cached(search_root, project_root, path_cache, allow_escape);
+            if core_helpers::is_blocked_path(&search_path) {
+                return core_helpers::blocked_error(search_root);
             }
             let file_glob = args["file_glob"].as_str().unwrap_or("*");
             let case_sensitive = args["case_sensitive"].as_bool().unwrap_or(true);
@@ -2457,14 +2391,14 @@ fn execute_tool_with_cache(
             let old_text = helpers::strip_line_numbers(raw_old_text);
             let new_text = helpers::strip_line_numbers(raw_new_text);
 
-            let path = helpers::resolve_path_write_cached(
+            let path = core_helpers::resolve_path_write_cached(
                 raw_path,
                 project_root,
                 path_cache,
                 allow_escape,
             );
-            if helpers::is_blocked_path(&path) {
-                return helpers::blocked_error(raw_path);
+            if core_helpers::is_blocked_path(&path) {
+                return core_helpers::blocked_error(raw_path);
             }
             let content = match fsutil::read_to_string(&path) {
                 Ok(c) => c,
@@ -2627,26 +2561,15 @@ fn execute_tool_with_cache(
                 .filter(|i| i.status == TodoStatus::Completed)
                 .count();
             let total = items.len();
-            let all_pending = items.iter().all(|i| i.status == TodoStatus::Pending);
-            let all_terminal = items
-                .iter()
-                .all(|i| i.status == TodoStatus::Completed || i.status == TodoStatus::Cancelled);
-            if all_pending || all_terminal {
-                format!(
-                    "Task list updated: \"{}\" -- {}/{} complete | Context: {}/{} tokens ({}%)",
-                    title,
-                    done,
-                    total,
-                    ctx_used,
-                    ctx_max,
-                    (ctx_used * 100 / ctx_max.max(1)).min(100),
-                )
-            } else {
-                format!(
-                    "Task list updated: \"{}\" -- {}/{} complete",
-                    title, done, total,
-                )
-            }
+            format!(
+                "Task list updated: \"{}\" -- {}/{} complete | Context: {}/{} tokens ({}%)",
+                title,
+                done,
+                total,
+                ctx_used,
+                ctx_max,
+                (ctx_used * 100 / ctx_max.max(1)).min(100),
+            )
         }
 
         "glob" => {
@@ -2658,14 +2581,14 @@ fn execute_tool_with_cache(
                 args["path"]
                     .as_str()
                     .map(|p| {
-                        helpers::resolve_path_cached(p, project_root, path_cache, allow_escape)
+                        core_helpers::resolve_path_cached(p, project_root, path_cache, allow_escape)
                     })
                     .unwrap_or_else(|| std::path::PathBuf::from(&project_root)),
             );
             if let Some(ref sp) = search_path
-                && helpers::is_blocked_path(sp)
+                && core_helpers::is_blocked_path(sp)
             {
-                return helpers::blocked_error(args["path"].as_str().unwrap_or(project_root));
+                return core_helpers::blocked_error(args["path"].as_str().unwrap_or(project_root));
             }
             let results = autocode_fs::explorer::glob_files(search_path.as_deref(), pattern);
             if results.is_empty() {

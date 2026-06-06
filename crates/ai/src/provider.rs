@@ -174,6 +174,7 @@ pub struct CompletionRequest {
     pub tool_choice: ToolChoice,
     pub parallel_tool_calls: bool,
     pub request_timeout_secs: u64,
+    pub stream_idle_timeout_secs: u64,
     pub thinking_mode: bool,
     pub reasoning_effort: String,
     pub thinking_api: autocode_core::state::ThinkingApi,
@@ -263,10 +264,10 @@ pub enum ProviderEvent {
 fn tool_definitions() -> serde_json::Value {
     let grep_note = autocode_core::sysinfo::grep_note();
     let grep_desc = if grep_note.is_empty() {
-        "Fast code search via ripgrep. Returns matching file paths with line numbers. Supports regex, glob filtering. Respects .gitignore.".to_string()
+        "Fast code search. Returns matching file paths with line numbers. Supports regex, glob filtering. Respects .gitignore.".to_string()
     } else {
         format!(
-            "Fast code search via ripgrep. Returns matching file paths with line numbers. Supports regex, glob filtering. Respects .gitignore. [!] {}",
+            "Fast code search. Returns matching file paths with line numbers. Supports regex, glob filtering. Respects .gitignore. [!] {}",
             grep_note
         )
     };
@@ -782,6 +783,7 @@ fn run_request(
             &req.model,
             tx,
             req.request_timeout_secs,
+            req.stream_idle_timeout_secs,
         )
     } else {
         let conn = HttpConn {
@@ -797,6 +799,7 @@ fn run_request(
             &req.model,
             tx,
             req.request_timeout_secs,
+            req.stream_idle_timeout_secs,
         )
     }
 }
@@ -914,6 +917,33 @@ fn parse_url(
     Ok((host.to_string(), path, port, use_tls))
 }
 
+fn connect_tcp(
+    host: &str,
+    port: u16,
+    timeout_secs: u64,
+) -> std::io::Result<TcpStream> {
+    use std::net::ToSocketAddrs;
+    let timeout = std::time::Duration::from_secs(timeout_secs);
+    let addrs = (host, port).to_socket_addrs()?;
+    let mut last_err = None;
+    for addr in addrs {
+        match TcpStream::connect_timeout(&addr, timeout) {
+            Ok(s) => return Ok(s),
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::TimedOut {
+                    return Err(e);
+                }
+                last_err = Some(e);
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::ConnectionRefused, format!(
+            "could not connect to {}:{}", host, port
+        ))
+    }))
+}
+
 fn send_http(
     conn: HttpConn<'_>,
     api_key: &str,
@@ -922,10 +952,15 @@ fn send_http(
     model: &str,
     tx: Sender<ProviderEvent>,
     request_timeout_secs: u64,
+    stream_idle_timeout_secs: u64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let addr = format!("{}:{}", conn.host, conn.port);
-    let mut stream_conn = TcpStream::connect(&addr)?;
-    stream_conn.set_read_timeout(Some(std::time::Duration::from_secs(request_timeout_secs)))?;
+    let mut stream_conn = connect_tcp(conn.host, conn.port, request_timeout_secs)?;
+    let read_timeout = if stream {
+        stream_idle_timeout_secs
+    } else {
+        request_timeout_secs
+    };
+    stream_conn.set_read_timeout(Some(std::time::Duration::from_secs(read_timeout)))?;
     stream_conn.set_write_timeout(Some(std::time::Duration::from_secs(request_timeout_secs)))?;
 
     let request = build_http_request(conn.host, conn.path, api_key, body);
@@ -944,6 +979,7 @@ fn send_https(
     model: &str,
     tx: Sender<ProviderEvent>,
     request_timeout_secs: u64,
+    stream_idle_timeout_secs: u64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     debug_log!(
         "provider::send_https: host={} port={} stream={}",
@@ -952,9 +988,13 @@ fn send_https(
         is_stream
     );
 
-    let addr = format!("{}:{}", conn.host, conn.port);
-    let stream = TcpStream::connect(&addr)?;
-    stream.set_read_timeout(Some(Duration::from_secs(request_timeout_secs)))?;
+    let stream = connect_tcp(conn.host, conn.port, request_timeout_secs)?;
+    let read_timeout = if is_stream {
+        stream_idle_timeout_secs
+    } else {
+        request_timeout_secs
+    };
+    stream.set_read_timeout(Some(Duration::from_secs(read_timeout)))?;
     stream.set_write_timeout(Some(Duration::from_secs(request_timeout_secs)))?;
 
     let config = tls_config();
