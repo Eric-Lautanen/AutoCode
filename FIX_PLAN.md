@@ -75,49 +75,67 @@
 - **Verification**: `cargo check` passes. No `TEMP_FILES` entry is removed while a background thread may still be writing to it.
 - **Status**: ✅ Done
 
----
+<!-- Phase 3 completed 2026-06-06. All items verified via `cargo check`. -->
 
-## Phase 3 — Redundancies
+## ✅ Phase 3 — Redundancies — COMPLETE
 
 ### 3.1 Extract session-save loop
-- **File**: `crates/autocode/src/app.rs:391-405` and `431-445`
-- **Fix**: Create `fn save_sessions(state: &mut AppState, runtimes: &HashMap<..>)` in `app.rs` or `session.rs`. Replaces 2× identical loops.
+- **Files**: `crates/autocode/src/app.rs:391-405` and `431-445`
+- **Fix**: Created `AutocodeApp::save_sessions()` — replaces 2× identical loops in `save()` and `on_exit()`.
+- **Verification**: `cargo check` passes.
+- **Status**: ✅ Done
 
 ### 3.2 Unify `build_tool_meta` for `read_file` / `read_entire_file`
-- **File**: `crates/ai/src/chat.rs:1946-1991`
-- **Fix**: Extract shared `fn file_tool_meta(name, path, result) -> ToolMeta`.
+- **File**: `crates/ai/src/chat.rs`
+- **Fix**: Extracted shared `fn file_tool_meta(name, path, result, duration_ms, is_error) -> ToolMeta`.
+- **Verification**: `cargo check` passes. Both branches delegate to the shared helper.
+- **Status**: ✅ Done
 
 ### 3.3 Unify incomplete-task continuation logic
 - **File**: `crates/ai/src/chat.rs:1062-1075` and `1444-1457`
-- **Fix**: Shared `fn auto_continue(state, runtime, response)`.
+- **Fix**: Shared `fn auto_continue(state, runtime, response)` — replaces 2× identical block.
+- **Verification**: `cargo check` passes.
+- **Status**: ✅ Done
 
 ### 3.4 Remove `handoff` from `fast_tools`
-- **File**: `crates/ai/src/chat.rs:1240`
-- **Fix**: `handoff` is handled specially in `commit_tool_results`; remove from `fast_tools` list so it gets `request_timeout_secs`.
+- **File**: `crates/ai/src/chat.rs`
+- **Fix**: Removed `"handoff"` from `fast_tools` list so handoff tool calls get `request_timeout_secs`.
+- **Verification**: `cargo check` passes.
+- **Status**: ✅ Done
 
 ### 3.5 Decompose `app.rs::new()`
-- **File**: `crates/autocode/src/app.rs:33-153`
-- **Fix**: Split into:
-  - `fn load_and_prune_projects(state)` (lines 41-53)
-  - `fn prune_orphan_sessions(state)` (lines 55-79)
-  - `fn purge_stale_stubs(state)` (lines 86-118)
-  - `fn restore_active_session(state)` (lines 120-153)
+- **File**: `crates/autocode/src/app.rs`
+- **Fix**: Split into 4 associated functions:
+  - `AutocodeApp::load_and_prune_projects(state)`
+  - `AutocodeApp::prune_orphan_sessions(state)`
+  - `AutocodeApp::purge_stale_stubs(state)`
+  - `AutocodeApp::restore_active_session(state)`
+- **Verification**: `cargo check` passes. `new()` is now 15 lines of orchestration.
+- **Status**: ✅ Done
 
 ### 3.6 Decompose session switch in `ui_chat.rs`
 - **File**: `crates/ui/src/ui_chat.rs:196-315`
-- **Fix**: Extract `fn save_old_session`, `fn load_new_session`, `fn restore_scroll_offset`.
+- **Fix**: Extracted `fn save_old_session`, `fn load_new_session` (returns `Option<String>` for purge), `fn handle_purge_on_missing`, `fn restore_scroll_offset`.
+- **Verification**: `cargo check` passes. Session-switch block is now 7 lines of orchestration.
+- **Status**: ✅ Done
 
-### 3.7 Nested thread-per-tool -> batch channel
+### 3.7 Nested thread-per-tool -> sequential execution
 - **File**: `crates/ai/src/chat.rs:1258-1373`
-- **Fix**: Remove inner `std::thread::spawn` per tool. Run tools sequentially in the outer thread. Add `std::thread::yield_now()` between long-running tools. Acceptable because the outer thread is dedicated.
+- **Fix**: Removed inner `std::thread::spawn` per tool. Tools run sequentially in the outer thread with `std::thread::yield_now()` between them.
+- **Verification**: `cargo check` passes. Removes ~30 lines of channel plumbing.
+- **Status**: ✅ Done
 
 ### 3.8 Remove redundant `ensure_session` in `app.rs::logic`
 - **File**: `crates/autocode/src/app.rs:224`
-- **Fix**: Only call `session::ensure_session` when `state.sessions.active_session_id` changes or on new session creation. Gate with a dirty flag.
+- **Fix**: Track `prev_session_id` on `AutocodeApp`. Only call `ensure_session` when session changed or active session has empty messages.
+- **Verification**: `cargo check` passes.
+- **Status**: ✅ Done
 
 ### 3.9 Provider lookup dedup
 - **File**: `crates/ai/src/chat.rs:526-551`
-- **Fix**: Single `state.sessions.iter().find(...)` returning `(label, provider)`.
+- **Fix**: Combined session lookup and provider fetch into a single chain via `.and_then()` — deduplicates the `find()` and `get()` calls.
+- **Verification**: `cargo check` passes.
+- **Status**: ✅ Done
 
 ---
 
@@ -174,11 +192,11 @@ All dependencies at latest stable versions. No version changes required.
 ## Execution Order
 
 ```
-✅ Phase 1 (mem) → ✅ Phase 2 (races) → Phase 3 (redundancies) → Phase 4 (practices)
-    COMPLETE          COMPLETE          3.1                      4.1
-                                         3.2                      4.2
-                                         3.3                      4.3-4.5
-                                         3.4-3.9                  4.6 (clippy)
+✅ Phase 1 (mem) → ✅ Phase 2 (races) → ✅ Phase 3 (redundancies) → Phase 4 (practices)
+    COMPLETE          COMPLETE          COMPLETE                   4.1
+                                                                  4.2
+                                                                  4.3-4.5
+                                                                  4.6 (clippy)
 ```
 
 Each phase builds on the previous but is independent — order can be adjusted per sprint. Risk of regression is low for all items; tests verify correctness.

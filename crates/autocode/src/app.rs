@@ -27,6 +27,7 @@ pub struct AutocodeApp {
     folder_picker: Option<std::sync::mpsc::Receiver<Option<String>>>,
     repaint_scheduled: bool,
     sysinfo_rx: Option<std::sync::mpsc::Receiver<autocode_core::sysinfo::SysInfo>>,
+    prev_session_id: Option<String>,
 }
 
 impl AutocodeApp {
@@ -38,21 +39,44 @@ impl AutocodeApp {
         };
         theme::apply(&cc.egui_ctx);
 
-        // Prune projects whose data directory was manually deleted.
+        Self::load_and_prune_projects(&mut state);
+        Self::prune_orphan_sessions(&mut state);
+        Self::purge_stale_stubs(&mut state);
+        Self::restore_active_session(&mut state);
+
+        let sysinfo_rx = if autocode_core::sysinfo::seed_from_persisted(&state.sysinfo) {
+            None
+        } else {
+            Some(autocode_core::sysinfo::start_detect())
+        };
+
+        Self {
+            state,
+            runtimes: HashMap::new(),
+            chat_panel: ChatPanelState::default(),
+            explorer_panel: ExplorerPanelState::default(),
+            settings: SettingsState::default(),
+            folder_picker: None,
+            repaint_scheduled: false,
+            sysinfo_rx,
+            prev_session_id: None,
+        }
+    }
+
+    fn load_and_prune_projects(state: &mut AppState) {
         let proj_dir = autocode_core::fsutil::exe_dir().join("data").join("projects");
         state.projects.retain(|p| {
             let dir = proj_dir.join(&p.data_dir_name);
             if !dir.exists() {
-                state
-                    .sessions
-                    .retain(|s| s.project_id.as_ref() != Some(&p.id));
+                state.sessions.retain(|s| s.project_id.as_ref() != Some(&p.id));
                 false
             } else {
                 true
             }
         });
+    }
 
-        // Prune orphaned sessions.
+    fn prune_orphan_sessions(state: &mut AppState) {
         let valid_ids: std::collections::HashSet<String> =
             state.projects.iter().map(|p| p.id.clone()).collect();
         state.sessions.retain(|s| {
@@ -60,8 +84,6 @@ impl AutocodeApp {
                 .as_ref()
                 .is_none_or(|pid| valid_ids.contains(pid))
         });
-        // If the active session was pruned or no sessions remain, the
-        // global per-session state (todo_list, show_todo, etc.) is stale.
         if state.sessions.is_empty() {
             state.active_session_id = None;
             state.todo_list.clear();
@@ -70,20 +92,16 @@ impl AutocodeApp {
             state.handoff_enabled = false;
             state.settings_open = false;
         } else if state.active_session_id.is_some()
-            && !state
-                .sessions
-                .iter()
-                .any(|s| Some(&s.id) == state.active_session_id.as_ref())
+            && !state.sessions.iter().any(|s| Some(&s.id) == state.active_session_id.as_ref())
         {
             state.active_session_id = state.sessions.last().map(|s| s.id.clone());
         }
-
-        // Ensure remaining projects have their data directories.
         for p in &state.projects {
             let _ = autocode_core::session_storage::ensure_project_dirs(p);
         }
+    }
 
-        // Purge session stubs whose files no longer exist on disk.
+    fn purge_stale_stubs(state: &mut AppState) {
         let sessions_to_remove: Vec<String> = state
             .sessions
             .iter()
@@ -95,7 +113,6 @@ impl AutocodeApp {
                         if candidate.exists() {
                             return false;
                         }
-                        // Fallback: scan for {short_id}_*.json prefix.
                         let prefix = format!("{}_", s.id);
                         if let Ok(entries) = std::fs::read_dir(&dir) {
                             !entries.flatten().any(|e| {
@@ -116,17 +133,14 @@ impl AutocodeApp {
         if !sessions_to_remove.is_empty() {
             autocode_core::debug_log!("app: purged {} stale session stub(s) from ron", sessions_to_remove.len());
         }
+    }
 
-        // Load messages for whichever session was active at shutdown.
+    fn restore_active_session(state: &mut AppState) {
         if let Some(ref sid) = state.active_session_id
             && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == *sid)
-            && let Some(proj) = state
-                .projects
-                .iter()
-                .find(|p| Some(&p.id) == sess.project_id.as_ref())
+            && let Some(proj) = state.projects.iter().find(|p| Some(&p.id) == sess.project_id.as_ref())
         {
             autocode_core::session_storage::load_session(proj, sess);
-            // Sync the session's per-session state into the global working copy.
             state.todo_list = sess.todo_list.clone();
             state.show_todo = sess.show_todo;
             state.todo_user_dismissed = sess.todo_user_dismissed;
@@ -134,8 +148,6 @@ impl AutocodeApp {
             state.show_explorer = sess.show_explorer;
             state.settings_open = sess.settings_open;
         }
-
-        // Restore provider/model from the active session if it has stored values.
         let restore_provider = state.active_session().and_then(|s| {
             if !s.provider_label.is_empty() {
                 Some((s.provider_label.clone(), s.model.clone()))
@@ -151,22 +163,23 @@ impl AutocodeApp {
                 prov.model = model;
             }
         }
+    }
 
-        let sysinfo_rx = if autocode_core::sysinfo::seed_from_persisted(&state.sysinfo) {
-            None
-        } else {
-            Some(autocode_core::sysinfo::start_detect())
-        };
-
-        Self {
-            state,
-            runtimes: HashMap::new(),
-            chat_panel: ChatPanelState::default(),
-            explorer_panel: ExplorerPanelState::default(),
-            settings: SettingsState::default(),
-            folder_picker: None,
-            repaint_scheduled: false,
-            sysinfo_rx,
+    fn save_sessions(&self) {
+        for sess in &self.state.sessions {
+            let should_save = self.state.active_session_id.as_ref() == Some(&sess.id)
+                || self.runtimes.contains_key(&sess.id);
+            if !should_save {
+                continue;
+            }
+            if let Some(proj) = self
+                .state
+                .projects
+                .iter()
+                .find(|p| Some(&p.id) == sess.project_id.as_ref())
+            {
+                let _ = autocode_core::session_storage::save_session(proj, sess);
+            }
         }
     }
 }
@@ -221,7 +234,17 @@ impl eframe::App for AutocodeApp {
             }
         }
 
-        let waiting_sysinfo = session::ensure_session(&mut self.state);
+        let session_changed = self.prev_session_id != self.state.active_session_id;
+        if session_changed {
+            self.prev_session_id = self.state.active_session_id.clone();
+        }
+        let waiting_sysinfo = if session_changed
+            || self.state.active_session().is_some_and(|s| s.messages.is_empty())
+        {
+            session::ensure_session(&mut self.state)
+        } else {
+            false
+        };
         let needs_repaint = chat::update_all(&mut self.state, &mut self.runtimes);
         let any_busy = self.runtimes.values().any(|r| r.is_busy());
 
@@ -270,7 +293,7 @@ impl eframe::App for AutocodeApp {
                 );
                 autocode_core::session_storage::switch_to_project(&mut self.state, &id);
                 self.state.show_explorer = true;
-                session::ensure_session(&mut self.state);
+                self.prev_session_id = self.state.active_session_id.clone();
             }
         }
     }
@@ -388,21 +411,7 @@ impl eframe::App for AutocodeApp {
                 sess.settings_open = settings_open;
             }
         }
-        for sess in &self.state.sessions {
-            let should_save = self.state.active_session_id.as_ref() == Some(&sess.id)
-                || self.runtimes.contains_key(&sess.id);
-            if !should_save {
-                continue;
-            }
-            if let Some(proj) = self
-                .state
-                .projects
-                .iter()
-                .find(|p| Some(&p.id) == sess.project_id.as_ref())
-            {
-                let _ = autocode_core::session_storage::save_session(proj, sess);
-            }
-        }
+        self.save_sessions();
         self.state.save(storage);
     }
 
@@ -428,21 +437,7 @@ impl eframe::App for AutocodeApp {
                 sess.model = model;
             }
         }
-        for sess in &self.state.sessions {
-            let should_save = self.state.active_session_id.as_ref() == Some(&sess.id)
-                || self.runtimes.contains_key(&sess.id);
-            if !should_save {
-                continue;
-            }
-            if let Some(proj) = self
-                .state
-                .projects
-                .iter()
-                .find(|p| Some(&p.id) == sess.project_id.as_ref())
-            {
-                let _ = autocode_core::session_storage::save_session(proj, sess);
-            }
-        }
+        self.save_sessions();
 
         std::thread::yield_now();
 

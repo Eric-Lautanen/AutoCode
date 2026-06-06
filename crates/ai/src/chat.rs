@@ -532,27 +532,41 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
             .sessions
             .iter()
             .find(|s| s.id == session_id)
-            .map(|s| {
-                if !s.provider_label.is_empty() {
+            .and_then(|s| {
+                let label = if !s.provider_label.is_empty() {
                     s.provider_label.clone()
                 } else {
                     state.active_provider.clone()
-                }
-            })
-            .unwrap_or_else(|| state.active_provider.clone());
-        match state.providers.get(&prov_label).cloned() {
-            Some(p) if !p.api_key.is_empty() => p,
-            Some(_) => {
-                runtime.status = "API key not set.".into();
-                push_runtime(state, runtime, ChatMessage::new(Role::Error, format!("API key not set for provider \"{prov_label}\". Go to Settings → Providers to configure it.")));
-                return;
-            }
+                };
+                state.providers.get(&label).and_then(|p| {
+                    if !p.api_key.is_empty() {
+                        Some((label, p.clone()))
+                    } else {
+                        None
+                    }
+                })
+            });
+        let (prov_label, provider) = match prov_label {
+            Some((label, p)) => (label, p),
             None => {
-                runtime.status = "No provider configured.".into();
-                push_runtime(state, runtime, ChatMessage::new(Role::Error, format!("Provider \"{prov_label}\" not found. Go to Settings → Providers to configure it.")));
-                return;
+                let label = state.active_provider.clone();
+                match state.providers.get(&label) {
+                    Some(p) if !p.api_key.is_empty() => (label, p.clone()),
+                    Some(_) => {
+                        runtime.status = "API key not set.".into();
+                        push_runtime(state, runtime, ChatMessage::new(Role::Error, format!("API key not set for provider \"{label}\". Go to Settings → Providers to configure it.")));
+                        return;
+                    }
+                    None => {
+                        runtime.status = "No provider configured.".into();
+                        push_runtime(state, runtime, ChatMessage::new(Role::Error, format!("Provider \"{label}\" not found. Go to Settings → Providers to configure it.")));
+                        return;
+                    }
+                }
             }
-        }
+        };
+        drop(prov_label);
+        provider
     };
 
     let mut messages = session::prepare_request_messages_for_session(state, session_id);
@@ -1066,20 +1080,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     if !response.is_empty() {
                         auto_name_session(state, &response);
                     }
-                    if !runtime.handoff_in_progress
-                        && helpers::is_incomplete_task_response(&response)
-                    {
-                        let max_chain = state.max_retries.max(5);
-                        if runtime.continuation_chain < max_chain {
-                            runtime.continuation_chain += 1;
-                            push_runtime(
-                                state,
-                                runtime,
-                                ChatMessage::new(Role::User, "continue".to_string()),
-                            );
-                            start_completion(state, runtime);
-                        }
-                    }
+                    auto_continue(state, runtime, &response);
                     return true;
                 }
             }
@@ -1244,7 +1245,6 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     "list_dir",
                     "glob",
                     "todo_list",
-                    "handoff",
                 ];
                 // Non-shell tools run in this batch; use a shorter timeout for
                 // pure file operations vs web/network tools that may take longer.
@@ -1263,119 +1263,54 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 );
                 let ctx_info = context_usage_info_for_session(state, session_id);
                 std::thread::spawn(move || {
-                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        let mut results = Vec::with_capacity(calls_clone.len());
-                        for tc in &calls_clone {
-                            let start = std::time::Instant::now();
-                            let tc_clone = tc.clone();
-                            let pr2 = pr_clone.clone();
-                            let mut pc = path_cache.clone();
+                    let mut results = Vec::with_capacity(calls_clone.len());
+                    for tc in &calls_clone {
+                        let start = std::time::Instant::now();
 
-                            let (ct, cr) = std::sync::mpsc::channel();
-                            let ctx_used = ctx_info.0;
-                            let ctx_max = ctx_info.1;
-                            std::thread::spawn(move || {
-                                let result =
-                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                        execute_tool_with_cache(
-                                            &tc_clone,
-                                            &pr2,
-                                            &mut pc,
-                                            allow_escape,
-                                            ctx_used,
-                                            ctx_max,
-                                        )
-                                    }));
-                                let r = match result {
-                                    Ok(r) => r,
-                                    Err(e) => {
-                                        let msg = format!(
-                                            "Tool '{}' panicked: {}",
-                                            tc_clone.name,
-                                            autocode_core::debug::panic_msg(&e)
-                                        );
-                                        helpers::tool_error(
-                                            &msg,
-                                            "Re-read the file and try a smaller edit",
-                                        )
-                                    }
-                                };
-                                let _ = ct.send((r, pc));
-                            });
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            execute_tool_with_cache(
+                                tc,
+                                &pr_clone,
+                                &mut path_cache,
+                                allow_escape,
+                                ctx_info.0,
+                                ctx_info.1,
+                            )
+                        }));
+                        let result = match result {
+                            Ok(r) => r,
+                            Err(e) => {
+                                let msg = format!(
+                                    "Tool '{}' panicked: {}",
+                                    tc.name,
+                                    autocode_core::debug::panic_msg(&e)
+                                );
+                                helpers::tool_error(
+                                    &msg,
+                                    "Re-read the file and try a smaller edit",
+                                )
+                            }
+                        };
 
-                            let (result, updated_cache) = match cr.recv_timeout(per_tool_timeout) {
-                                Ok((r, pc)) => (r, pc),
-                                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                                    let err = helpers::tool_error(
-                                        &format!(
-                                            "Tool '{}' timed out after {}s",
-                                            tc.name,
-                                            per_tool_timeout.as_secs()
-                                        ),
-                                        "Simplify the operation or increase the timeout",
-                                    );
-                                    (err, path_cache.clone())
-                                }
-                                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                                    let err = helpers::tool_error(
-                                        &format!(
-                                            "Tool '{}' failed — thread terminated unexpectedly",
-                                            tc.name,
-                                        ),
-                                        "Re-read the file and try again with a smaller edit",
-                                    );
-                                    (err, path_cache.clone())
-                                }
-                            };
-                            path_cache = updated_cache;
+                        let duration_ms = start.elapsed().as_millis() as u64;
+                        let meta = build_tool_meta(tc, &result, duration_ms);
+                        let todo_update = if tc.name == "todo_list" {
+                            let args: serde_json::Value = serde_json::from_str(&tc.arguments)
+                                .unwrap_or(serde_json::Value::Null);
+                            helpers::parse_todo_from_tool_args(&args)
+                        } else {
+                            None
+                        };
+                        results.push(ToolResult {
+                            tool_call: tc.clone(),
+                            content: result.to_string(),
+                            meta,
+                            todo_update,
+                        });
 
-                            let duration_ms = start.elapsed().as_millis() as u64;
-                            let meta = build_tool_meta(tc, &result, duration_ms);
-                            let todo_update = if tc.name == "todo_list" {
-                                let args: serde_json::Value = serde_json::from_str(&tc.arguments)
-                                    .unwrap_or(serde_json::Value::Null);
-                                helpers::parse_todo_from_tool_args(&args)
-                            } else {
-                                None
-                            };
-                            results.push(ToolResult {
-                                tool_call: tc.clone(),
-                                content: result.to_string(),
-                                meta,
-                                todo_update,
-                            });
-                        }
-                        results
-                    }));
-                    let results = match result {
-                        Ok(results) => {
-                            debug_log!("chat: tool-exec finished ok, {} results", results.len());
-                            results
-                        }
-                        Err(panic_info) => {
-                            let panic_msg = format!(
-                                "Tool execution panicked: {}",
-                                autocode_core::debug::panic_msg(&panic_info)
-                            );
-                            debug_log!("chat: tool-exec PANIC: {}", panic_msg);
-                            calls_clone
-                                .iter()
-                                .map(|tc| ToolResult {
-                                    tool_call: tc.clone(),
-                                    content: helpers::tool_error(
-                                        &panic_msg,
-                                        "Retry the operation or use run_shell as fallback.",
-                                    ),
-                                    meta: ToolMeta {
-                                        tool_name: tc.name.clone(),
-                                        is_error: true,
-                                        ..Default::default()
-                                    },
-                                    todo_update: None,
-                                })
-                                .collect()
-                        }
-                    };
+                        std::thread::yield_now();
+                    }
+                    debug_log!("chat: tool-exec finished ok, {} results", results.len());
                     let _ = tx.send(results);
                 });
             }
@@ -1448,20 +1383,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
 
             auto_execute(state, runtime, &full_response);
 
-            if !runtime.handoff_in_progress
-                && helpers::is_incomplete_task_response(&full_response)
-            {
-                let max_chain = state.max_retries.max(5);
-                if runtime.continuation_chain < max_chain {
-                    runtime.continuation_chain += 1;
-                    push_runtime(
-                        state,
-                        runtime,
-                        ChatMessage::new(Role::User, "continue".to_string()),
-                    );
-                    start_completion(state, runtime);
-                }
-            }
+            auto_continue(state, runtime, &full_response);
         }
     }
 
@@ -1943,60 +1865,54 @@ fn generate_resume_content(sess: &autocode_core::state::Session) -> String {
     lines.join("\n")
 }
 
+fn auto_continue(state: &mut AppState, runtime: &mut ChatRuntime, response: &str) {
+    if runtime.handoff_in_progress || !helpers::is_incomplete_task_response(response) {
+        return;
+    }
+    let max_chain = state.max_retries.max(5);
+    if runtime.continuation_chain < max_chain {
+        runtime.continuation_chain += 1;
+        push_runtime(
+            state,
+            runtime,
+            ChatMessage::new(Role::User, "continue".to_string()),
+        );
+        start_completion(state, runtime);
+    }
+}
+
+fn file_tool_meta(name: &str, path: &str, result: &str, duration_ms: u64, is_error: bool) -> ToolMeta {
+    let (total_lines, total_bytes) = result
+        .lines()
+        .nth(1)
+        .and_then(|l| l.strip_prefix("-- "))
+        .and_then(|l| l.strip_suffix(" --"))
+        .and_then(|h| h.split_once(" lines, "))
+        .and_then(|(l, b)| {
+            let lines = l.parse::<usize>().ok()?;
+            let bytes = b.strip_suffix(" bytes")?.parse::<usize>().ok()?;
+            Some((lines, bytes))
+        })
+        .unwrap_or((result.lines().count(), result.len()));
+    ToolMeta {
+        tool_name: name.into(),
+        file_path: Some(path.into()),
+        line_count: Some(total_lines),
+        byte_count: Some(total_bytes),
+        is_error,
+        duration_ms: Some(duration_ms),
+        ..Default::default()
+    }
+}
+
 fn build_tool_meta(tc: &ToolCall, result: &str, duration_ms: u64) -> ToolMeta {
     let args: serde_json::Value =
         serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
     let is_error = result.starts_with("{\"error\":") || result.starts_with("Error:");
 
     match tc.name.as_str() {
-        "read_file" => {
-            let path = args["path"].as_str().unwrap_or("").to_string();
-            let (total_lines, total_bytes) = result
-                .lines()
-                .nth(1)
-                .and_then(|l| l.strip_prefix("-- "))
-                .and_then(|l| l.strip_suffix(" --"))
-                .and_then(|h| h.split_once(" lines, "))
-                .and_then(|(l, b)| {
-                    let lines = l.parse::<usize>().ok()?;
-                    let bytes = b.strip_suffix(" bytes")?.parse::<usize>().ok()?;
-                    Some((lines, bytes))
-                })
-                .unwrap_or((result.lines().count(), result.len()));
-            ToolMeta {
-                tool_name: "read_file".into(),
-                file_path: Some(path),
-                line_count: Some(total_lines),
-                byte_count: Some(total_bytes),
-                is_error,
-                duration_ms: Some(duration_ms),
-                ..Default::default()
-            }
-        }
-        "read_entire_file" => {
-            let path = args["path"].as_str().unwrap_or("").to_string();
-            let (total_lines, total_bytes) = result
-                .lines()
-                .nth(1)
-                .and_then(|l| l.strip_prefix("-- "))
-                .and_then(|l| l.strip_suffix(" --"))
-                .and_then(|h| h.split_once(" lines, "))
-                .and_then(|(l, b)| {
-                    let lines = l.parse::<usize>().ok()?;
-                    let bytes = b.strip_suffix(" bytes")?.parse::<usize>().ok()?;
-                    Some((lines, bytes))
-                })
-                .unwrap_or((result.lines().count(), result.len()));
-            ToolMeta {
-                tool_name: "read_entire_file".into(),
-                file_path: Some(path),
-                line_count: Some(total_lines),
-                byte_count: Some(total_bytes),
-                is_error,
-                duration_ms: Some(duration_ms),
-                ..Default::default()
-            }
-        }
+        "read_file" => file_tool_meta("read_file", args["path"].as_str().unwrap_or(""), result, duration_ms, is_error),
+        "read_entire_file" => file_tool_meta("read_entire_file", args["path"].as_str().unwrap_or(""), result, duration_ms, is_error),
         "read_files" => {
             let paths: Vec<&str> = args["paths"]
                 .as_array()
