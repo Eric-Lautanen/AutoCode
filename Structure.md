@@ -1,5 +1,11 @@
 # AutoCode — Workspace structure
 
+**Mission — A lightweight, resource-efficient AI coding assistant.**
+- Minimize RAM usage — every allocation counts
+- Keep `app.ron` files as small as possible
+- Keep the codebase clean, organized, and maintainable
+- Provide the essential functionality without bloat
+
 Cargo.toml (25 lines) — workspace root, 5 crate members, release LTO/strip/panic=unwind
 
 ## crates/autocode/ — binary
