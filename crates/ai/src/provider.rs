@@ -1448,6 +1448,193 @@ pub fn fetch_models(provider: &ApiProvider) -> Vec<String> {
     }
 }
 
+/// Extract the HTTP response body from a raw HTTP response buffer,
+/// stripping headers and decoding chunked transfer-encoding.
+fn http_response_body(buffer: &[u8]) -> Vec<u8> {
+    let (body_start, is_chunked) = {
+        let header_str = String::from_utf8_lossy(buffer);
+        let is_chunked = header_str.contains("Transfer-Encoding: chunked")
+            || header_str.contains("transfer-encoding: chunked");
+        let start = buffer
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .map(|i| i + 4)
+            .or_else(|| buffer.windows(2).position(|w| w == b"\n\n").map(|i| i + 2))
+            .unwrap_or(0);
+        (start, is_chunked)
+    };
+    if body_start > 0 && body_start < buffer.len() {
+        let raw = &buffer[body_start..];
+        if is_chunked {
+            decode_chunked(raw)
+        } else {
+            raw.to_vec()
+        }
+    } else {
+        buffer.to_vec()
+    }
+}
+
+/// Perform a native HTTP POST request, returning the response body with
+/// HTTP headers stripped. Supports both HTTP and HTTPS.
+/// `extra_headers` allows additional headers like `x-api-key` for Anthropic.
+pub fn native_post(
+    url: &str,
+    api_key: &str,
+    body: &str,
+    timeout_secs: u64,
+    extra_headers: &[(&str, &str)],
+) -> Result<String, String> {
+    let (host, path, port, use_tls) = parse_url(url).map_err(|e| e.to_string())?;
+    let stream = connect_tcp(&host, port, timeout_secs).map_err(|e| e.to_string())?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(timeout_secs)))
+        .map_err(|e| format!("set_read_timeout: {}", e))?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(timeout_secs)))
+        .map_err(|e| format!("set_write_timeout: {}", e))?;
+
+    // Build request headers
+    let mut header_str = format!(
+        "POST {path} HTTP/1.1\r\n\
+         Host: {host}\r\n\
+         Content-Type: application/json\r\n\
+         Content-Length: {len}\r\n",
+        path = path,
+        host = host,
+        len = body.len()
+    );
+
+    // Track whether an auth header was already set via extra_headers
+    let has_bearer = extra_headers
+        .iter()
+        .any(|(k, _)| k.eq_ignore_ascii_case("Authorization"));
+    let has_xapikey = extra_headers
+        .iter()
+        .any(|(k, _)| k.eq_ignore_ascii_case("x-api-key"));
+
+    if !has_bearer && !has_xapikey {
+        header_str.push_str(&format!("Authorization: Bearer {}\r\n", api_key));
+    }
+    for (key, value) in extra_headers {
+        header_str.push_str(&format!("{}: {}\r\n", key, value));
+    }
+    header_str.push_str("Connection: close\r\n\r\n");
+    header_str.push_str(body);
+
+    let request_bytes = header_str.as_bytes();
+    let mut buffer = Vec::with_capacity(8192);
+
+    let read_result: Result<(), String> = (|| {
+        if use_tls {
+            let config = tls_config();
+            let dns_name = rustls::pki_types::DnsName::try_from(host.clone())
+                .map_err(|_| "invalid DNS name".to_string())?;
+            let server_name = ServerName::DnsName(dns_name);
+            let client =
+                rustls::ClientConnection::new(config, server_name).map_err(|e| format!("tls: {}", e))?;
+            let mut tls_stream = rustls::StreamOwned::new(client, stream);
+            tls_stream
+                .write_all(request_bytes)
+                .map_err(|e| format!("write: {}", e))?;
+
+            let mut buf = [0u8; 8192];
+            loop {
+                match tls_stream.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => buffer.extend_from_slice(&buf[..n]),
+                    Err(e)
+                        if e.kind() == std::io::ErrorKind::TimedOut
+                            || e.kind() == std::io::ErrorKind::WouldBlock =>
+                    {
+                        return Err("read: timed out".to_string());
+                    }
+                    Err(e) => return Err(format!("read: {}", e)),
+                }
+            }
+        } else {
+            let mut plain = stream;
+            plain
+                .write_all(request_bytes)
+                .map_err(|e| format!("write: {}", e))?;
+
+            let mut buf = [0u8; 8192];
+            loop {
+                match plain.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => buffer.extend_from_slice(&buf[..n]),
+                    Err(e)
+                        if e.kind() == std::io::ErrorKind::TimedOut
+                            || e.kind() == std::io::ErrorKind::WouldBlock =>
+                    {
+                        return Err("read: timed out".to_string());
+                    }
+                    Err(e) => return Err(format!("read: {}", e)),
+                }
+            }
+        }
+        Ok(())
+    })();
+
+    read_result?;
+
+    let body_bytes = http_response_body(&buffer);
+    Ok(String::from_utf8_lossy(&body_bytes).to_string())
+}
+
+/// Call a provider's token counting API and return the input token count.
+/// Supports:
+/// - OpenAI: `POST /v1/responses/input_tokens` (Responses API format)
+/// - Anthropic: `POST /v1/messages/count_tokens` (Messages API format)
+///
+/// `request_json` is the pre-serialized `{"messages": [...], "tools": [...]}` body
+/// from the pre-flight check. The body is transformed as needed for each provider.
+pub fn count_input_tokens(
+    provider: &ApiProvider,
+    request_json: &str,
+    model: &str,
+    timeout_secs: u64,
+) -> Result<usize, String> {
+    let url = provider
+        .counting_endpoint_url()
+        .ok_or_else(|| "no counting API for this provider".to_string())?;
+
+    // Parse and transform the body for the provider's counting endpoint
+    let mut base: serde_json::Value =
+        serde_json::from_str(request_json).map_err(|e| format!("json parse: {}", e))?;
+    base["model"] = serde_json::json!(model);
+
+    let body_str: String;
+    let extra_headers: Vec<(&str, &str)>;
+
+    if url.contains("anthropic.com") {
+        // Anthropic: same format, just use as-is with model added
+        // Add required headers
+        extra_headers = vec![
+            ("x-api-key", provider.api_key.as_str()),
+            ("anthropic-version", "2023-06-01"),
+        ];
+        body_str = serde_json::to_string(&base).map_err(|e| format!("json stringify: {}", e))?;
+    } else {
+        // OpenAI Responses API: rename "messages" → "input"
+        if let Some(messages) = base.as_object_mut().and_then(|o| o.remove("messages")) {
+            base["input"] = messages;
+        }
+        extra_headers = vec![]; // Will use default Bearer auth
+        body_str = serde_json::to_string(&base).map_err(|e| format!("json stringify: {}", e))?;
+    }
+
+    let response = native_post(&url, provider.api_key.as_str(), &body_str, timeout_secs, &extra_headers)?;
+
+    let v: serde_json::Value =
+        serde_json::from_str(&response).map_err(|e| format!("json parse response: {}", e))?;
+
+    v["input_tokens"]
+        .as_u64()
+        .map(|n| n as usize)
+        .ok_or_else(|| format!("no input_tokens in response: {}", response.trim()))
+}
+
 /// Perform a native HTTP GET request, returning the response body with
 /// HTTP headers stripped. Supports both HTTP and HTTPS. Does not follow
 /// redirects. The max_bytes limit applies to the body only (headers excluded).

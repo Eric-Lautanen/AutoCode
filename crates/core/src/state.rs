@@ -319,6 +319,29 @@ impl ApiProvider {
         }
     }
 
+    /// Returns the API-based token counting endpoint URL if the provider
+    /// supports one. Currently detected by hostname in `base_url`:
+    /// - `api.openai.com` → `POST /v1/responses/input_tokens`
+    /// - `api.anthropic.com` → `POST /v1/messages/count_tokens`
+    /// - Otherwise → `None` (no counting API, use offline fallback)
+    pub fn counting_endpoint_url(&self) -> Option<String> {
+        let base = self.base_url.trim_end_matches('/');
+        if base.contains("api.openai.com") {
+            // OpenAI: strip /v1 from base then append Responses API path
+            let root = base.strip_suffix("/v1").unwrap_or(base);
+            Some(format!("{}/responses/input_tokens", root))
+        } else if base.contains("api.anthropic.com") {
+            Some(format!("{}/messages/count_tokens", base))
+        } else {
+            None
+        }
+    }
+
+    /// Whether this provider has a supported API-based token counting endpoint.
+    pub fn has_counting_api(&self) -> bool {
+        self.counting_endpoint_url().is_some()
+    }
+
     pub fn reset_defaults(&mut self) {
         let defaults = ApiProvider::new(self.kind.clone());
         self.base_url = defaults.base_url;

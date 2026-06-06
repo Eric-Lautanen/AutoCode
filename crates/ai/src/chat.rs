@@ -10,7 +10,8 @@ use std::sync::mpsc::Receiver;
 use crate::{
     helpers,
     provider::{
-        ApiMessage, CompletionRequest, ProviderClient, ProviderEvent, ToolCall, ToolChoice, tool_definitions,
+        count_input_tokens, ApiMessage, CompletionRequest, ProviderClient, ProviderEvent, ToolCall,
+        ToolChoice, tool_definitions,
     },
     session,
 };
@@ -676,7 +677,21 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
             "tools": tools_json,
         });
         let json_str = serde_json::to_string(&body).unwrap_or_default();
-        let estimated = core_helpers::estimate_tokens(&json_str);
+        // Phase 3: try API-based counting first, fall back to heuristic
+        let estimated = if provider.has_counting_api() {
+            match count_input_tokens(&provider, &json_str, &provider.model, state.request_timeout_secs) {
+                Ok(count) => {
+                    debug_log!("chat: pre-flight API count={}", count);
+                    count
+                }
+                Err(e) => {
+                    debug_log!("chat: pre-flight API count failed ({}), using heuristic", e);
+                    core_helpers::estimate_tokens(&json_str)
+                }
+            }
+        } else {
+            core_helpers::estimate_tokens(&json_str)
+        };
         let max_context = provider.max_context_tokens as usize;
         let max_output = max_tokens as usize;
 

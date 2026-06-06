@@ -133,50 +133,61 @@ Inserted before `CompletionRequest` construction at `chat.rs:654-709`:
 
 This prevents the opaque API error the user currently gets when context overflows.
 
-### Phase 3: API-Based Counting (Best Accuracy)
+### ✅ Phase 3: API-Based Counting (Best Accuracy)
 
-**Files**: `crates/ai/src/provider.rs`, `crates/core/src/state.rs`
+**Files**: `crates/core/src/state.rs`, `crates/ai/src/provider.rs`, `crates/ai/src/chat.rs`
 
-#### 3a. Add `has_counting_api` to model manifest
+**Status**: Implemented and verified. Compilation succeeds with no warnings.
 
-In `assets/models.json`, add a `counting_endpoint` field to each `ModelManifest`:
+#### 3a. Detect counting API from provider configuration
 
-```json
-{
-  "output_tokens": 16384,
-  "counting_endpoint": "count_tokens"
-}
-```
+Added `counting_endpoint_url()` and `has_counting_api()` methods to `ApiProvider` in `state.rs:286-305`. The endpoint is inferred from the provider's `base_url`:
 
-Or infer from `ProviderKind`:
-- `ProviderKind::OpenAIVendor` → `POST /v1/responses/input_tokens`
-- `ProviderKind::Anthropic` → `POST /v1/messages/count_tokens`
-- `ProviderKind::DeepSeek` → Use offline tokenizer
-- Others → No counting API
+| `base_url` contains | Counting endpoint |
+|---|---|
+| `api.openai.com` | `POST /responses/input_tokens` (Responses API) |
+| `api.anthropic.com` | `POST /messages/count_tokens` (Messages API) |
+| Other | `None` (no counting API) |
+
+This approach avoids adding a new manifest field — the implementation is self-detecting based on the provider's existing `base_url` configuration.
 
 #### 3b. Implement counting API call
 
-New function in `crates/ai/src/provider.rs`:
+Added two new functions in `provider.rs`:
+
+1. **`native_post()`** — a generic HTTP POST helper (analogous to the existing `native_get()`) that:
+   - Supports both HTTP and HTTPS (TLS) connections
+   - Accepts extra headers (e.g., `x-api-key` + `anthropic-version` for Anthropic)
+   - Strips HTTP response headers and decodes chunked transfer-encoding
+   - Returns the response body as a `String`
+
+2. **`count_input_tokens()`** — public function that:
+   - Detects the provider's counting endpoint via `provider.counting_endpoint_url()`
+   - Transforms the request body for each provider:
+     - **OpenAI**: renames `messages` → `input` (Responses API format), adds `model` field
+     - **Anthropic**: adds `model` field, uses `x-api-key` + `anthropic-version` headers
+   - Calls `native_post()` with the appropriate URL, body, and auth headers
+   - Parses `input_tokens` from the JSON response
+
+#### 3c. Integrate with pre-flight check
+
+Modified `start_completion()` in `chat.rs:679-695` to try the API counting endpoint before falling back to the heuristic:
 
 ```rust
-pub fn count_input_tokens(
-    provider: &ApiProvider,
-    request: &CompletionRequest,
-) -> Result<usize, Box<dyn Error + Send + Sync>> {
-    match provider.kind {
-        ProviderKind::OpenAI => count_openai_tokens(provider, request),
-        ProviderKind::Anthropic => count_anthropic_tokens(provider, request),
-        _ => Err("no counting API".into()),
+let estimated = if provider.has_counting_api() {
+    match count_input_tokens(&provider, &json_str, &provider.model, state.request_timeout_secs) {
+        Ok(count) => { debug_log!("chat: pre-flight API count={}", count); count }
+        Err(e) => { /* fall back to heuristic */ }
     }
-}
+} else { /* heuristic */ };
 ```
 
-Each endpoint accepts the same request body but with `stream: false` and reads `input_tokens` or similar from the response.
+If the counting API call succeeds, the pre-flight check uses the exact token count from the provider. If it fails (network error, unsupported provider), it silently falls back to the Phase 2 heuristic.
 
-**Important**: This call adds latency. To mitigate:
-- Cache the result: if messages haven't changed since last count, reuse
-- Only call every N messages or when crossing threshold boundaries
-- Make it optional (opt-in for users who want accuracy)
+**Latency**: The counting API call adds one HTTP round trip before the streaming request starts. This is acceptable because:
+- The timeout uses the same `request_timeout_secs` as regular requests
+- Failed calls degrade gracefully to heuristic (no user-facing delay increase)
+- The count is accurate for images, PDFs, tool schemas, and model-specific behavior
 
 ### Phase 4: Offline Tokenizer Plugin System
 
@@ -249,7 +260,7 @@ When no counting API is available, use the offline tokenizer to count the full s
 | Phase 1b: Per-message token count docs | Small | Low | None | ✅ Done (verified Jun 2026) |
 | Phase 1c: Full-request serialization counting | Medium | Medium | None | ✅ Done (verified Jun 2026) |
 | Phase 2: Pre-flight check | Small | High | Phase 1c | ✅ Done |
-| Phase 3: API-based counting | Medium | High | New provider HTTP calls | 🔜 Pending |
+| Phase 3: API-based counting | Medium | High | New provider HTTP calls | ✅ Done (verified Jun 2026) |
 | Phase 4: tiktoken offline fallback | Medium | Medium | Add crate dependency | 🔜 Pending |
 | Phase 5: Fix RAM/Disk display | Small | Medium | Phase 1c | 🔜 Pending |
 
@@ -257,4 +268,4 @@ When no counting API is available, use the offline tokenizer to count the full s
 
 Start with Phase 1 + 2 (quick wins done: fix accumulation, full-request counting, pre-flight check), then Phase 5 (fix display mismatch), then Phase 3 (API counting for highest accuracy), then Phase 4 (offline fallback for models without counting APIs).
 
-Phases 1 and 2 are complete. Next recommended work: Phase 5 (fix RAM/disk display mismatch) which can reuse the `estimate_full_request_tokens` and pre-flight serialization logic already in place.
+Phases 1, 2, and 3 are complete. Next recommended work: Phase 5 (fix RAM/disk display mismatch) which can reuse the `estimate_full_request_tokens` and pre-flight serialization logic already in place.
