@@ -1,5 +1,7 @@
 # AutoCode
 
+> **⚠️ Development Status** — This project is under active development and not yet ready for general use. A stable release is coming soon.
+
 **AutoCode** is an autonomous AI coding assistant — a native desktop application that connects to large language models and gives them full access to your filesystem and shell, enabling them to independently perform software engineering tasks.
 
 Write code, run commands, edit files, search your codebase, and iterate — all through a chat interface where the AI acts as your autonomous agent.
