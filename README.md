@@ -97,7 +97,7 @@ AutoCode automatically detects OpenGL availability at startup:
 
 ## Configuration
 
-AutoCode persists its state (API keys, provider settings, projects, prompts, sessions) via eframe's built-in persistence layer (`app.ron` in the executable's `data/` directory). On first launch, open the **Settings** window to configure:
+AutoCode persists its state (API keys, provider settings, projects, prompts, sessions) via eframe's built-in persistence layer (`app.ron` in the executable's `AutoCode_data/` directory). On first launch, open the **Settings** window to configure:
 
 1. **Providers** — Add API keys and select models for OpenRouter, NVIDIA NIM, or custom OpenAI-compatible endpoints (per-model manifests are editable via `<exe>/models.json`)
 2. **Projects** — Add project directories for the file explorer to scan (uses native folder picker via `rfd`)
@@ -113,7 +113,7 @@ AutoCode persists its state (API keys, provider settings, projects, prompts, ses
 <exe_dir>/
 ├── autocode.exe
 ├── models.json              # Editable provider/model manifest (auto-copied from assets on first run)
-└── data/
+└── AutoCode_data/
     ├── app.ron               # eframe persistence state
     └── projects/
         └── <project_name>/

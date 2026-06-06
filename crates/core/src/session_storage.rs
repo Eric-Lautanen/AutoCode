@@ -32,7 +32,7 @@ pub fn session_exists(project: &Project, session: &Session) -> bool {
 
 pub fn project_sessions_dir(project: &Project) -> PathBuf {
     fsutil::exe_dir()
-        .join("data")
+        .join("AutoCode_data")
         .join("projects")
         .join(&project.data_dir_name)
         .join("sessions")

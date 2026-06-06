@@ -13,7 +13,7 @@ fn main() -> eframe::Result {
     autocode_core::debug::init();
 
     let exe_dir = autocode_core::fsutil::exe_dir();
-    let data_dir = exe_dir.join("data");
+    let data_dir = exe_dir.join("AutoCode_data");
     let _ = autocode_core::fsutil::create_dir_all(&data_dir);
 
     rustls::crypto::ring::default_provider()

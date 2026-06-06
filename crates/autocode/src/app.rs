@@ -65,7 +65,7 @@ impl AutocodeApp {
 
     fn load_and_prune_projects(state: &mut AppState) {
         let proj_dir = autocode_core::fsutil::exe_dir()
-            .join("data")
+            .join("AutoCode_data")
             .join("projects");
         state.projects.retain(|p| {
             let dir = proj_dir.join(&p.data_dir_name);
