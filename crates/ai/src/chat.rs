@@ -677,20 +677,29 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
             "tools": tools_json,
         });
         let json_str = serde_json::to_string(&body).unwrap_or_default();
-        // Phase 3: try API-based counting first, fall back to heuristic
-        let estimated = if provider.has_counting_api() {
-            match count_input_tokens(&provider, &json_str, &provider.model, state.request_timeout_secs) {
-                Ok(count) => {
-                    debug_log!("chat: pre-flight API count={}", count);
-                    count
-                }
-                Err(e) => {
-                    debug_log!("chat: pre-flight API count failed ({}), using heuristic", e);
-                    core_helpers::estimate_tokens(&json_str)
+        // Phase 4: try API-based counting, then offline tokenizer, then heuristic
+        let estimated = 'block: {
+            // Tier 1: API-based counting (most accurate)
+            if provider.has_counting_api() {
+                match count_input_tokens(&provider, &json_str, &provider.model, state.request_timeout_secs) {
+                    Ok(count) => {
+                        debug_log!("chat: pre-flight API count={}", count);
+                        break 'block count;
+                    }
+                    Err(e) => {
+                        debug_log!("chat: pre-flight API count failed ({})", e);
+                    }
                 }
             }
-        } else {
-            core_helpers::estimate_tokens(&json_str)
+            // Tier 2: Offline tokenizer via tiktoken
+            if let Some(count) = autocode_core::tokenizer::offline_token_count(&provider.model, &json_str) {
+                debug_log!("chat: pre-flight offline count={}", count);
+                break 'block count;
+            }
+            // Tier 3: Heuristic fallback
+            let count = core_helpers::estimate_tokens(&json_str);
+            debug_log!("chat: pre-flight heuristic count={}", count);
+            count
         };
         let max_context = provider.max_context_tokens as usize;
         let max_output = max_tokens as usize;

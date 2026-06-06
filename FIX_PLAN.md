@@ -189,44 +189,35 @@ If the counting API call succeeds, the pre-flight check uses the exact token cou
 - Failed calls degrade gracefully to heuristic (no user-facing delay increase)
 - The count is accurate for images, PDFs, tool schemas, and model-specific behavior
 
-### Phase 4: Offline Tokenizer Plugin System
+### ✅ Phase 4: Offline Tokenizer Plugin System (Complete)
 
-**Files**: `crates/core/Cargo.toml`, `crates/core/src/tokenizer/` (new)
+**Files**: `crates/core/Cargo.toml`, `crates/core/src/tokenizer/mod.rs`, `crates/core/src/lib.rs`, `crates/ai/src/chat.rs`
 
-#### 4a. Add tiktoken as a Rust dependency for OpenAI models
+**Status**: Implemented and verified. Compilation succeeds with no warnings.
 
-The `tiktoken` Rust crate (v3.3.0 as of June 2026) can be used directly as a library.
-Notably, v3.x supports **11 encodings** across **6 providers** — including `deepseek_v3`,
-`llama3`, `qwen2`, and `mistral_v3` natively — so a single dependency covers most models.
+#### 4a. Added tiktoken as dependency
 
-```toml
-tiktoken = "3.3"
-```
+Added `tiktoken = "3.3"` to `crates/core/Cargo.toml`. The `tiktoken` Rust crate (v3.3.0 as of June 2026) covers **11 encodings** across **5 providers** — including `deepseek_v3`, `llama3`, `qwen2`, and `mistral_v3` — so a single dependency handles OpenAI, DeepSeek, Meta, Alibaba, and Mistral models.
 
-This provides access to `o200k_base`, `cl100k_base`, etc. encoding tables via
-`tiktoken::encoding_for_model("gpt-4o")` and `enc.count("hello world")`.
+#### 4b. Tokenizer module
 
-#### 4b. Tokenizer registry
+Created `crates/core/src/tokenizer/mod.rs` with:
 
-```rust
-pub trait Tokenizer: Send + Sync {
-    fn count_tokens(&self, text: &str) -> usize;
-}
+- **`Tokenizer` trait** (`Send + Sync`) with `count_tokens(&self, text: &str) -> usize`
+- **`TiktokenTokenizer`** — wraps `tiktoken::CoreBpe` for allocation-free `count()`
+- **`HeuristicTokenizer`** — falls back to `helpers::estimate_tokens` for unrecognized models
+- **`tokenizer_for_model(model)`** — factory that tries tiktoken first, then heuristic
+- **`offline_token_count(model, text)`** — convenience function returning `Option<usize>`
 
-pub fn tokenizer_for_model(kind: &ProviderKind, model: &str) -> Box<dyn Tokenizer> {
-    match kind {
-        ProviderKind::OpenAI => Box::new(TiktokenTokenizer::for_model(model)),
-        ProviderKind::DeepSeek => Box::new(DeepSeekTokenizer::new()),
-        _ => Box::new(HeuristicTokenizer::new()),
-    }
-}
-```
+#### 4c. Integrated into pre-flight check (chat.rs)
 
-#### 4c. Use offline tokenizer as fallback
+Updated the pre-flight check in `crates/ai/src/chat.rs:680-700` to a three-tier fallback:
 
-When no counting API is available, use the offline tokenizer to count the full serialized request body (messages + tools). This is still more accurate than the current heuristic because:
-1. It uses the actual model's tokenizer
-2. It counts the full JSON, not just `content` fields
+1. **Tier 1**: API-based counting (OpenAI/Anthropic counting endpoints) — unchanged
+2. **Tier 2**: Offline tokenizer via `offline_token_count()` — new, for models tiktoken recognizes
+3. **Tier 3**: Heuristic `estimate_tokens()` — unchanged fallback
+
+Full request body (messages + tools) is serialized once and passed through whichever tier succeeds.
 
 ### Phase 5: Fix RAM/Disk Display Mismatch
 
@@ -261,11 +252,16 @@ When no counting API is available, use the offline tokenizer to count the full s
 | Phase 1c: Full-request serialization counting | Medium | Medium | None | ✅ Done (verified Jun 2026) |
 | Phase 2: Pre-flight check | Small | High | Phase 1c | ✅ Done |
 | Phase 3: API-based counting | Medium | High | New provider HTTP calls | ✅ Done (verified Jun 2026) |
-| Phase 4: tiktoken offline fallback | Medium | Medium | Add crate dependency | 🔜 Pending |
+| Phase 4: tiktoken offline fallback | Medium | Medium | tiktoken crate | ✅ Done (verified Jun 2026) |
 | Phase 5: Fix RAM/Disk display | Small | Medium | Phase 1c | 🔜 Pending |
 
 ## Recommendation
 
-Start with Phase 1 + 2 (quick wins done: fix accumulation, full-request counting, pre-flight check), then Phase 5 (fix display mismatch), then Phase 3 (API counting for highest accuracy), then Phase 4 (offline fallback for models without counting APIs).
+Phases 1–4 are complete:
 
-Phases 1, 2, and 3 are complete. Next recommended work: Phase 5 (fix RAM/disk display mismatch) which can reuse the `estimate_full_request_tokens` and pre-flight serialization logic already in place.
+1. **Phase 1** (done): Accumulate `actual_tokens_used`, document per-message estimates, add `estimate_full_request_tokens()`
+2. **Phase 2** (done): Pre-flight context check before sending requests
+3. **Phase 3** (done): API-based counting for OpenAI and Anthropic
+4. **Phase 4** (done): Offline tiktoken-based tokenizer as fallback for unrecognized models
+
+Next recommended work: **Phase 5** (fix RAM/disk display mismatch) which can reuse the `estimate_full_request_tokens` and pre-flight serialization logic already in place.
