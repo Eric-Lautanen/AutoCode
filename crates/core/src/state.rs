@@ -491,8 +491,8 @@ impl Session {
         self.actual_tokens_used = prompt + completion;
     }
 
-    pub fn filename(&self) -> String {
-        let safe_label: String = self
+    fn safe_label(&self) -> String {
+        let safe: String = self
             .label
             .chars()
             .map(|c| {
@@ -503,12 +503,19 @@ impl Session {
                 }
             })
             .collect();
-        let safe_label = if safe_label.is_empty() {
+        if safe.is_empty() {
             "unnamed".to_string()
         } else {
-            safe_label
-        };
-        format!("{}_{}.json", self.id, safe_label)
+            safe
+        }
+    }
+
+    pub fn filename(&self) -> String {
+        format!("{}_{}.json", self.id, self.safe_label())
+    }
+
+    pub fn messages_filename(&self) -> String {
+        format!("{}l", self.filename())
     }
 }
 

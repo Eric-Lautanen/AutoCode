@@ -126,7 +126,8 @@ impl AutocodeApp {
                             if let Ok(entries) = std::fs::read_dir(&dir) {
                                 !entries.flatten().any(|e| {
                                     let name = e.file_name().to_string_lossy().to_string();
-                                    name.starts_with(&prefix) && name.ends_with(".json")
+                                    name.starts_with(&prefix)
+                                        && (name.ends_with(".json") || name.ends_with(".jsonl"))
                                 })
                             } else {
                                 true
