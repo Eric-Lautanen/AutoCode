@@ -159,6 +159,7 @@ fn trim_session_ram(state: &mut AppState, session_id: &str) {
     let last_kept_id = state.sessions[idx].messages.last().map(|m| m.id).unwrap_or(0);
     let sess = &mut state.sessions[idx];
     let _ = sess.messages.split_off(len - keep);
+    sess.messages.shrink_to(0);
     let new_next_id = sess.next_message_id;
     debug_log!(
         "ram_evict: session={} window={} dropped={} (ids {}..{}) kept={} (ids {}..{}) next_id={}",
@@ -296,6 +297,8 @@ pub struct ChatRuntime {
     pub retry_after: Option<std::time::Instant>,
     /// Earliest time the next completion may start (rate limiting).
     pub next_completion_allowed: Option<std::time::Instant>,
+    /// Guard to prevent re-entrant handoff handling.
+    pub handoff_in_progress: bool,
 }
 
 impl Default for ChatRuntime {
@@ -328,6 +331,7 @@ impl Default for ChatRuntime {
             continuation_chain: 0,
             retry_after: None,
             next_completion_allowed: None,
+            handoff_in_progress: false,
         }
     }
 }
@@ -366,13 +370,18 @@ impl ChatRuntime {
         self.partial_response_backup.clear();
         self.stream_drop_retries = 0;
         self.continuation_chain = 0;
+        self.handoff_in_progress = false;
         self.retry_after = None;
 
         // Force deallocation of large buffers
-        self.pending_response = String::new();
-        self.reasoning_buf = String::new();
-        self.partial_response_backup = String::new();
-        self.live_shell_buf = String::new();
+        self.pending_response.clear();
+        self.pending_response.shrink_to(0);
+        self.reasoning_buf.clear();
+        self.reasoning_buf.shrink_to(0);
+        self.partial_response_backup.clear();
+        self.partial_response_backup.shrink_to(0);
+        self.live_shell_buf.clear();
+        self.live_shell_buf.shrink_to(0);
     }
 }
 
@@ -637,6 +646,10 @@ fn update_runtime(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
     repaint |= poll_live_shell(state, runtime);
     repaint |= poll_network(runtime);
 
+    // Auto-handoff: if token usage exceeds the configured threshold and the
+    // model hasn't initiated a handoff, trigger one automatically.
+    check_auto_handoff(state, runtime);
+
     // Retry backoff: non-blocking timer. Retries forever for transient errors,
     // only stopped by user interaction (stop button → drain()).
     if let Some(after) = runtime.retry_after {
@@ -864,9 +877,11 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 // Save partial response for continuation on retry.
                 // Append to any existing backup in case of multiple drops.
                 if !runtime.partial_response_backup.is_empty() {
-                    runtime
-                        .partial_response_backup
-                        .push_str(&runtime.pending_response);
+                    if runtime.partial_response_backup.len() < 64 * 1024 {
+                        runtime
+                            .partial_response_backup
+                            .push_str(&runtime.pending_response);
+                    }
                 } else {
                     runtime.partial_response_backup = std::mem::take(&mut runtime.pending_response);
                 }
@@ -1051,7 +1066,9 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     if !response.is_empty() {
                         auto_name_session(state, &response);
                     }
-                    if helpers::is_incomplete_task_response(&response) {
+                    if !runtime.handoff_in_progress
+                        && helpers::is_incomplete_task_response(&response)
+                    {
                         let max_chain = state.max_retries.max(5);
                         if runtime.continuation_chain < max_chain {
                             runtime.continuation_chain += 1;
@@ -1431,7 +1448,9 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
 
             auto_execute(state, runtime, &full_response);
 
-            if helpers::is_incomplete_task_response(&full_response) {
+            if !runtime.handoff_in_progress
+                && helpers::is_incomplete_task_response(&full_response)
+            {
                 let max_chain = state.max_retries.max(5);
                 if runtime.continuation_chain < max_chain {
                     runtime.continuation_chain += 1;
@@ -1462,16 +1481,39 @@ fn poll_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
 
             if still_owns_session(runtime, state) {
                 let has_handoff = results.iter().any(|r| r.content.starts_with("HANDOFF:"));
-                push_tool_results_to_state(state, runtime, &results);
-                runtime.status = format!("{} tool(s) complete.", results.len());
 
-                if has_handoff && state.handoff_enabled {
+                if has_handoff && state.handoff_enabled && !runtime.handoff_in_progress {
+                    runtime.handoff_in_progress = true;
+                    push_tool_results_to_state(state, runtime, &results);
                     handle_handoff(state, runtime);
-                // Only start next completion if shell calls are also done.
-                } else if runtime.live_shell_rx.is_none()
-                    && runtime.pending_tool_remaining.is_empty()
-                {
-                    start_completion(state, runtime);
+                } else if has_handoff && !state.handoff_enabled {
+                    // Give the model feedback when handoff is disabled.
+                    let results: Vec<ToolResult> = results
+                        .into_iter()
+                        .map(|mut tr| {
+                            if tr.content.starts_with("HANDOFF:") {
+                                tr.content = "Handoff is disabled — enable it via the toolbar toggle or Settings to use session handoff.".to_string();
+                                tr.meta.is_error = true;
+                            }
+                            tr
+                        })
+                        .collect();
+                    push_tool_results_to_state(state, runtime, &results);
+                    runtime.status = format!("{} tool(s) complete.", results.len());
+                    if runtime.live_shell_rx.is_none()
+                        && runtime.pending_tool_remaining.is_empty()
+                    {
+                        start_completion(state, runtime);
+                    }
+                } else {
+                    push_tool_results_to_state(state, runtime, &results);
+                    runtime.status = format!("{} tool(s) complete.", results.len());
+                    // Only start next completion if shell calls are also done.
+                    if runtime.live_shell_rx.is_none()
+                        && runtime.pending_tool_remaining.is_empty()
+                    {
+                        start_completion(state, runtime);
+                    }
                 }
             } else {
                 runtime.drain();
@@ -1687,21 +1729,35 @@ fn poll_network(runtime: &mut ChatRuntime) -> bool {
 
 fn commit_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) {
     if still_owns_session(runtime, state) && !runtime.pending_tool_results.is_empty() {
-        // Check for handoff signal before clearing the vec.
         let has_handoff = runtime
             .pending_tool_results
             .iter()
             .any(|tr| tr.content.starts_with("HANDOFF:"));
 
+        if has_handoff && state.handoff_enabled && !runtime.handoff_in_progress {
+            runtime.handoff_in_progress = true;
+            let results = std::mem::take(&mut runtime.pending_tool_results);
+            let count = results.len();
+            push_tool_results_to_state(state, runtime, &results);
+            runtime.status = format!("{} tool(s) complete.", count);
+            handle_handoff(state, runtime);
+            return;
+        }
+
+        if has_handoff && !state.handoff_enabled {
+            // Give the model feedback when handoff is disabled.
+            for tr in &mut runtime.pending_tool_results {
+                if tr.content.starts_with("HANDOFF:") {
+                    tr.content = "Handoff is disabled — enable it via the toolbar toggle or Settings to use session handoff.".to_string();
+                    tr.meta.is_error = true;
+                }
+            }
+        }
+
         let count = runtime.pending_tool_results.len();
         push_tool_results_to_state(state, runtime, &runtime.pending_tool_results);
         runtime.pending_tool_results.clear();
         runtime.status = format!("{} tool(s) complete.", count);
-
-        if has_handoff && state.handoff_enabled {
-            handle_handoff(state, runtime);
-            return;
-        }
 
         // Only continue if non-shell tools are also done.
         if runtime.tool_rx.is_none() {
@@ -1715,12 +1771,45 @@ fn commit_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) {
 /// Handle a `handoff` tool call: archive the session and start a fresh one
 /// with instructions to read RESUME.md.
 fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
+    let was_in_progress = std::mem::replace(&mut runtime.handoff_in_progress, true);
+    if was_in_progress {
+        debug_log!("chat: handoff already in progress, skipping re-entrant call");
+        return;
+    }
+
+    // Push error results for any pending tools so they aren't silently lost.
+    let sid_for_errors = runtime.active_session_id.clone();
+    if !runtime.pending_tool_remaining.is_empty() {
+        for tc in runtime.pending_tool_remaining.drain(..) {
+            let mut msg = ChatMessage::new(
+                Role::Tool,
+                "Session was handed off before this tool completed.".to_string(),
+            );
+            msg.tool_call_id = Some(tc.id.clone());
+            msg.tool_meta = Some(ToolMeta {
+                tool_name: tc.name.clone(),
+                is_error: true,
+                exit_code: Some(-1),
+                ..Default::default()
+            });
+            push_to_session(state, sid_for_errors.as_deref(), msg);
+        }
+    }
+
     // Save the old session to disk before creating the new one.
     if let Some(sess) = state.active_session()
         && let Some(pid) = sess.project_id.as_ref()
         && let Some(proj) = state.projects.iter().find(|p| &p.id == pid)
     {
+        let resume_content = generate_resume_content(sess);
         let _ = autocode_core::session_storage::save_session(proj, sess);
+
+        // Ensure RESUME.md exists in the project root for the next session.
+        let resume_path = std::path::Path::new(&proj.root_path).join("RESUME.md");
+        if !resume_path.exists() {
+            let _ = std::fs::write(&resume_path, &resume_content);
+            debug_log!("chat: auto-generated RESUME.md for handoff");
+        }
     }
     let handoff_was_enabled = state.handoff_enabled;
     state.new_session_for_project(state.active_project_id.clone());
@@ -1771,9 +1860,87 @@ fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     }
 
     // Start a completion on the new session.
+    runtime.handoff_in_progress = false;
     start_completion(state, runtime);
 
     debug_log!("chat: session handoff complete");
+}
+
+/// Auto-trigger a handoff when token usage exceeds the configured threshold.
+/// This provides a safety net if the model forgets to call `handoff` voluntarily.
+fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
+    if !state.handoff_enabled || runtime.handoff_in_progress {
+        return;
+    }
+    // Only trigger when idle (no streams, tools, or shells running).
+    if runtime.stream_rx.is_some() || runtime.tool_rx.is_some() || runtime.live_shell_rx.is_some() {
+        return;
+    }
+    let Some(sid) = runtime.active_session_id.as_ref() else { return };
+    let (used, max, _pct) = context_usage_info_for_session(state, sid);
+    if max == 0 {
+        return;
+    }
+    let handoff_pct = state
+        .active_provider()
+        .map(|p| p.handoff_percent.min(100) as usize)
+        .unwrap_or(80);
+    let threshold = (max * handoff_pct) / 100;
+    if used < threshold {
+        return;
+    }
+    // Token usage exceeds threshold — auto-trigger handoff.
+    // handle_handoff will generate RESUME.md from the session if the model forgot.
+    debug_log!(
+        "chat: auto-handoff triggered ({} used / {} threshold, {}%)",
+        used,
+        threshold,
+        handoff_pct
+    );
+    runtime.handoff_in_progress = true;
+    handle_handoff(state, runtime);
+}
+
+/// Generate a RESUME.md summary from the session's last messages.
+fn generate_resume_content(sess: &autocode_core::state::Session) -> String {
+    let label = &sess.label;
+    let msg_count = sess.messages.len();
+    let mut lines = Vec::new();
+    lines.push(format!("# Session Resume: {}", label));
+    lines.push(format!("- **Messages exchanged**: {}", msg_count));
+    if !sess.todo_list.is_empty() {
+        lines.push("- **Task status**:".to_string());
+        for item in &sess.todo_list.items {
+            let status = match item.status {
+                autocode_core::state::TodoStatus::Completed => "[x]",
+                autocode_core::state::TodoStatus::InProgress => "[-]",
+                autocode_core::state::TodoStatus::Pending => "[ ]",
+                autocode_core::state::TodoStatus::Cancelled => "[~]",
+            };
+            let content = item.content.trim();
+            if !content.is_empty() {
+                lines.push(format!("  {} {}", status, content));
+            }
+        }
+    }
+    // Include last few assistant messages for context.
+    let recent: Vec<&autocode_core::state::ChatMessage> = sess
+        .messages
+        .iter()
+        .filter(|m| m.role == autocode_core::state::Role::Assistant)
+        .rev()
+        .take(3)
+        .collect();
+    if !recent.is_empty() {
+        lines.push("\n## Recent Progress".to_string());
+        for msg in recent.iter().rev() {
+            let snippet: String = msg.content.chars().take(200).collect();
+            if !snippet.trim().is_empty() {
+                lines.push(format!("\n> {}", snippet.replace('\n', "\n> ")));
+            }
+        }
+    }
+    lines.join("\n")
 }
 
 fn build_tool_meta(tc: &ToolCall, result: &str, duration_ms: u64) -> ToolMeta {

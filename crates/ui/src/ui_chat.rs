@@ -513,6 +513,7 @@ pub fn show(
                 if overshoot > 0 {
                     let dropped = panel_state.display_buffer.split_off(overshoot);
                     panel_state.display_buffer = dropped;
+                    panel_state.display_buffer.shrink_to(0);
                     panel_state.loaded_min_id = panel_state.display_buffer.first().map(|m| m.id).unwrap_or(0);
                 }
             }

@@ -200,10 +200,7 @@ fn cache_insert(
     val: std::path::PathBuf,
 ) {
     if cache.len() >= CACHE_MAX {
-        // Evict oldest entry by removing a key at random (HashMap has no order).
-        if let Some(oldest) = cache.keys().next().cloned() {
-            cache.remove(&oldest);
-        }
+        cache.extract_if(|_, _| true).next();
     }
     cache.insert(key, val);
 }

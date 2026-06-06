@@ -117,6 +117,12 @@ impl SecretString {
     pub fn clone_inner(&self) -> String {
         self.data.clone()
     }
+
+    pub fn into_inner(self) -> String {
+        let s = self.data.clone();
+        // self drops here, zeroizing the original
+        s
+    }
 }
 
 impl Drop for SecretString {
@@ -997,7 +1003,15 @@ impl AppState {
         self.projects.iter().find(|p| p.id == *id)
     }
 
+    /// Maximum number of sessions kept in memory. Oldest sessions are pruned
+    /// first when this limit is exceeded (e.g. repeated handoffs).
+    const MAX_SESSIONS: usize = 50;
+
     pub fn new_session_for_project(&mut self, project_id: Option<String>) {
+        // Prune oldest sessions when the limit is exceeded, keeping the newest.
+        while self.sessions.len() >= Self::MAX_SESSIONS {
+            self.sessions.remove(0);
+        }
         let prov_label = self.active_provider.clone();
         let model = self
             .active_provider()
@@ -1030,4 +1044,5 @@ RULES
 ";
 
 pub const DEFAULT_HANDOFF_PROMPT: &str = "\
-Read RESUME.md and any handoff files in the project root, then continue the work from where the previous session left off.";
+Read RESUME.md in the project root if it exists — it contains the previous session's progress, task list, and recent work. \
+If RESUME.md does not exist, review the git log and any open files to determine what was being worked on, then continue.";

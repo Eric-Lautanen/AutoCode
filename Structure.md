@@ -5,6 +5,7 @@
 - Keep `app.ron` files as small as possible
 - Keep the codebase clean, organized, and maintainable
 - Provide the essential functionality without bloat
+- As few deps as possible.  std rust is best practice
 
 Cargo.toml (25 lines) — workspace root, 5 crate members, release LTO/strip/panic=unwind
 
