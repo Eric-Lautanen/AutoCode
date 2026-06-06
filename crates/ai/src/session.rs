@@ -1,7 +1,7 @@
 // session.rs -- Session management.
 
 use crate::provider::ApiMessage;
-use crate::state::{AppState, ChatMessage, Role};
+use autocode_core::state::{AppState, ChatMessage, Role};
 
 /// Seed the system prompt into the active session if its messages are empty.
 /// Does NOT auto-create sessions — callers must create one first if needed.
@@ -13,7 +13,7 @@ pub fn ensure_session(state: &mut AppState) -> bool {
     if !needs_sysinfo {
         return false;
     }
-    if !crate::sysinfo::is_ready() {
+    if !autocode_core::sysinfo::is_ready() {
         return true;
     }
     let info = &state.sysinfo;
@@ -56,7 +56,7 @@ pub fn prepare_request_messages_for_session(
                 .iter()
                 .find(|p| Some(&p.id) == sess.project_id.as_ref())
         {
-            let _ = crate::session_storage::save_session(proj, sess);
+            let _ = autocode_core::session_storage::save_session(proj, sess);
         }
     }
 
@@ -74,7 +74,7 @@ pub fn prepare_request_messages_for_session(
         state
             .providers
             .get(&prov_label)
-            .map(|p| crate::state::model_or_safe(&p.kind, &p.model).supports_cache_control)
+            .map(|p| autocode_core::state::model_or_safe(&p.kind, &p.model).supports_cache_control)
             .unwrap_or(false)
     };
 
@@ -87,13 +87,13 @@ pub fn prepare_request_messages_for_session(
                     .projects
                     .iter()
                     .find(|p| p.id == *pid)
-                    .map(|proj| crate::session_storage::load_all_messages(proj, s))
+                    .map(|proj| autocode_core::session_storage::load_all_messages(proj, s))
                 })
         })
         .unwrap_or_default()
     };
 
-    crate::debug_log!(
+    autocode_core::debug_log!(
         "api_prep: session={} disk_msgs={} ids=[{}..{}]",
         session_id, full_messages.len(),
         full_messages.first().map(|m| m.id).unwrap_or(0),
@@ -121,7 +121,7 @@ pub fn delete_session(state: &mut AppState, id: &str) {
         && let Some(pid) = sess.project_id.as_ref()
         && let Some(proj) = state.projects.iter().find(|p| &p.id == pid)
     {
-        crate::session_storage::delete_session_file(proj, sess);
+        autocode_core::session_storage::delete_session_file(proj, sess);
     }
 
     state.sessions.retain(|s| s.id != id);

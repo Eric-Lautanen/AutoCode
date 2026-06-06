@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::fsutil;
+use autocode_core::fsutil;
 
 #[derive(Debug, Clone)]
 pub struct FsEntry {
@@ -250,8 +250,8 @@ pub fn glob_files(search_root: Option<&Path>, pattern: &str) -> Vec<String> {
     let root = find_project_root(&base).unwrap_or_else(|| base.clone());
     // Canonicalize the root so strip_prefix works against canonicalized entry paths
     // (fsutil::read_dir uses extended_path which canonicalizes on Windows).
-    let root = crate::fsutil::extended_path(&root);
-    let search_root = crate::fsutil::extended_path(&base);
+    let root = autocode_core::fsutil::extended_path(&root);
+    let search_root = autocode_core::fsutil::extended_path(&base);
     let mut results = Vec::new();
 
     let mut dirs: Vec<PathBuf> = vec![search_root.clone()];
@@ -292,9 +292,9 @@ pub fn grep_files(
     case_sensitive: bool,
     max_results: usize,
 ) -> String {
-    let search_path = &crate::fsutil::extended_path(search_path);
+    let search_path = &autocode_core::fsutil::extended_path(search_path);
     let project_root = find_project_root(search_path).unwrap_or_else(|| search_path.to_path_buf());
-    let project_root = crate::fsutil::extended_path(&project_root);
+    let project_root = autocode_core::fsutil::extended_path(&project_root);
 
     // If the search path is a single file, search it directly.
     if search_path.is_file() {
@@ -410,7 +410,7 @@ fn search_file_for_pattern(
         } else {
             (line, pattern)
         };
-        if crate::helpers::matches_pattern(search_pattern, search_line, false) {
+        if autocode_core::helpers::matches_pattern(search_pattern, search_line, false) {
             results.push(format!("{}:{}: {}", file_name, i + 1, line));
         }
     }
@@ -507,7 +507,7 @@ fn grep_walk(
                 } else {
                     (line, params.pattern)
                 };
-                if crate::helpers::matches_pattern(search_pattern, search_line, false) {
+                if autocode_core::helpers::matches_pattern(search_pattern, search_line, false) {
                     results.push(format!("{}:{}: {}", rel_raw, i + 1, line));
                 }
             }

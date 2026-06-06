@@ -1,0 +1,11 @@
+[package]
+name = "autocode-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+scraper = "0.27"
+egui = "0.34"
+eframe = { version = "0.34", default-features = false, features = ["persistence"] }

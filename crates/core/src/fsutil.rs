@@ -106,3 +106,33 @@ pub fn write_cmd_script(path: &Path, content: &str) -> std::io::Result<()> {
 pub fn write_cmd_script(path: &Path, content: &str) -> std::io::Result<()> {
     write(path, content)
 }
+
+// -- Temp file tracking (cleaned up on exit) -----------------------------------
+
+pub static TEMP_FILES: std::sync::OnceLock<std::sync::Mutex<Vec<std::path::PathBuf>>> =
+    std::sync::OnceLock::new();
+
+pub fn track_temp_file(path: std::path::PathBuf) {
+    let lock = TEMP_FILES.get_or_init(|| std::sync::Mutex::new(Vec::new()));
+    let mut v = match lock.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            lock.clear_poison();
+            poisoned.into_inner()
+        }
+    };
+    v.push(path);
+}
+
+pub fn untrack_temp_file(path: &std::path::Path) {
+    if let Some(lock) = TEMP_FILES.get() {
+        let mut v = match lock.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                lock.clear_poison();
+                poisoned.into_inner()
+            }
+        };
+        v.retain(|p| p != path);
+    }
+}

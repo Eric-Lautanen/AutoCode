@@ -2,7 +2,7 @@
 // Runs commands in background threads and returns output via channels.
 // No permission prompting -- fully autonomous per design spec.
 
-use crate::debug_log;
+use autocode_core::debug_log;
 
 use std::{
     io::{BufRead, BufReader},
@@ -10,9 +10,9 @@ use std::{
     sync::mpsc::{self, Receiver},
 };
 
-use crate::fsutil;
-use crate::helpers;
-use crate::state::{ShellStatus, ShellTask};
+use autocode_core::fsutil;
+use autocode_core::helpers;
+use autocode_core::state::{ShellStatus, ShellTask};
 
 #[derive(Debug)]
 pub enum ShellEvent {
@@ -65,7 +65,7 @@ fn run_command_inner(
     let mut bat_path_to_clean = None;
     let result = if cfg!(target_os = "windows") {
         let bat_path =
-            std::env::temp_dir().join(format!("ac_shell_{}.cmd", crate::helpers::generate_id()));
+            std::env::temp_dir().join(format!("ac_shell_{}.cmd", autocode_core::helpers::generate_id()));
         let script = if command.contains('\n') {
             let mut s = String::with_capacity(command.len() + 32);
             for line in command.lines() {
@@ -79,14 +79,14 @@ fn run_command_inner(
         } else {
             command.to_string()
         };
-        if let Err(e) = crate::fsutil::write_cmd_script(&bat_path, &script) {
+        if let Err(e) = autocode_core::fsutil::write_cmd_script(&bat_path, &script) {
             let _ = tx.send(ShellEvent::SpawnError(format!(
                 "Failed to write command script: {}",
                 e
             )));
             return;
         }
-        crate::app::track_temp_file(bat_path.clone());
+        autocode_core::fsutil::track_temp_file(bat_path.clone());
         bat_path_to_clean = Some(bat_path.clone());
         let bat_str = bat_path.to_string_lossy().to_string();
         let mut cmd = Command::new("cmd");
@@ -173,7 +173,7 @@ fn run_command_inner(
     // Clean up temp file after the process finishes
     if let Some(p) = bat_path_to_clean {
         let _ = fsutil::remove_file(&p);
-        crate::app::untrack_temp_file(&p);
+        autocode_core::fsutil::untrack_temp_file(&p);
     }
 }
 
@@ -296,8 +296,8 @@ pub fn write_extracted_files(
     let mut written = Vec::new();
     for (name, content) in files {
         let target = root_path.join(name);
-        let resolved = crate::helpers::resolve_path_write(name, root, allow_escape);
-        if crate::helpers::is_blocked_path(&resolved) {
+        let resolved = autocode_core::helpers::resolve_path_write(name, root, allow_escape);
+        if autocode_core::helpers::is_blocked_path(&resolved) {
             written.push(format!("{} (BLOCKED: path traversal)", name));
             continue;
         }

@@ -2,7 +2,7 @@
 // Uses only std::net + manual HTTP/HTTPS via a thin blocking wrapper.
 // To avoid a heavy async runtime we spawn threads and use channels.
 
-use crate::debug_log;
+use autocode_core::debug_log;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -159,7 +159,7 @@ impl<R: Read> Read for ChunkedReader<R> {
 
 use rustls::pki_types::ServerName;
 
-use crate::state::{ApiProvider, ChatMessage};
+use autocode_core::state::{ApiProvider, ChatMessage};
 
 // -- Request / Response types --------------------------------------------------
 
@@ -176,7 +176,7 @@ pub struct CompletionRequest {
     pub request_timeout_secs: u64,
     pub thinking_mode: bool,
     pub reasoning_effort: String,
-    pub thinking_api: crate::state::ThinkingApi,
+    pub thinking_api: autocode_core::state::ThinkingApi,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -261,7 +261,7 @@ pub enum ProviderEvent {
 // -- Tool definitions (sent to the API) ---------------------------------------
 
 fn tool_definitions() -> serde_json::Value {
-    let grep_note = crate::sysinfo::grep_note();
+    let grep_note = autocode_core::sysinfo::grep_note();
     let grep_desc = if grep_note.is_empty() {
         "Fast code search via ripgrep. Returns matching file paths with line numbers. Supports regex, glob filtering. Respects .gitignore.".to_string()
     } else {
@@ -271,7 +271,7 @@ fn tool_definitions() -> serde_json::Value {
         )
     };
 
-    let shell_note = crate::sysinfo::shell_tools_note();
+    let shell_note = autocode_core::sysinfo::shell_tools_note();
     let shell_desc = format!(
         "Run a shell command. Returns stdout, stderr, exit code. Use ONLY for: builds, tests, git, cargo/npm, listing directories, finding filenames. NEVER use for reading file contents, searching code, or generating diffs — use the dedicated read_file/read_files, grep, and patch_file tools instead (they handle encoding, line numbers, whitespace, and fuzzy matching correctly). {}",
         shell_note
@@ -729,7 +729,7 @@ fn run_request_once(provider: ApiProvider, request: CompletionRequest, tx: Sende
         Err(panic_info) => {
             let msg = format!(
                 "Internal error (panic): {}",
-                crate::debug::panic_msg(&panic_info)
+                autocode_core::debug::panic_msg(&panic_info)
             );
             debug_log!("provider: run_request_once PANIC: {}", msg);
             let _ = tx.send(ProviderEvent::Error(msg));
@@ -875,11 +875,11 @@ fn build_request_body(
     };
 
     match &req.thinking_api {
-        crate::state::ThinkingApi::DeepSeek if req.thinking_mode => {
+        autocode_core::state::ThinkingApi::DeepSeek if req.thinking_mode => {
             body.thinking = Some(serde_json::json!({"type": "enabled"}));
             body.reasoning_effort = Some(&req.reasoning_effort);
         }
-        crate::state::ThinkingApi::OpenAI if req.thinking_mode => {
+        autocode_core::state::ThinkingApi::OpenAI if req.thinking_mode => {
             body.reasoning_effort = Some(&req.reasoning_effort);
         }
         _ => {}

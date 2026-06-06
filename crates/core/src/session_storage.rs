@@ -45,32 +45,6 @@ pub fn ensure_project_dirs(project: &Project) -> std::io::Result<()> {
     Ok(())
 }
 
-pub fn sanitize_filename(name: &str) -> String {
-    let s = name.trim().replace(
-        |c: char| ['<', '>', ':', '"', '/', '\\', '|', '?', '*'].contains(&c),
-        "_",
-    );
-    if s.is_empty() {
-        "untitled".to_string()
-    } else {
-        s
-    }
-}
-
-pub fn unique_data_dir_name(projects: &[Project], desired: &str) -> String {
-    let base = sanitize_filename(desired);
-    if base.is_empty() {
-        return "project".to_string();
-    }
-    let mut candidate = base.clone();
-    let mut n = 2;
-    while projects.iter().any(|p| p.data_dir_name == candidate) {
-        candidate = format!("{}_{}", base, n);
-        n += 1;
-    }
-    candidate
-}
-
 pub fn switch_to_project(state: &mut AppState, project_id: &str) {
     // If there's an existing session for the target project, switch to it.
     if let Some(sess) = state

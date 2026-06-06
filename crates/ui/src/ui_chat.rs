@@ -11,12 +11,12 @@ use egui::{
     TextFormat, Vec2,
 };
 
-use crate::{
-    chat::{self, ChatRuntime},
+use autocode_ai::chat::{self, ChatRuntime};
+use autocode_core::{
     state::{AppState, ChatMessage, DesignSettings, Role, ToolMeta},
     theme::{Palette, ROUND_LG, ROUND_MD, ROUND_SM},
-    ui_helpers,
 };
+use crate::ui_helpers;
 
 thread_local! {
     static CURRENT_DESIGN: RefCell<Option<DesignSettings>> = const { RefCell::new(None) };
@@ -208,7 +208,7 @@ pub fn show(
                 .iter()
                 .find(|p| Some(&p.id) == old_sess.project_id.as_ref())
             {
-                let _ = crate::session_storage::save_session(old_proj, old_sess);
+                let _ = autocode_core::session_storage::save_session(old_proj, old_sess);
             }
             if !runtimes.contains_key(old_id) {
                 old_sess.messages.clear();
@@ -228,7 +228,7 @@ pub fn show(
                 // (next_message_id > 1). Brand-new sessions have next_message_id == 1
                 // and no file on disk yet — don't purge them.
                 if new_sess.messages.is_empty() && new_sess.next_message_id > 1 {
-                    let found = crate::session_storage::load_session(new_proj, new_sess);
+                    let found = autocode_core::session_storage::load_session(new_proj, new_sess);
                     if !found {
                         purge_on_missing = Some(new_id.clone());
                     }
@@ -352,7 +352,7 @@ pub fn show(
                 }))
             });
             let count = state.ui_display_window;
-            let older = crate::session_storage::load_messages_before(proj, sess, panel_state.loaded_min_id, count);
+            let older = autocode_core::session_storage::load_messages_before(proj, sess, panel_state.loaded_min_id, count);
             if !older.is_empty() {
                 let added = older.len();
                 panel_state.loaded_min_id = older.first().map(|m| m.id).unwrap_or(0);
@@ -566,7 +566,7 @@ pub fn show(
 fn show_session_tabs(
     ui: &mut egui::Ui,
     state: &mut AppState,
-    runtimes: &mut HashMap<String, crate::chat::ChatRuntime>,
+    runtimes: &mut HashMap<String, autocode_ai::chat::ChatRuntime>,
     panel_state: &mut ChatPanelState,
 ) {
     ui.add_space(6.0); // top padding for session tabs
@@ -667,7 +667,7 @@ fn show_session_tabs(
                                             .min_size(Vec2::new(14.0, 14.0)),
                                         );
                                         if close.on_hover_text("Close session").clicked() {
-                                            crate::chat::abort_for_session(runtimes, &id);
+                                            autocode_ai::chat::abort_for_session(runtimes, &id);
                                             panel_state.scroll_offsets.remove(&id);
                                             if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == id) {
                                                 sess.closed = true;
@@ -675,7 +675,7 @@ fn show_session_tabs(
                                                     && let Some(proj) = state.projects.iter().find(|p| &p.id == pid)
                                                 {
                                                     // Save messages to disk BEFORE clearing RAM.
-                                                    let _ = crate::session_storage::save_session(proj, sess);
+                                                    let _ = autocode_core::session_storage::save_session(proj, sess);
                                                 }
                                                 sess.messages.clear();
                                             }
@@ -2086,7 +2086,7 @@ fn show_input_row(
                             false,
                             // No active provider ? dead path, buttons stay greyed.
                             // Fallback kind is irrelevant here.
-                            crate::state::ProviderKind::new("openrouter"),
+                            autocode_core::state::ProviderKind::new("openrouter"),
                             String::new(),
                         ));
 
@@ -2204,7 +2204,7 @@ fn show_input_row(
                         let provider_key_popup = provider_key.clone();
                         let popup_id = egui::Popup::default_response_id(&effort_resp);
                         let available_efforts =
-                            crate::state::reasoning_efforts_for_provider(&provider_kind, &model);
+                            autocode_core::state::reasoning_efforts_for_provider(&provider_kind, &model);
                         egui::Popup::menu(&effort_resp).show(|ui| {
                             ui.set_min_width(80.0);
                             ui.spacing_mut().button_padding = Vec2::new(8.0, 4.0);

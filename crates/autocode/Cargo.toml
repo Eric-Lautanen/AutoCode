@@ -1,0 +1,20 @@
+[package]
+name = "autocode"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "autocode"
+path = "src/main.rs"
+
+[dependencies]
+autocode-core = { path = "../core" }
+autocode-ai = { path = "../ai" }
+autocode-ui = { path = "../ui" }
+autocode-fs = { path = "../fs" }
+eframe = { version = "0.34", default-features = false, features = ["persistence", "glow", "wgpu"] }
+rfd = "0.17.2"
+egui = "0.34"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1.0"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp"] }

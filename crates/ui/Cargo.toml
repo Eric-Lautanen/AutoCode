@@ -1,0 +1,11 @@
+[package]
+name = "autocode-ui"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+autocode-core = { path = "../core" }
+autocode-ai = { path = "../ai" }
+autocode-fs = { path = "../fs" }
+egui = "0.34"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp"] }

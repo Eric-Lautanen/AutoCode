@@ -6,7 +6,7 @@ use serde::Deserialize;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::state::{AppState, SecretString, TodoItem, TodoStatus};
+use crate::state::{AppState, Project, SecretString, TodoItem, TodoStatus};
 
 // -- ID & Time -----------------------------------------------------------------
 
@@ -183,10 +183,8 @@ fn normalize_path(path: &std::path::Path) -> std::path::PathBuf {
     stack.into_iter().collect()
 }
 
-fn within_root_str(candidate: &str, root: &str) -> bool {
-    candidate == root
-        || candidate.starts_with(&format!("{root}\\",))
-        || candidate.starts_with(&format!("{root}/",))
+fn within_root(candidate: &std::path::Path, root: &std::path::Path) -> bool {
+    candidate == root || candidate.starts_with(root)
 }
 
 fn find_deepest_existing_ancestor(path: &std::path::Path) -> Option<std::path::PathBuf> {
@@ -256,9 +254,7 @@ pub fn resolve_path_write_cached(
 fn is_within_root(resolved: &std::path::Path, project_root: &str) -> bool {
     if let Ok(canonical_root) = std::fs::canonicalize(project_root) {
         let canonical_root = crate::fsutil::display_path(&canonical_root);
-        let canonical_root_str = canonical_root.to_string_lossy();
-        let resolved_str = resolved.to_string_lossy();
-        within_root_str(&resolved_str, &canonical_root_str)
+        within_root(resolved, &canonical_root)
     } else {
         false
     }
@@ -314,38 +310,27 @@ pub fn resolve_path_write(raw: &str, project_root: &str, allow_escape: bool) -> 
         std::path::Path::new(project_root).join(p)
     };
 
-    // Determine the allowed root for string-based comparisons.
+    // Determine the allowed root for Path-based containment checks.
     let root_for_comparison = if let Ok(canonical_root) = std::fs::canonicalize(project_root) {
         crate::fsutil::display_path(&canonical_root)
-            .to_string_lossy()
-            .to_string()
     } else {
         crate::fsutil::display_path(std::path::Path::new(project_root))
-            .to_string_lossy()
-            .to_string()
     };
 
-    // Perform the containment check (skip when allow_escape is true).
-    // If we found an existing ancestor to canonicalize-check, use it.
-    // Otherwise, resolve .. manually and do a string-based check.
     if !allow_escape {
         let check_target = find_deepest_existing_ancestor(&joined);
 
         if let Some(cp) = check_target {
-            let cp_str = crate::fsutil::display_path(&cp)
-                .to_string_lossy()
-                .to_string();
-            if !within_root_str(&cp_str, &root_for_comparison) {
+            let cp = crate::fsutil::display_path(&cp);
+            if !within_root(&cp, &root_for_comparison) {
                 return crate::fsutil::display_path(&crate::fsutil::extended_path(
                     &std::path::Path::new(project_root).join(WRITE_BLOCKED_SENTINEL),
                 ));
             }
         } else {
             let normalized = normalize_path(&joined);
-            let normalized_str = crate::fsutil::display_path(&normalized)
-                .to_string_lossy()
-                .to_string();
-            if !within_root_str(&normalized_str, &root_for_comparison) {
+            let normalized = crate::fsutil::display_path(&normalized);
+            if !within_root(&normalized, &root_for_comparison) {
                 return crate::fsutil::display_path(&crate::fsutil::extended_path(
                     &std::path::Path::new(project_root).join(WRITE_BLOCKED_SENTINEL),
                 ));
@@ -1744,6 +1729,32 @@ fn fmt_tokens(n: usize) -> String {
     } else {
         n.to_string()
     }
+}
+
+pub fn sanitize_filename(name: &str) -> String {
+    let s = name.trim().replace(
+        |c: char| ['<', '>', ':', '"', '/', '\\', '|', '?', '*'].contains(&c),
+        "_",
+    );
+    if s.is_empty() {
+        "untitled".to_string()
+    } else {
+        s
+    }
+}
+
+pub fn unique_data_dir_name(projects: &[Project], desired: &str) -> String {
+    let base = sanitize_filename(desired);
+    if base.is_empty() {
+        return "project".to_string();
+    }
+    let mut candidate = base.clone();
+    let mut n = 2;
+    while projects.iter().any(|p| p.data_dir_name == candidate) {
+        candidate = format!("{}_{}", base, n);
+        n += 1;
+    }
+    candidate
 }
 
 #[cfg(test)]

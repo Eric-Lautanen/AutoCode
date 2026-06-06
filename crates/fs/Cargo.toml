@@ -1,0 +1,7 @@
+[package]
+name = "autocode-fs"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+autocode-core = { path = "../core" }

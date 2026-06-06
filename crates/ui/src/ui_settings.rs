@@ -1,12 +1,12 @@
 // ui_settings.rs -- Settings window.
 // Tabs: Providers * Projects * Prompt * Timeouts * Design * About
 
-use crate::{
-    provider,
+use autocode_ai::provider;
+use autocode_core::{
     state::{AppState, Project, Session},
     theme::{Palette, ROUND_MD, ROUND_SM},
-    ui_helpers,
 };
+use crate::ui_helpers;
 use egui::{
     CollapsingHeader, Color32, CornerRadius, Frame, Grid, Margin, RichText, ScrollArea, Stroke,
     TextEdit, Vec2,
@@ -117,16 +117,16 @@ pub fn show_window(ctx: &egui::Context, state: &mut AppState, settings: &mut Set
                                     .clicked()
                             {
                                 state.stream_idle_timeout_secs =
-                                    crate::helpers::default_stream_idle_timeout();
+                                    autocode_core::helpers::default_stream_idle_timeout();
                                 state.request_timeout_secs =
-                                    crate::helpers::default_request_timeout();
-                                state.tool_timeout_secs = crate::helpers::default_tool_timeout();
-                                state.shell_timeout_secs = crate::helpers::default_shell_timeout();
+                                    autocode_core::helpers::default_request_timeout();
+                                state.tool_timeout_secs = autocode_core::helpers::default_tool_timeout();
+                                state.shell_timeout_secs = autocode_core::helpers::default_shell_timeout();
                                 state.shell_timeout_max_secs =
-                                    crate::helpers::default_shell_timeout_max();
-                                state.max_retries = crate::helpers::default_max_retries();
+                                    autocode_core::helpers::default_shell_timeout_max();
+                                state.max_retries = autocode_core::helpers::default_max_retries();
                                 state.max_retry_wait_secs =
-                                    crate::helpers::default_max_retry_wait();
+                                    autocode_core::helpers::default_max_retry_wait();
                             }
                         });
                     });
@@ -234,7 +234,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
 
     ui.add_space(4.0);
     if ui.button("+ Add Provider").clicked() {
-        let kind = crate::state::ProviderKind::new("openai-compatible");
+        let kind = autocode_core::state::ProviderKind::new("openai-compatible");
         let base = kind.label().to_string();
         let mut key = base.clone();
         let mut n = 2;
@@ -244,7 +244,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
         }
         state
             .providers
-            .insert(key, crate::state::ApiProvider::new(kind));
+            .insert(key, autocode_core::state::ApiProvider::new(kind));
     }
     ui.add_space(8.0);
 
@@ -352,7 +352,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                             )
                             .changed()
                         {
-                            p.api_key = crate::state::SecretString::new(key_buf);
+                            p.api_key = autocode_core::state::SecretString::new(key_buf);
                         }
                         ui.end_row();
 
@@ -457,7 +457,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                             egui::ComboBox::from_id_salt(format!("thinking_api_{}", key))
                                 .selected_text(current.label())
                                 .show_ui(ui, |ui| {
-                                for api in crate::state::ThinkingApi::variants() {
+                                for api in autocode_core::state::ThinkingApi::variants() {
                                     ui.push_id(("thinking_sel", api.label()), |ui| {
                                         if ui
                                             .selectable_label(current == *api, api.label())
@@ -654,7 +654,7 @@ fn show_projects(ui: &mut egui::Ui, state: &mut AppState) {
                             to_remove = Some(p.id.clone());
                         }
                         if !is_active && ui.button("Set Active").clicked() {
-                            crate::session_storage::switch_to_project(state, &p.id);
+                            autocode_core::session_storage::switch_to_project(state, &p.id);
                         }
                         if is_active {
                             ui.label(RichText::new("Active").size(10.0).color(Palette::SUCCESS));
@@ -668,7 +668,7 @@ fn show_projects(ui: &mut egui::Ui, state: &mut AppState) {
                     .iter()
                     .filter(|s| {
                         s.project_id.as_deref() == Some(&p.id)
-                            && crate::session_storage::session_exists(&p, s)
+                            && autocode_core::session_storage::session_exists(&p, s)
                     })
                     .collect();
                 if !proj_sessions.is_empty() {
@@ -719,12 +719,12 @@ fn show_projects(ui: &mut egui::Ui, state: &mut AppState) {
                 .iter()
                 .find(|p| Some(&p.id) == s.project_id.as_ref())
             {
-                let _ = crate::session_storage::save_session(proj, s);
+                let _ = autocode_core::session_storage::save_session(proj, s);
             }
         }
     }
     for sid in delete_ops {
-        crate::session::delete_session(state, &sid);
+        autocode_ai::session::delete_session(state, &sid);
     }
     if let Some(pid) = delete_all_for_project {
         let ids: Vec<String> = state
@@ -734,7 +734,7 @@ fn show_projects(ui: &mut egui::Ui, state: &mut AppState) {
             .map(|s| s.id.clone())
             .collect();
         for sid in ids {
-            crate::session::delete_session(state, &sid);
+            autocode_ai::session::delete_session(state, &sid);
         }
     }
     if let Some(id) = to_remove {
@@ -748,12 +748,12 @@ fn show_projects(ui: &mut egui::Ui, state: &mut AppState) {
             .projects
             .iter()
             .find(|p| p.id == id)
-            .map(crate::session_storage::project_sessions_dir);
+            .map(autocode_core::session_storage::project_sessions_dir);
         for sid in sess_ids {
-            crate::session::delete_session(state, &sid);
+            autocode_ai::session::delete_session(state, &sid);
         }
         if let Some(dir) = proj_dir {
-            let _ = crate::fsutil::remove_dir(&dir);
+            let _ = autocode_core::fsutil::remove_dir(&dir);
         }
         state.projects.retain(|p| p.id != id);
         if state.active_project_id.as_deref() == Some(&id) {
@@ -854,7 +854,7 @@ fn show_prompt(ui: &mut egui::Ui, state: &mut AppState) {
     ui.add_space(10.0);
     ui.horizontal(|ui| {
         if ui.button("Reset to Default").clicked() {
-            state.system_prompt = crate::state::DEFAULT_SYSTEM_PROMPT.to_string();
+            state.system_prompt = autocode_core::state::DEFAULT_SYSTEM_PROMPT.to_string();
         }
     });
 
@@ -889,7 +889,7 @@ fn show_prompt(ui: &mut egui::Ui, state: &mut AppState) {
 
     ui.add_space(8.0);
     if ui.button("Reset to Default").clicked() {
-        state.handoff_prompt = crate::state::DEFAULT_HANDOFF_PROMPT.to_string();
+        state.handoff_prompt = autocode_core::state::DEFAULT_HANDOFF_PROMPT.to_string();
     }
 
     ui.add_space(10.0);
@@ -1048,12 +1048,12 @@ fn show_timeouts(ui: &mut egui::Ui, state: &mut AppState) {
     ui.add_space(12.0);
 
     if ui.button("Reset to Defaults").clicked() {
-        state.stream_idle_timeout_secs = crate::helpers::default_stream_idle_timeout();
-        state.request_timeout_secs = crate::helpers::default_request_timeout();
-        state.shell_timeout_secs = crate::helpers::default_shell_timeout();
-        state.shell_timeout_max_secs = crate::helpers::default_shell_timeout_max();
-        state.max_retries = crate::helpers::default_max_retries();
-        state.max_retry_wait_secs = crate::helpers::default_max_retry_wait();
+        state.stream_idle_timeout_secs = autocode_core::helpers::default_stream_idle_timeout();
+        state.request_timeout_secs = autocode_core::helpers::default_request_timeout();
+        state.shell_timeout_secs = autocode_core::helpers::default_shell_timeout();
+        state.shell_timeout_max_secs = autocode_core::helpers::default_shell_timeout_max();
+        state.max_retries = autocode_core::helpers::default_max_retries();
+        state.max_retry_wait_secs = autocode_core::helpers::default_max_retry_wait();
     }
 }
 
@@ -1384,7 +1384,7 @@ fn show_about(ui: &mut egui::Ui, state: &mut AppState) {
     ui.add_space(8.0);
 
     if ui.button("Refresh System Info").clicked() {
-        let rx = crate::sysinfo::start_detect();
+        let rx = autocode_core::sysinfo::start_detect();
         let ctx = ui.ctx().clone();
         std::thread::spawn(move || {
             if let Ok(info) = rx.recv() {
@@ -1412,7 +1412,7 @@ fn show_about(ui: &mut egui::Ui, state: &mut AppState) {
     // OpenGL / Renderer info.
     ui_helpers::section_heading(ui, "Renderer");
     ui.add_space(4.0);
-    if crate::has_opengl() {
+    if autocode_core::sysinfo::has_opengl() {
         ui.horizontal(|ui| {
             ui.label(RichText::new("OpenGL").size(12.0).color(Palette::SUCCESS).strong());
             ui.label(RichText::new("(Glow backend)").size(11.0).color(Palette::TEXT_MUTED));
@@ -1501,7 +1501,7 @@ fn dropper_btn(ui: &mut egui::Ui, target: &mut Option<String>, field_name: &str)
 
 /// Write a sampled color into the correct DesignSettings field.
 pub fn apply_sampled_color(
-    design: &mut crate::state::DesignSettings,
+    design: &mut autocode_core::state::DesignSettings,
     field: &str,
     color: [f32; 3],
 ) {

@@ -6,11 +6,7 @@ use egui::{Color32, Frame, Key, Margin, RichText, ScrollArea, Stroke, TextEdit, 
 use std::collections::HashSet;
 use std::path::Path;
 
-use crate::{
-    fsutil,
-    state::AppState,
-    theme::{Palette, ROUND_SM},
-};
+use autocode_core::{fsutil, state::AppState, theme::{Palette, ROUND_SM}};
 
 /// Ephemeral (non-persisted) state for the explorer panel.
 #[derive(Default)]
@@ -152,7 +148,7 @@ fn show_tree(
     renaming: &mut Option<String>,
     rename_buffer: &mut String,
 ) {
-    let entries = crate::explorer::list_dir(dir);
+    let entries = autocode_fs::explorer::list_dir(dir);
 
     // Use a consistent indent step. CollapsingState.body() already shifts
     // children into its own sub-UI; we do NOT add any extra Frame margin on
@@ -205,7 +201,7 @@ fn show_tree(
                             ui.label(
                                 egui::RichText::new(&entry.name)
                                     .size(12.0)
-                                    .color(crate::theme::Palette::TEXT_SECONDARY),
+                                    .color(autocode_core::theme::Palette::TEXT_SECONDARY),
                             );
                         });
                     let resp = item_frame
@@ -234,7 +230,7 @@ fn show_tree(
                         ui.separator();
                         if ui
                             .button(egui::RichText::new("Delete folder")
-                                .color(crate::theme::Palette::ERROR))
+                                .color(autocode_core::theme::Palette::ERROR))
                             .clicked()
                         {
                             let _ = fsutil::remove_dir(&entry.path);
@@ -347,7 +343,7 @@ fn show_tree(
                     if is_image {
                         *file_content = None;
                     } else {
-                        *file_content = Some(crate::explorer::read_file(&entry.path));
+                        *file_content = Some(autocode_fs::explorer::read_file(&entry.path));
                     }
                     *show_viewer = true;
                 }
@@ -374,7 +370,7 @@ fn show_tree(
                     }
                     ui.separator();
                     if ui
-                        .button(egui::RichText::new("Delete file").color(crate::theme::Palette::ERROR))
+                        .button(egui::RichText::new("Delete file").color(autocode_core::theme::Palette::ERROR))
                         .clicked()
                     {
                         let _ = fsutil::remove_file(&entry.path);

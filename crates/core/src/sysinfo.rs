@@ -696,3 +696,41 @@ pub fn shell_tools_note() -> String {
         .map(shell_tools_note_from)
         .unwrap_or_default()
 }
+
+/// Returns true if the system has a usable OpenGL library available.
+pub fn has_opengl() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        true
+    }
+    #[cfg(target_os = "macos")]
+    {
+        true
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let known_paths = [
+            "/usr/lib/libGL.so.1",
+            "/usr/lib/libGL.so",
+            "/usr/lib/x86_64-linux-gnu/libGL.so.1",
+            "/usr/lib/aarch64-linux-gnu/libGL.so.1",
+            "/usr/lib/i386-linux-gnu/libGL.so.1",
+            "/usr/lib32/libGL.so.1",
+            "/usr/lib64/libGL.so.1",
+        ];
+        if known_paths.iter().any(|p| std::path::Path::new(p).exists()) {
+            return true;
+        }
+        if let Ok(output) = std::process::Command::new("ldconfig").arg("-p").output() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if stdout.lines().any(|l| l.contains("libGL.so")) {
+                return true;
+            }
+        }
+        false
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        false
+    }
+}

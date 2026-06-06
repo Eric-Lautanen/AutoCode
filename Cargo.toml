@@ -1,23 +1,17 @@
-[package]
-name = "autocode"
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/ai",
+    "crates/fs",
+    "crates/ui",
+    "crates/autocode",
+]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
-
-[[bin]]
-name = "autocode"
-path = "src/main.rs"
-
-[dependencies]
-eframe = { version = "0.34", default-features = false, features = ["persistence", "glow", "wgpu"] }
-rfd = "0.17.2"
-egui = "0.34"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-webpki-roots = "1.0"
-scraper = "0.27"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp"] }
 
 [profile.release]
 opt-level = 3

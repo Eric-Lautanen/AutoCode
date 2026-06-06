@@ -1,7 +1,7 @@
 use egui::{Color32, CornerRadius, Frame, Margin, RichText, Stroke, Vec2};
 
-use crate::state::{AppState, TodoItem, TodoStatus};
-use crate::theme::Palette;
+use autocode_core::state::{AppState, TodoItem, TodoStatus};
+use autocode_core::theme::Palette;
 
 pub fn show_window(ctx: &egui::Context, state: &mut AppState) {
     if !state.show_todo {
@@ -59,7 +59,7 @@ pub fn show_window(ctx: &egui::Context, state: &mut AppState) {
                             "Task List".to_string()
                         } else {
                             let t = state.todo_list.title.clone();
-                            crate::helpers::truncate_str(&t, 35)
+                            autocode_core::helpers::truncate_str(&t, 35)
                         };
                         ui.label(
                             RichText::new(title)

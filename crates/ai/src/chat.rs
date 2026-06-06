@@ -2,19 +2,21 @@
 // tool calls (run_shell, read_file, write_file, list_dir),
 // security hardening, and actual token usage tracking.
 
-use crate::debug_log;
+use autocode_core::debug_log;
 
 use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
 
-use crate::{
+use autocode_core::{
     fsutil, helpers,
+    state::{AppState, ChatMessage, Role, ShellStatus, TodoItem, TodoStatus, ToolMeta},
+};
+use autocode_fs::shell::{self, ShellEvent};
+use crate::{
     provider::{
         ApiMessage, CompletionRequest, ProviderClient, ProviderEvent, ToolCall, ToolChoice,
     },
     session,
-    shell::{self, ShellEvent},
-    state::{AppState, ChatMessage, Role, ShellStatus, TodoItem, TodoStatus, ToolMeta},
 };
 
 /// Classify an error message as transient (retryable) or permanent.
@@ -215,7 +217,7 @@ pub struct NetworkStatus {
 
 impl NetworkStatus {
     pub fn blink_dot(&mut self) -> (char, egui::Color32) {
-        use crate::theme::Palette;
+        use autocode_core::theme::Palette;
         if !self.active {
             return ('*', Palette::TEXT_MUTED);
         }
@@ -517,6 +519,7 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
         Some(id) => id,
         None => {
             runtime.status = "No active session.".into();
+            push_runtime(state, runtime, ChatMessage::new(Role::Error, "No active session. Create or select a session first.".to_string()));
             return;
         }
     };
@@ -537,10 +540,12 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
             Some(p) if !p.api_key.is_empty() => p,
             Some(_) => {
                 runtime.status = "API key not set.".into();
+                push_runtime(state, runtime, ChatMessage::new(Role::Error, format!("API key not set for provider \"{prov_label}\". Go to Settings → Providers to configure it.")));
                 return;
             }
             None => {
                 runtime.status = "No provider configured.".into();
+                push_runtime(state, runtime, ChatMessage::new(Role::Error, format!("Provider \"{prov_label}\" not found. Go to Settings → Providers to configure it.")));
                 return;
             }
         }
@@ -567,11 +572,11 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
     }
 
     let thinking = provider.thinking_mode && provider.thinking_api.supports_thinking();
-    let defs = crate::state::model_or_safe(&provider.kind, &provider.model);
+    let defs = autocode_core::state::model_or_safe(&provider.kind, &provider.model);
     let thinking_api = provider.thinking_api.clone();
     // DeepSeek through Go proxy always does reasoning — can't disable it.
     // Must use the higher token budget so content isn't starved.
-    let force_thinking = matches!(thinking_api, crate::state::ThinkingApi::DeepSeek);
+    let force_thinking = matches!(thinking_api, autocode_core::state::ThinkingApi::DeepSeek);
     let max_tokens = if thinking || force_thinking {
         defs.max_output_tokens_thinking
             .unwrap_or(defs.max_output_tokens * 2)
@@ -1017,7 +1022,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 {
                     if args.get("items").is_some() && args.get("title").is_some() {
                         tc.name = "todo_list".into();
-                    } else if args.get("command").is_some() {
+                    } else if args.get("command").and_then(|v| v.as_str()).is_some() {
                         tc.name = "run_shell".into();
                     } else if args.get("path").is_some() && args.get("content").is_some() {
                         tc.name = "write_file".into();
@@ -1034,13 +1039,13 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                         } else {
                             tc.name = "read_file".into();
                         }
-                    } else if args.get("paths").is_some() {
+                    } else if args.get("paths").and_then(|v| v.as_array()).is_some() {
                         tc.name = "read_files".into();
-                    } else if args.get("pattern").is_some() {
+                    } else if args.get("pattern").and_then(|v| v.as_str()).is_some() {
                         tc.name = "grep".into();
-                    } else if args.get("query").is_some() {
+                    } else if args.get("query").and_then(|v| v.as_str()).is_some() {
                         tc.name = "web_search".into();
-                    } else if args.get("url").is_some() {
+                    } else if args.get("url").and_then(|v| v.as_str()).is_some() {
                         tc.name = "fetch_url".into();
                     } else if args.get("from").is_some() && args.get("to").is_some() {
                         tc.name = "rename_file".into();
@@ -1219,7 +1224,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                         .iter()
                         .find(|p| Some(&p.id) == sess.project_id.as_ref())
                     {
-                        let _ = crate::session_storage::save_session(proj, sess);
+                        let _ = autocode_core::session_storage::save_session(proj, sess);
                     }
                     // Push a confirmation result so the AI knows it succeeded.
                     let content = format!("Session named as '{}'.", safe);
@@ -1334,7 +1339,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                                         let msg = format!(
                                             "Tool '{}' panicked: {}",
                                             tc_clone.name,
-                                            crate::debug::panic_msg(&e)
+                                            autocode_core::debug::panic_msg(&e)
                                         );
                                         helpers::tool_error(
                                             &msg,
@@ -1382,7 +1387,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                             };
                             results.push(ToolResult {
                                 tool_call: tc.clone(),
-                                content: result,
+                                content: result.to_string(),
                                 meta,
                                 todo_update,
                             });
@@ -1397,7 +1402,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                         Err(panic_info) => {
                             let panic_msg = format!(
                                 "Tool execution panicked: {}",
-                                crate::debug::panic_msg(&panic_info)
+                                autocode_core::debug::panic_msg(&panic_info)
                             );
                             debug_log!("chat: tool-exec PANIC: {}", panic_msg);
                             calls_clone
@@ -1779,7 +1784,7 @@ fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
         && let Some(pid) = sess.project_id.as_ref()
         && let Some(proj) = state.projects.iter().find(|p| &p.id == pid)
     {
-        let _ = crate::session_storage::save_session(proj, sess);
+        let _ = autocode_core::session_storage::save_session(proj, sess);
     }
     let handoff_was_enabled = state.handoff_enabled;
     state.new_session_for_project(state.active_project_id.clone());
@@ -1794,7 +1799,7 @@ fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
 
     // Seed the new session with system prompt + host environment info.
     let mut sys_prompt = state.system_prompt.clone();
-    if crate::sysinfo::is_ready() {
+    if autocode_core::sysinfo::is_ready() {
         if !sys_prompt.ends_with('\n') {
             sys_prompt.push('\n');
         }
@@ -2221,7 +2226,18 @@ fn execute_tool_with_cache(
         "read_files" => {
             let paths = match args["paths"].as_array() {
                 Some(a) => a.clone(),
-                None => return "Error: missing 'paths' argument".to_string(),
+                None => {
+                    // Accept a single string wrapped as a 1-element array.
+                    if let Some(s) = args["paths"].as_str() {
+                        vec![serde_json::Value::String(s.to_string())]
+                    } else {
+                        return format!(
+                            "Error: 'paths' must be an array of strings, got: {}",
+                            args["paths"]
+                        )
+                        .to_string();
+                    }
+                }
             };
             if paths.is_empty() {
                 return "Error: paths array is empty".to_string();
@@ -2296,7 +2312,7 @@ fn execute_tool_with_cache(
             if !path.exists() {
                 return format!("Error listing {}: path does not exist", path.display());
             }
-            let entries = crate::explorer::list_dir(&path);
+            let entries = autocode_fs::explorer::list_dir(&path);
             if entries.is_empty() && fsutil::read_dir(&path).is_err() {
                 return format!(
                     "Error listing {}: permission denied or invalid path",
@@ -2416,7 +2432,7 @@ fn execute_tool_with_cache(
             let case_sensitive = args["case_sensitive"].as_bool().unwrap_or(true);
             let max_results = args["max_results"].as_u64().unwrap_or(50).min(200) as usize;
 
-            crate::explorer::grep_files(
+            autocode_fs::explorer::grep_files(
                 &search_path,
                 pattern,
                 file_glob,
@@ -2504,7 +2520,7 @@ fn execute_tool_with_cache(
             let num_results = args["num_results"].as_u64().unwrap_or(5).min(10) as usize;
 
             let cache_key = format!("ddg:{}:{}", query, num_results);
-            if let Some(cached) = crate::extract::search_cache_get(&cache_key) {
+            if let Some(cached) = autocode_core::extract::search_cache_get(&cache_key) {
                 return cached;
             }
 
@@ -2524,7 +2540,7 @@ fn execute_tool_with_cache(
                 Err(e) => format!("Web search error: {}", e),
                 Ok(data) => {
                     let html = String::from_utf8_lossy(&data);
-                    let results = crate::extract::extract_ddg_results(&html, num_results);
+                    let results = autocode_core::extract::extract_ddg_results(&html, num_results);
                     if results.is_empty() {
                         debug_log!(
                             "web_search: no DDG results for query '{}', HTML preview (first 800 chars): {}",
@@ -2533,7 +2549,7 @@ fn execute_tool_with_cache(
                         );
                         format!("No web results for \"{}\"", query)
                     } else {
-                        crate::extract::search_cache_set(&cache_key, &results);
+                        autocode_core::extract::search_cache_set(&cache_key, &results);
                         results
                     }
                 }
@@ -2564,7 +2580,7 @@ fn execute_tool_with_cache(
                         || body.trim_start().starts_with("<html")
                         || body.contains("<html");
                     let text = if is_html {
-                        crate::extract::extract_html_content(&body, url)
+                        autocode_core::extract::extract_html_content(&body, url)
                     } else {
                         body.to_string()
                     };
@@ -2651,7 +2667,7 @@ fn execute_tool_with_cache(
             {
                 return helpers::blocked_error(args["path"].as_str().unwrap_or(project_root));
             }
-            let results = crate::explorer::glob_files(search_path.as_deref(), pattern);
+            let results = autocode_fs::explorer::glob_files(search_path.as_deref(), pattern);
             if results.is_empty() {
                 format!("No files match '{}'", pattern)
             } else {
@@ -2758,9 +2774,9 @@ fn poll_shell_tasks(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     if let Some(t) = state.shell_tasks.iter_mut().find(|t| {
-                        t.id == *task_id && matches!(t.status, crate::state::ShellStatus::Running)
+                        t.id == *task_id && matches!(t.status, autocode_core::state::ShellStatus::Running)
                     }) {
-                        t.status = crate::state::ShellStatus::Failed("channel disconnected".into());
+                        t.status = autocode_core::state::ShellStatus::Failed("channel disconnected".into());
                     }
                     completed.push(task_id.clone());
                     break;
@@ -2903,7 +2919,7 @@ fn auto_name_session(state: &mut AppState, text: &str) {
         if let Some(proj) = state.projects.iter()
             .find(|p| Some(&p.id) == sess.project_id.as_ref())
         {
-            let _ = crate::session_storage::save_session(proj, sess);
+            let _ = autocode_core::session_storage::save_session(proj, sess);
         }
     }
 }

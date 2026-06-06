@@ -6,13 +6,13 @@ use egui::{Align, Frame, Layout, Margin, RichText, Sense, Stroke, StrokeKind, Ve
 
 use std::collections::HashMap;
 
-use crate::{
-    chat::ChatRuntime,
-    helpers, session,
+use autocode_ai::{chat::ChatRuntime, session};
+use autocode_core::{
+    helpers,
     state::{AppState, Project},
     theme::Palette,
-    ui_helpers,
 };
+use crate::ui_helpers;
 
 pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<String, ChatRuntime>) {
     Frame::NONE
@@ -43,7 +43,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                             ui.push_id(("proj_sel", &p.id), |ui| {
                                 let selected = state.active_project_id.as_deref() == Some(&p.id);
                                 if ui.selectable_label(selected, &p.name).clicked() {
-                                    crate::session_storage::switch_to_project(state, &p.id);
+                                    autocode_core::session_storage::switch_to_project(state, &p.id);
                                     session::ensure_session(state);
                                 }
                             });
@@ -71,7 +71,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                         .filter(|s| {
                             s.project_id.as_ref() == Some(pid)
                                 && state.projects.iter().find(|p| &p.id == pid)
-                                    .map(|proj| crate::session_storage::session_exists(proj, s))
+                                    .map(|proj| autocode_core::session_storage::session_exists(proj, s))
                                     .unwrap_or(true)
                         })
                         .map(|s| (s.id.clone(), s.label.clone()))
@@ -160,7 +160,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                 if let Some(runtime) = active_sid.as_ref().and_then(|sid| runtimes.get_mut(sid)) {
                     show_network_status(ui, &mut runtime.net_status);
                 } else {
-                    let mut net = crate::chat::NetworkStatus::default();
+                    let mut net = autocode_ai::chat::NetworkStatus::default();
                     show_network_status(ui, &mut net);
                 }
 
@@ -223,7 +223,7 @@ fn show_token_meter(ui: &mut egui::Ui, state: &AppState, frac: f32) {
     );
 }
 
-fn show_network_status(ui: &mut egui::Ui, net: &mut crate::chat::NetworkStatus) {
+fn show_network_status(ui: &mut egui::Ui, net: &mut autocode_ai::chat::NetworkStatus) {
     let (dot, dot_color) = net.blink_dot();
     let byte_str = net.format_bytes();
 

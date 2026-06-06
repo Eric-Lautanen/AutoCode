@@ -38,7 +38,7 @@ pub struct ModelManifest {
 fn manifest() -> &'static Manifest {
     static MANIFEST: OnceLock<Manifest> = OnceLock::new();
     MANIFEST.get_or_init(|| {
-        let json = include_str!("../assets/models.json");
+        let json = include_str!("../../../assets/models.json");
         serde_json::from_str(json).expect("Failed to parse models.json")
     })
 }
@@ -952,7 +952,7 @@ impl AppState {
             .iter()
             .map(|p| {
                 if p.data_dir_name.is_empty() {
-                    crate::session_storage::unique_data_dir_name(&state.projects, &p.name)
+                    crate::helpers::unique_data_dir_name(&state.projects, &p.name)
                 } else {
                     p.data_dir_name.clone()
                 }

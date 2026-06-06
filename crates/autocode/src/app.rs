@@ -6,11 +6,12 @@ use std::collections::HashMap;
 use eframe::CreationContext;
 use egui::{CentralPanel, Frame, Panel};
 
-use crate::{
+use autocode_ai::{
     chat::{self, ChatRuntime},
     session,
-    state::AppState,
-    theme,
+};
+use autocode_core::{state::AppState, theme};
+use autocode_ui::{
     ui_chat::{self, ChatPanelState},
     ui_explorer::{self, ExplorerPanelState},
     ui_settings::{self, SettingsState},
@@ -25,35 +26,7 @@ pub struct AutocodeApp {
     pub settings: SettingsState,
     folder_picker: Option<std::sync::mpsc::Receiver<Option<String>>>,
     repaint_scheduled: bool,
-    sysinfo_rx: Option<std::sync::mpsc::Receiver<crate::sysinfo::SysInfo>>,
-}
-
-pub static TEMP_FILES: std::sync::OnceLock<std::sync::Mutex<Vec<std::path::PathBuf>>> =
-    std::sync::OnceLock::new();
-
-pub fn track_temp_file(path: std::path::PathBuf) {
-    let lock = TEMP_FILES.get_or_init(|| std::sync::Mutex::new(Vec::new()));
-    let mut v = match lock.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            lock.clear_poison();
-            poisoned.into_inner()
-        }
-    };
-    v.push(path);
-}
-
-pub fn untrack_temp_file(path: &std::path::Path) {
-    if let Some(lock) = TEMP_FILES.get() {
-        let mut v = match lock.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => {
-                lock.clear_poison();
-                poisoned.into_inner()
-            }
-        };
-        v.retain(|p| p != path);
-    }
+    sysinfo_rx: Option<std::sync::mpsc::Receiver<autocode_core::sysinfo::SysInfo>>,
 }
 
 impl AutocodeApp {
@@ -66,7 +39,7 @@ impl AutocodeApp {
         theme::apply(&cc.egui_ctx);
 
         // Prune projects whose data directory was manually deleted.
-        let proj_dir = crate::fsutil::exe_dir().join("data").join("projects");
+        let proj_dir = autocode_core::fsutil::exe_dir().join("data").join("projects");
         state.projects.retain(|p| {
             let dir = proj_dir.join(&p.data_dir_name);
             if !dir.exists() {
@@ -107,7 +80,7 @@ impl AutocodeApp {
 
         // Ensure remaining projects have their data directories.
         for p in &state.projects {
-            let _ = crate::session_storage::ensure_project_dirs(p);
+            let _ = autocode_core::session_storage::ensure_project_dirs(p);
         }
 
         // Purge session stubs whose files no longer exist on disk.
@@ -117,7 +90,7 @@ impl AutocodeApp {
             .filter(|s| {
                 s.project_id.as_ref().and_then(|pid| {
                     state.projects.iter().find(|p| &p.id == pid).map(|proj| {
-                        let dir = crate::session_storage::project_sessions_dir(proj);
+                        let dir = autocode_core::session_storage::project_sessions_dir(proj);
                         let candidate = dir.join(s.filename());
                         if candidate.exists() {
                             return false;
@@ -141,7 +114,7 @@ impl AutocodeApp {
             state.sessions.retain(|s| s.id != *sid);
         }
         if !sessions_to_remove.is_empty() {
-            crate::debug_log!("app: purged {} stale session stub(s) from ron", sessions_to_remove.len());
+            autocode_core::debug_log!("app: purged {} stale session stub(s) from ron", sessions_to_remove.len());
         }
 
         // Load messages for whichever session was active at shutdown.
@@ -152,7 +125,7 @@ impl AutocodeApp {
                 .iter()
                 .find(|p| Some(&p.id) == sess.project_id.as_ref())
         {
-            crate::session_storage::load_session(proj, sess);
+            autocode_core::session_storage::load_session(proj, sess);
             // Sync the session's per-session state into the global working copy.
             state.todo_list = sess.todo_list.clone();
             state.show_todo = sess.show_todo;
@@ -179,10 +152,10 @@ impl AutocodeApp {
             }
         }
 
-        let sysinfo_rx = if crate::sysinfo::seed_from_persisted(&state.sysinfo) {
+        let sysinfo_rx = if autocode_core::sysinfo::seed_from_persisted(&state.sysinfo) {
             None
         } else {
-            Some(crate::sysinfo::start_detect())
+            Some(autocode_core::sysinfo::start_detect())
         };
 
         Self {
@@ -223,7 +196,7 @@ impl eframe::App for AutocodeApp {
                     .unwrap_or(false)
             })
         {
-            self.sysinfo_rx = Some(crate::sysinfo::start_detect());
+            self.sysinfo_rx = Some(autocode_core::sysinfo::start_detect());
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
 
@@ -236,8 +209,8 @@ impl eframe::App for AutocodeApp {
                 i <= 150
                     || !matches!(
                         t.status,
-                        crate::state::ShellStatus::Done { .. }
-                            | crate::state::ShellStatus::Failed(_)
+                        autocode_core::state::ShellStatus::Done { .. }
+                            | autocode_core::state::ShellStatus::Failed(_)
                     )
             });
             // If still over the cap, keep only the most recent 200.
@@ -282,20 +255,20 @@ impl eframe::App for AutocodeApp {
                     .unwrap_or(&path)
                     .to_string();
                 let data_dir_name =
-                    crate::session_storage::unique_data_dir_name(&self.state.projects, &name);
-                let project = crate::state::Project {
-                    id: crate::helpers::generate_id(),
+                    autocode_core::helpers::unique_data_dir_name(&self.state.projects, &name);
+                let project = autocode_core::state::Project {
+                    id: autocode_core::helpers::generate_id(),
                     name,
                     root_path: path,
-                    created_at: crate::helpers::unix_now(),
+                    created_at: autocode_core::helpers::unix_now(),
                     data_dir_name,
                 };
                 let id = project.id.clone();
                 self.state.projects.push(project);
-                let _ = crate::session_storage::ensure_project_dirs(
+                let _ = autocode_core::session_storage::ensure_project_dirs(
                     self.state.projects.last().unwrap(),
                 );
-                crate::session_storage::switch_to_project(&mut self.state, &id);
+                autocode_core::session_storage::switch_to_project(&mut self.state, &id);
                 self.state.show_explorer = true;
                 session::ensure_session(&mut self.state);
             }
@@ -311,11 +284,11 @@ impl eframe::App for AutocodeApp {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
             self.state.sampling_activated_frame += 1;
             if self.state.sampling_activated_frame > 2 && ui.input(|i| i.pointer.any_click()) {
-                let color = crate::ui_helpers::sample_screen_pixel();
+                let color = autocode_ui::ui_helpers::sample_screen_pixel();
                 let field = self.state.sampling_target.take();
                 self.state.sampling_activated_frame = 0;
                 if let (Some(f), Some(c)) = (field, color) {
-                    crate::ui_settings::apply_sampled_color(&mut self.state.design, &f, c);
+                    autocode_ui::ui_settings::apply_sampled_color(&mut self.state.design, &f, c);
                 }
             }
         }
@@ -346,7 +319,7 @@ impl eframe::App for AutocodeApp {
 
         // Toolbar -- top.
         Panel::top("toolbar")
-            .frame(Frame::new().fill(crate::theme::Palette::BG_BASE))
+            .frame(Frame::new().fill(autocode_core::theme::Palette::BG_BASE))
             .show_inside(ui, |ui| {
                 ui_toolbar::show(ui, &mut self.state, &mut self.runtimes);
             });
@@ -358,7 +331,7 @@ impl eframe::App for AutocodeApp {
                 .default_size(self.state.explorer_width)
                 .min_size(160.0)
                 .max_size(480.0)
-                .frame(Frame::NONE.fill(crate::theme::Palette::BG_PANEL))
+                .frame(Frame::NONE.fill(autocode_core::theme::Palette::BG_PANEL))
                 .show_inside(ui, |ui| {
                     self.state.explorer_width = ui.available_width();
                     ui_explorer::show(ui, &mut self.state, &mut self.explorer_panel);
@@ -367,7 +340,7 @@ impl eframe::App for AutocodeApp {
 
         // Main chat panel.
         CentralPanel::default()
-            .frame(Frame::NONE.fill(crate::theme::Palette::BG_PANEL))
+            .frame(Frame::NONE.fill(autocode_core::theme::Palette::BG_PANEL))
             .show_inside(ui, |ui| {
                 ui_chat::show(
                     ui,
@@ -427,7 +400,7 @@ impl eframe::App for AutocodeApp {
                 .iter()
                 .find(|p| Some(&p.id) == sess.project_id.as_ref())
             {
-                let _ = crate::session_storage::save_session(proj, sess);
+                let _ = autocode_core::session_storage::save_session(proj, sess);
             }
         }
         self.state.save(storage);
@@ -467,11 +440,11 @@ impl eframe::App for AutocodeApp {
                 .iter()
                 .find(|p| Some(&p.id) == sess.project_id.as_ref())
             {
-                let _ = crate::session_storage::save_session(proj, sess);
+                let _ = autocode_core::session_storage::save_session(proj, sess);
             }
         }
 
-        if let Some(lock) = crate::app::TEMP_FILES.get() {
+        if let Some(lock) = autocode_core::fsutil::TEMP_FILES.get() {
             let mut temp_files = match lock.lock() {
                 Ok(guard) => guard,
                 Err(poisoned) => {
