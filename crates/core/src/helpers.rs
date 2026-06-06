@@ -5,7 +5,7 @@ use serde::Deserialize;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::state::{AppState, Project, SecretString};
+use crate::state::{AppState, ChatMessage, Project, SecretString};
 
 // -- ID & Time -----------------------------------------------------------------
 
@@ -84,6 +84,46 @@ pub fn estimate_tokens(text: &str) -> usize {
         .max(cjk_tokens + word_tokens)
         .max(char_floor)
         .saturating_add(overhead)
+}
+
+/// Estimate tokens for a full API request body by serializing the relevant
+/// message fields (content, role, tool_calls, tool_call_id, reasoning_content)
+/// into a JSON array and applying the heuristic to the full serialized text.
+/// This accounts for JSON structural overhead, tool calls, and reasoning content
+/// that the per-message `estimate_tokens(&content)` misses.
+pub fn estimate_full_request_tokens(
+    messages: &[ChatMessage],
+    tools_json: Option<&serde_json::Value>,
+) -> usize {
+    let msgs: Vec<serde_json::Value> = messages
+        .iter()
+        .map(|m| {
+            let mut obj = serde_json::json!({
+                "role": m.role.label(),
+                "content": m.content,
+            });
+            if let Some(id) = &m.tool_call_id {
+                obj["tool_call_id"] = serde_json::json!(id);
+            }
+            if let Some(tc) = &m.tool_calls {
+                obj["tool_calls"] = tc.clone();
+            }
+            if let Some(rc) = &m.reasoning_content {
+                obj["reasoning_content"] = serde_json::json!(rc);
+            }
+            obj
+        })
+        .collect();
+
+    let mut body = serde_json::json!({
+        "messages": msgs,
+    });
+    if let Some(tools) = tools_json {
+        body["tools"] = tools.clone();
+    }
+
+    let json_str = serde_json::to_string(&body).unwrap_or_default();
+    estimate_tokens(&json_str)
 }
 
 pub fn is_cjk(ch: char) -> bool {

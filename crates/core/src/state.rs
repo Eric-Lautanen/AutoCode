@@ -381,6 +381,10 @@ pub struct ChatMessage {
     pub content: String,
     #[serde(default)]
     pub timestamp: u64,
+    /// Estimated token count for this message's `content` field only.
+    /// Does NOT include tool_calls, tool_call_id, or reasoning_content.
+    /// This is a heuristic estimate; the authoritative count comes from
+    /// the API response's `usage.prompt_tokens` accumulated in `actual_tokens_used`.
     #[serde(default)]
     pub token_count: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -483,12 +487,16 @@ impl Session {
         }
     }
 
+    /// Sum of per-message estimated token counts for in-RAM messages only.
+    /// This is a lower-bound heuristic that omits tool definition tokens
+    /// and JSON serialization overhead. Use `actual_tokens_used` for the
+    /// authoritative count reported by the API.
     pub fn token_count(&self) -> usize {
         self.messages.iter().map(|m| m.token_count).sum()
     }
 
-    pub fn record_actual_usage(&mut self, prompt: usize, completion: usize) {
-        self.actual_tokens_used = prompt + completion;
+    pub fn record_actual_usage(&mut self, prompt: usize, _completion: usize) {
+        self.actual_tokens_used += prompt;
     }
 
     fn safe_label(&self) -> String {
