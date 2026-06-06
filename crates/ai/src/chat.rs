@@ -7,12 +7,6 @@ use autocode_core::debug_log;
 use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
 
-use autocode_core::{
-    fsutil,
-    helpers as core_helpers,
-    state::{AppState, ChatMessage, Role, ShellStatus, TodoItem, TodoStatus, ToolMeta},
-};
-use autocode_fs::shell::{self, ShellEvent};
 use crate::{
     helpers,
     provider::{
@@ -20,6 +14,11 @@ use crate::{
     },
     session,
 };
+use autocode_core::{
+    fsutil, helpers as core_helpers,
+    state::{AppState, ChatMessage, Role, ShellStatus, TodoItem, TodoStatus, ToolMeta},
+};
+use autocode_fs::shell::{self, ShellEvent};
 
 /// Classify an error message as transient (retryable) or permanent.
 /// Transient errors are network/infrastructure issues that may resolve on retry.
@@ -128,7 +127,12 @@ fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: Chat
     {
         msg.id = sess.next_message_id;
         sess.next_message_id += 1;
-        debug_log!("session: push msg {} (role={:?}, tokens={})", msg.id, msg.role, msg.token_count);
+        debug_log!(
+            "session: push msg {} (role={:?}, tokens={})",
+            msg.id,
+            msg.role,
+            msg.token_count
+        );
         sess.messages.push(msg);
     }
 }
@@ -156,15 +160,26 @@ fn trim_session_ram(state: &mut AppState, session_id: &str) {
     let first_dropped_id = state.sessions[idx].messages[0].id;
     let last_dropped_id = state.sessions[idx].messages[drop_count - 1].id;
     let first_kept_id = state.sessions[idx].messages[drop_count].id;
-    let last_kept_id = state.sessions[idx].messages.last().map(|m| m.id).unwrap_or(0);
+    let last_kept_id = state.sessions[idx]
+        .messages
+        .last()
+        .map(|m| m.id)
+        .unwrap_or(0);
     let sess = &mut state.sessions[idx];
     let _ = sess.messages.split_off(len - keep);
     sess.messages.shrink_to(0);
     let new_next_id = sess.next_message_id;
     debug_log!(
         "ram_evict: session={} window={} dropped={} (ids {}..{}) kept={} (ids {}..{}) next_id={}",
-        session_id, window, drop_count, first_dropped_id, last_dropped_id,
-        keep, first_kept_id, last_kept_id, new_next_id
+        session_id,
+        window,
+        drop_count,
+        first_dropped_id,
+        last_dropped_id,
+        keep,
+        first_kept_id,
+        last_kept_id,
+        new_next_id
     );
 }
 
@@ -516,14 +531,22 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
                 std::thread::sleep(allowed - now);
             }
         }
-        runtime.next_completion_allowed =
-            Some(std::time::Instant::now() + std::time::Duration::from_millis(state.disk_read_delay_ms));
+        runtime.next_completion_allowed = Some(
+            std::time::Instant::now() + std::time::Duration::from_millis(state.disk_read_delay_ms),
+        );
     }
     let session_id = match runtime.active_session_id.as_deref() {
         Some(id) => id,
         None => {
             runtime.status = "No active session.".into();
-            push_runtime(state, runtime, ChatMessage::new(Role::Error, "No active session. Create or select a session first.".to_string()));
+            push_runtime(
+                state,
+                runtime,
+                ChatMessage::new(
+                    Role::Error,
+                    "No active session. Create or select a session first.".to_string(),
+                ),
+            );
             return;
         }
     };
@@ -554,12 +577,30 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
                     Some(p) if !p.api_key.is_empty() => (label, p.clone()),
                     Some(_) => {
                         runtime.status = "API key not set.".into();
-                        push_runtime(state, runtime, ChatMessage::new(Role::Error, format!("API key not set for provider \"{label}\". Go to Settings → Providers to configure it.")));
+                        push_runtime(
+                            state,
+                            runtime,
+                            ChatMessage::new(
+                                Role::Error,
+                                format!(
+                                    "API key not set for provider \"{label}\". Go to Settings → Providers to configure it."
+                                ),
+                            ),
+                        );
                         return;
                     }
                     None => {
                         runtime.status = "No provider configured.".into();
-                        push_runtime(state, runtime, ChatMessage::new(Role::Error, format!("Provider \"{label}\" not found. Go to Settings → Providers to configure it.")));
+                        push_runtime(
+                            state,
+                            runtime,
+                            ChatMessage::new(
+                                Role::Error,
+                                format!(
+                                    "Provider \"{label}\" not found. Go to Settings → Providers to configure it."
+                                ),
+                            ),
+                        );
                         return;
                     }
                 }
@@ -952,9 +993,8 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 // Forever retry: exponential backoff 5s → 180s cap, never gives up.
                 let backoff_secs = (5u64 << runtime.retry_count.min(6)).min(180);
                 runtime.retry_count = runtime.retry_count.saturating_add(1);
-                runtime.retry_after = Some(
-                    std::time::Instant::now() + std::time::Duration::from_secs(backoff_secs),
-                );
+                runtime.retry_after =
+                    Some(std::time::Instant::now() + std::time::Duration::from_secs(backoff_secs));
                 runtime.status = format!(
                     "{} — retry {} in {}s...",
                     shorten_err(&err_msg),
@@ -983,10 +1023,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 push_runtime(
                     state,
                     runtime,
-                    ChatMessage::new(
-                        Role::Error,
-                        format!("Provider error: {}", err_msg),
-                    ),
+                    ChatMessage::new(Role::Error, format!("Provider error: {}", err_msg)),
                 );
             }
             return true;
@@ -1101,8 +1138,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     .collect(),
             );
             let assistant_text = runtime.pending_response.clone();
-            let mut assistant_msg =
-                ChatMessage::new(Role::Assistant, assistant_text.clone());
+            let mut assistant_msg = ChatMessage::new(Role::Assistant, assistant_text.clone());
             assistant_msg.tool_calls = Some(filtered_json);
             let reasoning = std::mem::take(&mut runtime.reasoning_buf);
             if !reasoning.is_empty() {
@@ -1148,8 +1184,12 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 let args: serde_json::Value =
                     serde_json::from_str(&tc.arguments).unwrap_or_default();
                 let name_arg = args["name"].as_str();
-                let Some(sid) = runtime.active_session_id.as_deref() else { continue };
-                let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) else { continue };
+                let Some(sid) = runtime.active_session_id.as_deref() else {
+                    continue;
+                };
+                let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) else {
+                    continue;
+                };
 
                 if !sess.label.starts_with('S') {
                     // Session already has a meaningful name — reject.
@@ -1285,10 +1325,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                                     tc.name,
                                     autocode_core::debug::panic_msg(&e)
                                 );
-                                helpers::tool_error(
-                                    &msg,
-                                    "Re-read the file and try a smaller edit",
-                                )
+                                helpers::tool_error(&msg, "Re-read the file and try a smaller edit")
                             }
                         };
 
@@ -1422,8 +1459,7 @@ fn poll_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                         .collect();
                     push_tool_results_to_state(state, runtime, &results);
                     runtime.status = format!("{} tool(s) complete.", results.len());
-                    if runtime.live_shell_rx.is_none()
-                        && runtime.pending_tool_remaining.is_empty()
+                    if runtime.live_shell_rx.is_none() && runtime.pending_tool_remaining.is_empty()
                     {
                         start_completion(state, runtime);
                     }
@@ -1431,8 +1467,7 @@ fn poll_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     push_tool_results_to_state(state, runtime, &results);
                     runtime.status = format!("{} tool(s) complete.", results.len());
                     // Only start next completion if shell calls are also done.
-                    if runtime.live_shell_rx.is_none()
-                        && runtime.pending_tool_remaining.is_empty()
+                    if runtime.live_shell_rx.is_none() && runtime.pending_tool_remaining.is_empty()
                     {
                         start_completion(state, runtime);
                     }
@@ -1798,7 +1833,9 @@ fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     if runtime.stream_rx.is_some() || runtime.tool_rx.is_some() || runtime.live_shell_rx.is_some() {
         return;
     }
-    let Some(sid) = runtime.active_session_id.as_ref() else { return };
+    let Some(sid) = runtime.active_session_id.as_ref() else {
+        return;
+    };
     let (used, max, _pct) = context_usage_info_for_session(state, sid);
     if max == 0 {
         return;
@@ -1881,7 +1918,13 @@ fn auto_continue(state: &mut AppState, runtime: &mut ChatRuntime, response: &str
     }
 }
 
-fn file_tool_meta(name: &str, path: &str, result: &str, duration_ms: u64, is_error: bool) -> ToolMeta {
+fn file_tool_meta(
+    name: &str,
+    path: &str,
+    result: &str,
+    duration_ms: u64,
+    is_error: bool,
+) -> ToolMeta {
     let (total_lines, total_bytes) = result
         .lines()
         .nth(1)
@@ -1911,8 +1954,20 @@ fn build_tool_meta(tc: &ToolCall, result: &str, duration_ms: u64) -> ToolMeta {
     let is_error = result.starts_with("{\"error\":") || result.starts_with("Error:");
 
     match tc.name.as_str() {
-        "read_file" => file_tool_meta("read_file", args["path"].as_str().unwrap_or(""), result, duration_ms, is_error),
-        "read_entire_file" => file_tool_meta("read_entire_file", args["path"].as_str().unwrap_or(""), result, duration_ms, is_error),
+        "read_file" => file_tool_meta(
+            "read_file",
+            args["path"].as_str().unwrap_or(""),
+            result,
+            duration_ms,
+            is_error,
+        ),
+        "read_entire_file" => file_tool_meta(
+            "read_entire_file",
+            args["path"].as_str().unwrap_or(""),
+            result,
+            duration_ms,
+            is_error,
+        ),
         "read_files" => {
             let paths: Vec<&str> = args["paths"]
                 .as_array()
@@ -2392,8 +2447,12 @@ fn execute_tool_with_cache(
             if core_helpers::is_blocked_path(&from) {
                 return core_helpers::blocked_error(raw_from);
             }
-            let to =
-                core_helpers::resolve_path_write_cached(raw_to, project_root, path_cache, allow_escape);
+            let to = core_helpers::resolve_path_write_cached(
+                raw_to,
+                project_root,
+                path_cache,
+                allow_escape,
+            );
             if core_helpers::is_blocked_path(&to) {
                 return core_helpers::blocked_error(raw_to);
             }
@@ -2440,8 +2499,12 @@ fn execute_tool_with_cache(
                 None => return "Error: missing 'pattern' argument".to_string(),
             };
             let search_root = args["path"].as_str().unwrap_or(project_root);
-            let search_path =
-                core_helpers::resolve_path_cached(search_root, project_root, path_cache, allow_escape);
+            let search_path = core_helpers::resolve_path_cached(
+                search_root,
+                project_root,
+                path_cache,
+                allow_escape,
+            );
             if core_helpers::is_blocked_path(&search_path) {
                 return core_helpers::blocked_error(search_root);
             }
@@ -2780,9 +2843,12 @@ fn poll_shell_tasks(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     if let Some(t) = state.shell_tasks.iter_mut().find(|t| {
-                        t.id == *task_id && matches!(t.status, autocode_core::state::ShellStatus::Running)
+                        t.id == *task_id
+                            && matches!(t.status, autocode_core::state::ShellStatus::Running)
                     }) {
-                        t.status = autocode_core::state::ShellStatus::Failed("channel disconnected".into());
+                        t.status = autocode_core::state::ShellStatus::Failed(
+                            "channel disconnected".into(),
+                        );
                     }
                     completed.push(task_id.clone());
                     break;
@@ -2807,50 +2873,328 @@ fn poll_shell_tasks(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
 
 /// Common English stop words stripped from session labels.
 const STOP_WORDS: &[&str] = &[
-    "a", "about", "above", "across", "after", "afterwards", "again",
-    "against", "all", "almost", "alone", "along", "already", "also",
-    "although", "always", "am", "among", "amongst", "amoungst", "amount",
-    "an", "and", "another", "any", "anyhow", "anyone", "anything",
-    "anyway", "anywhere", "are", "around", "as", "at", "back", "be",
-    "became", "because", "become", "becomes", "becoming", "been",
-    "before", "beforehand", "behind", "being", "below", "beside",
-    "besides", "between", "beyond", "bill", "both", "bottom", "but",
-    "by", "call", "can", "cannot", "cant", "co", "con", "could",
-    "couldnt", "cry", "de", "describe", "detail", "do", "done", "down",
-    "due", "during", "each", "eg", "eight", "either", "eleven", "else",
-    "elsewhere", "empty", "enough", "etc", "even", "ever", "every",
-    "everyone", "everything", "everywhere", "except", "few", "fifteen",
-    "fify", "fill", "find", "fire", "first", "five", "for", "former",
-    "formerly", "forty", "found", "four", "from", "front", "full",
-    "further", "get", "give", "go", "had", "has", "hasnt", "have",
-    "he", "hence", "her", "here", "hereafter", "hereby", "herein",
-    "hereupon", "hers", "herself", "him", "himself", "his", "how",
-    "however", "hundred", "i", "ie", "if", "in", "inc", "indeed",
-    "interest", "into", "is", "it", "its", "itself", "just", "keep",
-    "last",     "latter", "latterly", "least", "less", "let", "like", "ltd", "made",
-    "many", "may", "me", "meanwhile", "might", "mill", "mine", "more",
-    "moreover", "most", "mostly", "move", "much", "must", "my", "myself",
-    "name", "namely", "neither", "never", "nevertheless", "next", "nine",
-    "no", "nobody", "none", "noone", "nor", "not", "nothing", "now",
-    "nowhere", "of", "off", "often", "on", "once", "one", "only", "onto",
-    "or", "other", "others", "otherwise", "our", "ours", "ourselves",
-    "out", "over", "own", "part", "per", "perhaps", "please", "put",
-    "rather", "re", "same", "see", "seem", "seemed", "seeming", "seems",
-    "serious", "several", "shall", "she", "should", "show", "side",
-    "since", "sincere", "six", "sixty", "so", "some", "somehow",
-    "someone", "something", "sometime", "sometimes", "somewhere",
-    "still", "such", "system", "take", "ten", "than", "that", "the",
-    "their", "them", "themselves", "then", "thence", "there",
-    "thereafter", "thereby", "therefore", "therein", "thereupon",
-    "these", "they", "thick", "thin", "third", "this", "those", "though",
-    "three", "through", "throughout", "thru", "thus", "to", "together",
-    "too", "top", "toward", "towards", "twelve", "twenty", "two", "un",
-    "under", "until", "up", "upon", "us", "very", "via", "was", "we",
-    "well", "were", "what", "whatever", "when", "whence", "whenever",
-    "where", "whereafter", "whereas", "whereby", "wherein", "whereupon",
-    "wherever", "whether", "which", "while", "whither", "who", "whoever",
-    "whole", "whom", "whose", "why", "will", "with", "within", "without",
-    "would", "yet", "you", "your", "yours", "yourself", "yourselves",
+    "a",
+    "about",
+    "above",
+    "across",
+    "after",
+    "afterwards",
+    "again",
+    "against",
+    "all",
+    "almost",
+    "alone",
+    "along",
+    "already",
+    "also",
+    "although",
+    "always",
+    "am",
+    "among",
+    "amongst",
+    "amoungst",
+    "amount",
+    "an",
+    "and",
+    "another",
+    "any",
+    "anyhow",
+    "anyone",
+    "anything",
+    "anyway",
+    "anywhere",
+    "are",
+    "around",
+    "as",
+    "at",
+    "back",
+    "be",
+    "became",
+    "because",
+    "become",
+    "becomes",
+    "becoming",
+    "been",
+    "before",
+    "beforehand",
+    "behind",
+    "being",
+    "below",
+    "beside",
+    "besides",
+    "between",
+    "beyond",
+    "bill",
+    "both",
+    "bottom",
+    "but",
+    "by",
+    "call",
+    "can",
+    "cannot",
+    "cant",
+    "co",
+    "con",
+    "could",
+    "couldnt",
+    "cry",
+    "de",
+    "describe",
+    "detail",
+    "do",
+    "done",
+    "down",
+    "due",
+    "during",
+    "each",
+    "eg",
+    "eight",
+    "either",
+    "eleven",
+    "else",
+    "elsewhere",
+    "empty",
+    "enough",
+    "etc",
+    "even",
+    "ever",
+    "every",
+    "everyone",
+    "everything",
+    "everywhere",
+    "except",
+    "few",
+    "fifteen",
+    "fify",
+    "fill",
+    "find",
+    "fire",
+    "first",
+    "five",
+    "for",
+    "former",
+    "formerly",
+    "forty",
+    "found",
+    "four",
+    "from",
+    "front",
+    "full",
+    "further",
+    "get",
+    "give",
+    "go",
+    "had",
+    "has",
+    "hasnt",
+    "have",
+    "he",
+    "hence",
+    "her",
+    "here",
+    "hereafter",
+    "hereby",
+    "herein",
+    "hereupon",
+    "hers",
+    "herself",
+    "him",
+    "himself",
+    "his",
+    "how",
+    "however",
+    "hundred",
+    "i",
+    "ie",
+    "if",
+    "in",
+    "inc",
+    "indeed",
+    "interest",
+    "into",
+    "is",
+    "it",
+    "its",
+    "itself",
+    "just",
+    "keep",
+    "last",
+    "latter",
+    "latterly",
+    "least",
+    "less",
+    "let",
+    "like",
+    "ltd",
+    "made",
+    "many",
+    "may",
+    "me",
+    "meanwhile",
+    "might",
+    "mill",
+    "mine",
+    "more",
+    "moreover",
+    "most",
+    "mostly",
+    "move",
+    "much",
+    "must",
+    "my",
+    "myself",
+    "name",
+    "namely",
+    "neither",
+    "never",
+    "nevertheless",
+    "next",
+    "nine",
+    "no",
+    "nobody",
+    "none",
+    "noone",
+    "nor",
+    "not",
+    "nothing",
+    "now",
+    "nowhere",
+    "of",
+    "off",
+    "often",
+    "on",
+    "once",
+    "one",
+    "only",
+    "onto",
+    "or",
+    "other",
+    "others",
+    "otherwise",
+    "our",
+    "ours",
+    "ourselves",
+    "out",
+    "over",
+    "own",
+    "part",
+    "per",
+    "perhaps",
+    "please",
+    "put",
+    "rather",
+    "re",
+    "same",
+    "see",
+    "seem",
+    "seemed",
+    "seeming",
+    "seems",
+    "serious",
+    "several",
+    "shall",
+    "she",
+    "should",
+    "show",
+    "side",
+    "since",
+    "sincere",
+    "six",
+    "sixty",
+    "so",
+    "some",
+    "somehow",
+    "someone",
+    "something",
+    "sometime",
+    "sometimes",
+    "somewhere",
+    "still",
+    "such",
+    "system",
+    "take",
+    "ten",
+    "than",
+    "that",
+    "the",
+    "their",
+    "them",
+    "themselves",
+    "then",
+    "thence",
+    "there",
+    "thereafter",
+    "thereby",
+    "therefore",
+    "therein",
+    "thereupon",
+    "these",
+    "they",
+    "thick",
+    "thin",
+    "third",
+    "this",
+    "those",
+    "though",
+    "three",
+    "through",
+    "throughout",
+    "thru",
+    "thus",
+    "to",
+    "together",
+    "too",
+    "top",
+    "toward",
+    "towards",
+    "twelve",
+    "twenty",
+    "two",
+    "un",
+    "under",
+    "until",
+    "up",
+    "upon",
+    "us",
+    "very",
+    "via",
+    "was",
+    "we",
+    "well",
+    "were",
+    "what",
+    "whatever",
+    "when",
+    "whence",
+    "whenever",
+    "where",
+    "whereafter",
+    "whereas",
+    "whereby",
+    "wherein",
+    "whereupon",
+    "wherever",
+    "whether",
+    "which",
+    "while",
+    "whither",
+    "who",
+    "whoever",
+    "whole",
+    "whom",
+    "whose",
+    "why",
+    "will",
+    "with",
+    "within",
+    "without",
+    "would",
+    "yet",
+    "you",
+    "your",
+    "yours",
+    "yourself",
+    "yourselves",
 ];
 
 /// Sanitize a raw session name: strip special characters, remove common
@@ -2919,10 +3263,13 @@ fn auto_name_session(state: &mut AppState, text: &str) {
 
     if let Some(ref sid) = state.active_session_id
         && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == *sid)
-        && sess.label.starts_with('S')  // still the default label
+        && sess.label.starts_with('S')
+    // still the default label
     {
         sess.label = name;
-        if let Some(proj) = state.projects.iter()
+        if let Some(proj) = state
+            .projects
+            .iter()
             .find(|p| Some(&p.id) == sess.project_id.as_ref())
         {
             let _ = autocode_core::session_storage::save_session(proj, sess);

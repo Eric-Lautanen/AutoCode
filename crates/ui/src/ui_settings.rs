@@ -1,12 +1,12 @@
 // ui_settings.rs -- Settings window.
 // Tabs: Providers * Projects * Prompt * Timeouts * Design * About
 
+use crate::helpers;
 use autocode_ai::provider;
 use autocode_core::{
     state::{AppState, Project, Session},
     theme::{Palette, ROUND_MD, ROUND_SM},
 };
-use crate::helpers;
 use egui::{
     CollapsingHeader, Color32, CornerRadius, Frame, Grid, Margin, RichText, ScrollArea, Stroke,
     TextEdit, Vec2,
@@ -120,8 +120,10 @@ pub fn show_window(ctx: &egui::Context, state: &mut AppState, settings: &mut Set
                                     autocode_core::helpers::default_stream_idle_timeout();
                                 state.request_timeout_secs =
                                     autocode_core::helpers::default_request_timeout();
-                                state.tool_timeout_secs = autocode_core::helpers::default_tool_timeout();
-                                state.shell_timeout_secs = autocode_core::helpers::default_shell_timeout();
+                                state.tool_timeout_secs =
+                                    autocode_core::helpers::default_tool_timeout();
+                                state.shell_timeout_secs =
+                                    autocode_core::helpers::default_shell_timeout();
                                 state.shell_timeout_max_secs =
                                     autocode_core::helpers::default_shell_timeout_max();
                                 state.max_retries = autocode_core::helpers::default_max_retries();
@@ -265,317 +267,324 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
 
     for key in keys {
         ui.push_id(("provider", &key), |ui| {
-        let is_active = state.active_provider == key;
-        let p = match state.providers.get_mut(&key) {
-            Some(p) => p,
-            None => return,
-        };
+            let is_active = state.active_provider == key;
+            let p = match state.providers.get_mut(&key) {
+                Some(p) => p,
+                None => return,
+            };
 
-        let border_color = if is_active {
-            Palette::ACCENT
-        } else {
-            Palette::BORDER
-        };
-        let bg_color = if is_active {
-            Palette::BG_ACTIVE
-        } else {
-            Palette::BG_SURFACE
-        };
-        Frame::NONE
-            .fill(bg_color)
-            .corner_radius(ROUND_MD)
-            .stroke(egui::Stroke::new(1.0, border_color))
-            .inner_margin(Margin::same(12))
-            .show(ui, |ui| {
-                // Provider header row.
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(p.kind.label())
-                            .size(13.0)
-                            .color(Palette::TEXT_PRIMARY)
-                            .strong(),
-                    );
-                    if is_active {
-                        ui.label(RichText::new("Active").size(10.0).color(Palette::SUCCESS));
-                    } else if ui.small_button("Set Active").clicked() {
-                        set_active_key = Some((key.clone(), p.model.clone()));
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .small_button("Reset")
-                            .on_hover_text("Reset all provider settings to defaults")
-                            .clicked()
-                        {
-                            p.reset_defaults();
+            let border_color = if is_active {
+                Palette::ACCENT
+            } else {
+                Palette::BORDER
+            };
+            let bg_color = if is_active {
+                Palette::BG_ACTIVE
+            } else {
+                Palette::BG_SURFACE
+            };
+            Frame::NONE
+                .fill(bg_color)
+                .corner_radius(ROUND_MD)
+                .stroke(egui::Stroke::new(1.0, border_color))
+                .inner_margin(Margin::same(12))
+                .show(ui, |ui| {
+                    // Provider header row.
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(p.kind.label())
+                                .size(13.0)
+                                .color(Palette::TEXT_PRIMARY)
+                                .strong(),
+                        );
+                        if is_active {
+                            ui.label(RichText::new("Active").size(10.0).color(Palette::SUCCESS));
+                        } else if ui.small_button("Set Active").clicked() {
+                            set_active_key = Some((key.clone(), p.model.clone()));
                         }
-                        if !is_active
-                            && ui
-                                .small_button("Remove")
-                                .on_hover_text("Remove this provider")
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .small_button("Reset")
+                                .on_hover_text("Reset all provider settings to defaults")
                                 .clicked()
-                        {
-                            to_remove.push(key.clone());
-                        }
-                        let enabled_label = if p.enabled { "Enabled" } else { "Disabled" };
-                        let enabled_color = if p.enabled {
-                            Palette::SUCCESS
-                        } else {
-                            Palette::TEXT_MUTED
-                        };
-                        if ui
-                            .button(RichText::new(enabled_label).size(11.0).color(enabled_color))
-                            .clicked()
-                        {
-                            p.enabled = !p.enabled;
-                        }
+                            {
+                                p.reset_defaults();
+                            }
+                            if !is_active
+                                && ui
+                                    .small_button("Remove")
+                                    .on_hover_text("Remove this provider")
+                                    .clicked()
+                            {
+                                to_remove.push(key.clone());
+                            }
+                            let enabled_label = if p.enabled { "Enabled" } else { "Disabled" };
+                            let enabled_color = if p.enabled {
+                                Palette::SUCCESS
+                            } else {
+                                Palette::TEXT_MUTED
+                            };
+                            if ui
+                                .button(
+                                    RichText::new(enabled_label).size(11.0).color(enabled_color),
+                                )
+                                .clicked()
+                            {
+                                p.enabled = !p.enabled;
+                            }
+                        });
                     });
-                });
 
-                ui.add_space(8.0);
+                    ui.add_space(8.0);
 
-                // Fields in a 2-column grid for alignment.
-                Grid::new(format!("provider_grid_{}", key))
-                    .num_columns(2)
-                    .spacing([12.0, 6.0])
-                    .min_col_width(60.0)
-                    .show(ui, |ui| {
-                        // API Key.
-                        ui.label(helpers::field_label("API Key"));
-                        let mut key_buf = p.api_key.clone_inner();
-                        if ui
-                            .add(
-                                TextEdit::singleline(&mut key_buf)
-                                    .id(egui::Id::new(("provider_api_key", &key)))
-                                    .password(true)
-                                    .desired_width(f32::INFINITY)
-                                    .hint_text("sk-..."),
-                            )
-                            .changed()
-                        {
-                            p.api_key = autocode_core::state::SecretString::new(key_buf);
-                        }
-                        ui.end_row();
-
-                        // Base URL.
-                        ui.label(helpers::field_label("Base URL"));
-                        let mut url = p.base_url.clone();
-                        if ui
-                            .add(
-                                TextEdit::singleline(&mut url)
-                                    .id(egui::Id::new(("provider_base_url", &key)))
-                                    .desired_width(f32::INFINITY),
-                            )
-                            .changed()
-                        {
-                            p.base_url = url;
-                        }
-                        ui.end_row();
-
-                        // Model.
-                        ui.label(helpers::field_label("Model"));
-                        ui.horizontal(|ui| {
-                            let mut model = p.model.clone();
-                            let input_w = ui.available_width() - 100.0;
+                    // Fields in a 2-column grid for alignment.
+                    Grid::new(format!("provider_grid_{}", key))
+                        .num_columns(2)
+                        .spacing([12.0, 6.0])
+                        .min_col_width(60.0)
+                        .show(ui, |ui| {
+                            // API Key.
+                            ui.label(helpers::field_label("API Key"));
+                            let mut key_buf = p.api_key.clone_inner();
                             if ui
                                 .add(
-                                    TextEdit::singleline(&mut model)
-                                        .id(egui::Id::new(("provider_model", &key)))
-                                        .desired_width(input_w),
+                                    TextEdit::singleline(&mut key_buf)
+                                        .id(egui::Id::new(("provider_api_key", &key)))
+                                        .password(true)
+                                        .desired_width(f32::INFINITY)
+                                        .hint_text("sk-..."),
                                 )
                                 .changed()
                             {
-                                p.model = model;
+                                p.api_key = autocode_core::state::SecretString::new(key_buf);
                             }
-                            let p_clone = p.clone();
-                            let key_for_fetch = key.clone();
+                            ui.end_row();
+
+                            // Base URL.
+                            ui.label(helpers::field_label("Base URL"));
+                            let mut url = p.base_url.clone();
                             if ui
-                                .button("Fetch")
-                                .on_hover_text("Fetch available models for this provider")
-                                .clicked()
+                                .add(
+                                    TextEdit::singleline(&mut url)
+                                        .id(egui::Id::new(("provider_base_url", &key)))
+                                        .desired_width(f32::INFINITY),
+                                )
+                                .changed()
                             {
-                                let models = provider::fetch_models(&p_clone);
-                                let status = format!("{} models", models.len());
-                                settings
-                                    .fetched_models
-                                    .insert(key_for_fetch.clone(), models);
-                                settings.fetch_status.insert(key_for_fetch, status);
+                                p.base_url = url;
                             }
-                        });
-                        ui.end_row();
-                        // Fetched model dropdown — separate row so it never pushes
-                        // the window wider.
-                        if let Some(models) = settings.fetched_models.get(&key)
-                            && !models.is_empty()
-                        {
-                            ui.label("");
+                            ui.end_row();
+
+                            // Model.
+                            ui.label(helpers::field_label("Model"));
                             ui.horizontal(|ui| {
-                                let current_model = p.model.clone();
-                                ui.set_max_width(260.0);
-                                egui::ComboBox::from_id_salt(format!("model_list_{}", key))
-                                    .selected_text(&current_model)
-                                    .width(ui.available_width())
+                                let mut model = p.model.clone();
+                                let input_w = ui.available_width() - 100.0;
+                                if ui
+                                    .add(
+                                        TextEdit::singleline(&mut model)
+                                            .id(egui::Id::new(("provider_model", &key)))
+                                            .desired_width(input_w),
+                                    )
+                                    .changed()
+                                {
+                                    p.model = model;
+                                }
+                                let p_clone = p.clone();
+                                let key_for_fetch = key.clone();
+                                if ui
+                                    .button("Fetch")
+                                    .on_hover_text("Fetch available models for this provider")
+                                    .clicked()
+                                {
+                                    let models = provider::fetch_models(&p_clone);
+                                    let status = format!("{} models", models.len());
+                                    settings
+                                        .fetched_models
+                                        .insert(key_for_fetch.clone(), models);
+                                    settings.fetch_status.insert(key_for_fetch, status);
+                                }
+                            });
+                            ui.end_row();
+                            // Fetched model dropdown — separate row so it never pushes
+                            // the window wider.
+                            if let Some(models) = settings.fetched_models.get(&key)
+                                && !models.is_empty()
+                            {
+                                ui.label("");
+                                ui.horizontal(|ui| {
+                                    let current_model = p.model.clone();
+                                    ui.set_max_width(260.0);
+                                    egui::ComboBox::from_id_salt(format!("model_list_{}", key))
+                                        .selected_text(&current_model)
+                                        .width(ui.available_width())
+                                        .show_ui(ui, |ui| {
+                                            for m in models.iter() {
+                                                ui.push_id(("model_sel", m), |ui| {
+                                                    if ui
+                                                        .selectable_label(*m == current_model, m)
+                                                        .clicked()
+                                                    {
+                                                        p.model = m.clone();
+                                                    }
+                                                });
+                                            }
+                                        });
+                                    if let Some(status) = settings.fetch_status.get(&key) {
+                                        ui.label(
+                                            RichText::new(status)
+                                                .size(10.0)
+                                                .color(Palette::TEXT_MUTED),
+                                        );
+                                    }
+                                });
+                                ui.end_row();
+                            }
+                            ui.end_row();
+
+                            // Context window (max tokens).
+                            ui.label(helpers::field_label("Context Window"));
+                            ui.horizontal(|ui| {
+                                ui.add(
+                                    egui::DragValue::new(&mut p.max_context_tokens)
+                                        .speed(1000.0)
+                                        .range(4_000..=2_000_000),
+                                );
+                                ui.label(
+                                    RichText::new("tokens")
+                                        .size(10.5)
+                                        .color(Palette::TEXT_MUTED),
+                                );
+                            });
+                            ui.end_row();
+
+                            // Thinking API style.
+                            ui.label(helpers::field_label("Thinking API"));
+                            {
+                                let mut current = p.thinking_api.clone();
+                                egui::ComboBox::from_id_salt(format!("thinking_api_{}", key))
+                                    .selected_text(current.label())
                                     .show_ui(ui, |ui| {
-                                        for m in models.iter() {
-                                            ui.push_id(("model_sel", m), |ui| {
-                                                if ui.selectable_label(*m == current_model, m).clicked()
+                                        for api in autocode_core::state::ThinkingApi::variants() {
+                                            ui.push_id(("thinking_sel", api.label()), |ui| {
+                                                if ui
+                                                    .selectable_label(current == *api, api.label())
+                                                    .clicked()
                                                 {
-                                                    p.model = m.clone();
+                                                    current = api.clone();
                                                 }
                                             });
                                         }
                                     });
-                                if let Some(status) = settings.fetch_status.get(&key) {
+                                if current != p.thinking_api {
+                                    p.thinking_api = current;
+                                }
+                            }
+                            ui.end_row();
+
+                            // Handoff percentage.
+                            ui.label(helpers::field_label("Handoff"));
+                            ui.horizontal(|ui| {
+                                let mut pct = p.handoff_percent as f32;
+                                ui.add(
+                                    egui::Slider::new(&mut pct, 10.0..=95.0)
+                                        .step_by(5.0)
+                                        .show_value(false)
+                                        .trailing_fill(true),
+                                );
+                                let new_pct = pct as u8;
+                                p.handoff_percent = new_pct;
+                                ui.label(
+                                    RichText::new(format!("{}%", new_pct))
+                                        .size(11.0)
+                                        .color(Palette::ACCENT)
+                                        .strong(),
+                                );
+                                let threshold =
+                                    (p.max_context_tokens as u64 * new_pct as u64) / 100;
+                                let threshold_fmt = if threshold >= 1_000_000 {
+                                    format!("{:.1}M", threshold as f64 / 1_000_000.0)
+                                } else if threshold >= 1_000 {
+                                    format!("{:.1}K", threshold as f64 / 1_000.0)
+                                } else {
+                                    threshold.to_string()
+                                };
+                                ui.label(
+                                    RichText::new(format!("@{} tokens", threshold_fmt))
+                                        .size(10.5)
+                                        .color(Palette::TEXT_MUTED),
+                                );
+                            });
+                            ui.end_row();
+
+                            // Allow project escape (access files outside project root).
+                            ui.label(helpers::field_label("Allow Outside Access"));
+                            ui.horizontal(|ui| {
+                                let mut val = p.allow_project_escape;
+                                if ui
+                                    .checkbox(&mut val, "")
+                                    .on_hover_text(
+                                        "When enabled, the AI can read/list/grep files \
+                                     anywhere on disk, not just inside the project folder. \
+                                     Write operations are still restricted to the project root \
+                                     unless you also disable the write-path check.",
+                                    )
+                                    .changed()
+                                {
+                                    p.allow_project_escape = val;
+                                }
+                                if val {
                                     ui.label(
-                                        RichText::new(status).size(10.0).color(Palette::TEXT_MUTED),
+                                        RichText::new("Enabled")
+                                            .size(11.0)
+                                            .color(Palette::WARNING)
+                                            .strong(),
+                                    );
+                                } else {
+                                    ui.label(
+                                        RichText::new("Restricted to project")
+                                            .size(11.0)
+                                            .color(Palette::TEXT_MUTED),
                                     );
                                 }
                             });
                             ui.end_row();
-                        }
-                        ui.end_row();
 
-                        // Context window (max tokens).
-                        ui.label(helpers::field_label("Context Window"));
-                        ui.horizontal(|ui| {
-                            ui.add(
-                                egui::DragValue::new(&mut p.max_context_tokens)
-                                    .speed(1000.0)
-                                    .range(4_000..=2_000_000),
-                            );
-                            ui.label(
-                                RichText::new("tokens")
-                                    .size(10.5)
-                                    .color(Palette::TEXT_MUTED),
-                            );
-                        });
-                        ui.end_row();
-
-                        // Thinking API style.
-                        ui.label(helpers::field_label("Thinking API"));
-                        {
-                            let mut current = p.thinking_api.clone();
-                            egui::ComboBox::from_id_salt(format!("thinking_api_{}", key))
-                                .selected_text(current.label())
-                                .show_ui(ui, |ui| {
-                                for api in autocode_core::state::ThinkingApi::variants() {
-                                    ui.push_id(("thinking_sel", api.label()), |ui| {
-                                        if ui
-                                            .selectable_label(current == *api, api.label())
-                                            .clicked()
-                                        {
-                                            current = api.clone();
-                                        }
-                                    });
-                                }
-                                });
-                            if current != p.thinking_api {
-                                p.thinking_api = current;
-                            }
-                        }
-                        ui.end_row();
-
-                        // Handoff percentage.
-                        ui.label(helpers::field_label("Handoff"));
-                        ui.horizontal(|ui| {
-                            let mut pct = p.handoff_percent as f32;
-                            ui.add(
-                                egui::Slider::new(&mut pct, 10.0..=95.0)
-                                    .step_by(5.0)
-                                    .show_value(false)
-                                    .trailing_fill(true),
-                            );
-                            let new_pct = pct as u8;
-                            p.handoff_percent = new_pct;
-                            ui.label(
-                                RichText::new(format!("{}%", new_pct))
-                                    .size(11.0)
-                                    .color(Palette::ACCENT)
-                                    .strong(),
-                            );
-                            let threshold = (p.max_context_tokens as u64 * new_pct as u64) / 100;
-                            let threshold_fmt = if threshold >= 1_000_000 {
-                                format!("{:.1}M", threshold as f64 / 1_000_000.0)
-                            } else if threshold >= 1_000 {
-                                format!("{:.1}K", threshold as f64 / 1_000.0)
-                            } else {
-                                threshold.to_string()
-                            };
-                            ui.label(
-                                RichText::new(format!("@{} tokens", threshold_fmt))
-                                    .size(10.5)
-                                    .color(Palette::TEXT_MUTED),
-                            );
-                        });
-                        ui.end_row();
-
-                        // Allow project escape (access files outside project root).
-                        ui.label(helpers::field_label("Allow Outside Access"));
-                        ui.horizontal(|ui| {
-                            let mut val = p.allow_project_escape;
-                            if ui
-                                .checkbox(&mut val, "")
-                                .on_hover_text(
-                                    "When enabled, the AI can read/list/grep files \
-                                     anywhere on disk, not just inside the project folder. \
-                                     Write operations are still restricted to the project root \
-                                     unless you also disable the write-path check.",
-                                )
-                                .changed()
-                            {
-                                p.allow_project_escape = val;
-                            }
-                            if val {
-                                ui.label(
-                                    RichText::new("Enabled")
-                                        .size(11.0)
-                                        .color(Palette::WARNING)
-                                        .strong(),
+                            // Max output tokens.
+                            ui.label(helpers::field_label("Max Output"));
+                            ui.horizontal(|ui| {
+                                ui.add(
+                                    egui::DragValue::new(&mut p.max_output_tokens)
+                                        .speed(1000.0)
+                                        .range(256..=200_000),
                                 );
-                            } else {
                                 ui.label(
-                                    RichText::new("Restricted to project")
-                                        .size(11.0)
+                                    RichText::new("tokens")
+                                        .size(10.5)
                                         .color(Palette::TEXT_MUTED),
                                 );
-                            }
-                        });
-                        ui.end_row();
+                            });
+                            ui.end_row();
 
-                        // Max output tokens.
-                        ui.label(helpers::field_label("Max Output"));
-                        ui.horizontal(|ui| {
-                            ui.add(
-                                egui::DragValue::new(&mut p.max_output_tokens)
-                                    .speed(1000.0)
-                                    .range(256..=200_000),
-                            );
-                            ui.label(
-                                RichText::new("tokens")
-                                    .size(10.5)
-                                    .color(Palette::TEXT_MUTED),
-                            );
+                            // Max output tokens when thinking is enabled.
+                            ui.label(helpers::field_label("Max Output (Thinking)"));
+                            ui.horizontal(|ui| {
+                                ui.add(
+                                    egui::DragValue::new(&mut p.max_output_tokens_thinking)
+                                        .speed(1000.0)
+                                        .range(256..=200_000),
+                                );
+                                ui.label(
+                                    RichText::new("tokens")
+                                        .size(10.5)
+                                        .color(Palette::TEXT_MUTED),
+                                );
+                            });
+                            ui.end_row();
                         });
-                        ui.end_row();
+                });
 
-                        // Max output tokens when thinking is enabled.
-                        ui.label(helpers::field_label("Max Output (Thinking)"));
-                        ui.horizontal(|ui| {
-                            ui.add(
-                                egui::DragValue::new(&mut p.max_output_tokens_thinking)
-                                    .speed(1000.0)
-                                    .range(256..=200_000),
-                            );
-                            ui.label(
-                                RichText::new("tokens")
-                                    .size(10.5)
-                                    .color(Palette::TEXT_MUTED),
-                            );
-                        });
-                        ui.end_row();
-                    });
-            });
-
-        ui.add_space(8.0);
+            ui.add_space(8.0);
         }); // end push_id("provider", key)
     }
 
@@ -608,105 +617,105 @@ fn show_projects(ui: &mut egui::Ui, state: &mut AppState) {
 
     for p in &projects {
         ui.push_id(("project", &p.id), |ui| {
-        let is_active = state.active_project_id.as_deref() == Some(&p.id);
-        let border_color = if is_active {
-            Palette::ACCENT_DIM
-        } else {
-            Palette::BORDER
-        };
-        let bg_color = if is_active {
-            Palette::BG_ACTIVE
-        } else {
-            Palette::BG_SURFACE
-        };
+            let is_active = state.active_project_id.as_deref() == Some(&p.id);
+            let border_color = if is_active {
+                Palette::ACCENT_DIM
+            } else {
+                Palette::BORDER
+            };
+            let bg_color = if is_active {
+                Palette::BG_ACTIVE
+            } else {
+                Palette::BG_SURFACE
+            };
 
-        Frame::NONE
-            .fill(bg_color)
-            .corner_radius(ROUND_SM)
-            .stroke(egui::Stroke::new(1.0, border_color))
-            .inner_margin(Margin {
-                left: 10,
-                right: 10,
-                top: 6,
-                bottom: 6,
-            })
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.label(
-                            RichText::new(&p.name)
-                                .size(12.5)
-                                .color(Palette::TEXT_PRIMARY)
-                                .strong(),
-                        );
-                        ui.label(
-                            RichText::new(&p.root_path)
-                                .size(10.5)
-                                .color(Palette::TEXT_MUTED)
-                                .monospace(),
-                        );
-                    });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .button(RichText::new("Remove").size(11.0).color(Palette::ERROR))
-                            .clicked()
-                        {
-                            to_remove = Some(p.id.clone());
-                        }
-                        if !is_active && ui.button("Set Active").clicked() {
-                            autocode_core::session_storage::switch_to_project(state, &p.id);
-                        }
-                        if is_active {
-                            ui.label(RichText::new("Active").size(10.0).color(Palette::SUCCESS));
-                        }
-                    });
-                });
-
-                // Collapsible session list for this project.
-                let proj_sessions: Vec<&Session> = state
-                    .sessions
-                    .iter()
-                    .filter(|s| {
-                        s.project_id.as_deref() == Some(&p.id)
-                            && autocode_core::session_storage::session_exists(p, s)
-                    })
-                    .collect();
-                if !proj_sessions.is_empty() {
-                    CollapsingHeader::new(format!("Sessions ({})", proj_sessions.len()))
-                        .id_salt(format!("settings_proj_sessions_{}", p.id))
-                        .show(ui, |ui| {
-                            for sess in proj_sessions {
-                                ui.push_id(("session", &sess.id), |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        RichText::new(&sess.id)
-                                            .monospace()
-                                            .size(11.0),
-                                    );
-                                    let mut label_buf = sess.label.clone();
-                                    let resp = ui.add(
-                                        egui::TextEdit::singleline(&mut label_buf)
-                                            .id(egui::Id::new(("session_label", &sess.id)))
-                                            .desired_width(180.0),
-                                    );
-                                    if resp.lost_focus() && label_buf != sess.label {
-                                        rename_ops.push((sess.id.clone(), label_buf));
-                                    }
-                                    if ui.button("Delete").clicked() {
-                                        delete_ops.push(sess.id.clone());
-                                    }
-                                });
-                                }); // end push_id("session", id)
+            Frame::NONE
+                .fill(bg_color)
+                .corner_radius(ROUND_SM)
+                .stroke(egui::Stroke::new(1.0, border_color))
+                .inner_margin(Margin {
+                    left: 10,
+                    right: 10,
+                    top: 6,
+                    bottom: 6,
+                })
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.label(
+                                RichText::new(&p.name)
+                                    .size(12.5)
+                                    .color(Palette::TEXT_PRIMARY)
+                                    .strong(),
+                            );
+                            ui.label(
+                                RichText::new(&p.root_path)
+                                    .size(10.5)
+                                    .color(Palette::TEXT_MUTED)
+                                    .monospace(),
+                            );
+                        });
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .button(RichText::new("Remove").size(11.0).color(Palette::ERROR))
+                                .clicked()
+                            {
+                                to_remove = Some(p.id.clone());
                             }
-                            ui.add_space(4.0);
-                            if ui.button("Delete All Sessions").clicked() {
-                                delete_all_for_project = Some(p.id.clone());
+                            if !is_active && ui.button("Set Active").clicked() {
+                                autocode_core::session_storage::switch_to_project(state, &p.id);
+                            }
+                            if is_active {
+                                ui.label(
+                                    RichText::new("Active").size(10.0).color(Palette::SUCCESS),
+                                );
                             }
                         });
-                }
-            });
+                    });
 
-        ui.add_space(4.0);
+                    // Collapsible session list for this project.
+                    let proj_sessions: Vec<&Session> = state
+                        .sessions
+                        .iter()
+                        .filter(|s| {
+                            s.project_id.as_deref() == Some(&p.id)
+                                && autocode_core::session_storage::session_exists(p, s)
+                        })
+                        .collect();
+                    if !proj_sessions.is_empty() {
+                        CollapsingHeader::new(format!("Sessions ({})", proj_sessions.len()))
+                            .id_salt(format!("settings_proj_sessions_{}", p.id))
+                            .show(ui, |ui| {
+                                for sess in proj_sessions {
+                                    ui.push_id(("session", &sess.id), |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.label(
+                                                RichText::new(&sess.id).monospace().size(11.0),
+                                            );
+                                            let mut label_buf = sess.label.clone();
+                                            let resp = ui.add(
+                                                egui::TextEdit::singleline(&mut label_buf)
+                                                    .id(egui::Id::new(("session_label", &sess.id)))
+                                                    .desired_width(180.0),
+                                            );
+                                            if resp.lost_focus() && label_buf != sess.label {
+                                                rename_ops.push((sess.id.clone(), label_buf));
+                                            }
+                                            if ui.button("Delete").clicked() {
+                                                delete_ops.push(sess.id.clone());
+                                            }
+                                        });
+                                    }); // end push_id("session", id)
+                                }
+                                ui.add_space(4.0);
+                                if ui.button("Delete All Sessions").clicked() {
+                                    delete_all_for_project = Some(p.id.clone());
+                                }
+                            });
+                    }
+                });
+
+            ui.add_space(4.0);
         }); // end push_id("project", id)
     }
 
@@ -808,11 +817,7 @@ fn show_session_settings(ui: &mut egui::Ui, state: &mut AppState) {
                                 .speed(10.0)
                                 .range(50..=5000),
                         );
-                        ui.label(
-                            RichText::new("ms")
-                                .size(10.5)
-                                .color(Palette::TEXT_MUTED),
-                        );
+                        ui.label(RichText::new("ms").size(10.5).color(Palette::TEXT_MUTED));
                     });
                     ui.end_row();
                 });
@@ -820,7 +825,7 @@ fn show_session_settings(ui: &mut egui::Ui, state: &mut AppState) {
             ui.add_space(6.0);
             ui.label(
                 RichText::new(
-                     "Messages in RAM: controls how many are held in memory and displayed. \
+                    "Messages in RAM: controls how many are held in memory and displayed. \
                      Full history is saved to disk and reloaded for API requests. \
                      Completion Delay: minimum pause (ms) between consecutive API calls \
                      to pace rapid tool-use loops.",
@@ -1414,8 +1419,17 @@ fn show_about(ui: &mut egui::Ui, state: &mut AppState) {
     ui.add_space(4.0);
     if autocode_core::sysinfo::has_opengl() {
         ui.horizontal(|ui| {
-            ui.label(RichText::new("OpenGL").size(12.0).color(Palette::SUCCESS).strong());
-            ui.label(RichText::new("(Glow backend)").size(11.0).color(Palette::TEXT_MUTED));
+            ui.label(
+                RichText::new("OpenGL")
+                    .size(12.0)
+                    .color(Palette::SUCCESS)
+                    .strong(),
+            );
+            ui.label(
+                RichText::new("(Glow backend)")
+                    .size(11.0)
+                    .color(Palette::TEXT_MUTED),
+            );
         });
     } else {
         Frame::NONE
@@ -1439,13 +1453,28 @@ fn show_about(ui: &mut egui::Ui, state: &mut AppState) {
                     .color(Palette::TEXT_PRIMARY),
                 );
                 ui.add_space(4.0);
-                if ui.link("OpenGL installation guide (docs.mesa3d.org)").clicked() {
+                if ui
+                    .link("OpenGL installation guide (docs.mesa3d.org)")
+                    .clicked()
+                {
                     #[cfg(target_os = "windows")]
-                    { let _ = std::process::Command::new("cmd").args(["/c", "start", "https://docs.mesa3d.org/install.html"]).spawn(); }
+                    {
+                        let _ = std::process::Command::new("cmd")
+                            .args(["/c", "start", "https://docs.mesa3d.org/install.html"])
+                            .spawn();
+                    }
                     #[cfg(target_os = "macos")]
-                    { let _ = std::process::Command::new("open").arg("https://docs.mesa3d.org/install.html").spawn(); }
+                    {
+                        let _ = std::process::Command::new("open")
+                            .arg("https://docs.mesa3d.org/install.html")
+                            .spawn();
+                    }
                     #[cfg(target_os = "linux")]
-                    { let _ = std::process::Command::new("xdg-open").arg("https://docs.mesa3d.org/install.html").spawn(); }
+                    {
+                        let _ = std::process::Command::new("xdg-open")
+                            .arg("https://docs.mesa3d.org/install.html")
+                            .spawn();
+                    }
                 }
                 ui.add_space(4.0);
                 ui.label(

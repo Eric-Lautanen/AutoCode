@@ -64,8 +64,10 @@ fn run_command_inner(
 ) {
     let mut bat_path_to_clean = None;
     let result = if cfg!(target_os = "windows") {
-        let bat_path =
-            std::env::temp_dir().join(format!("ac_shell_{}.cmd", autocode_core::helpers::generate_id()));
+        let bat_path = std::env::temp_dir().join(format!(
+            "ac_shell_{}.cmd",
+            autocode_core::helpers::generate_id()
+        ));
         let script = if command.contains('\n') {
             let mut s = String::with_capacity(command.len() + 32);
             for line in command.lines() {

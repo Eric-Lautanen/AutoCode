@@ -6,7 +6,11 @@ use egui::{Color32, Frame, Key, Margin, RichText, ScrollArea, Stroke, TextEdit, 
 use std::collections::HashSet;
 use std::path::Path;
 
-use autocode_core::{fsutil, state::AppState, theme::{Palette, ROUND_SM}};
+use autocode_core::{
+    fsutil,
+    state::AppState,
+    theme::{Palette, ROUND_SM},
+};
 
 /// Ephemeral (non-persisted) state for the explorer panel.
 #[derive(Default)]
@@ -116,17 +120,16 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, panel: &mut ExplorerPanelSt
                         .show(ui, |ui| {
                             // Tighter row spacing inside the tree.
                             ui.spacing_mut().item_spacing.y = 1.0;
-                            show_tree(
-                                ui,
-                                root,
-                                &mut panel.expanded,
-                                &mut panel.selected_file,
-                                &mut panel.file_content,
-                                &mut panel.show_file_viewer,
-                                &mut panel.image_texture,
-                                &mut panel.renaming,
-                                &mut panel.rename_buffer,
-                            );
+                            let mut tree_state = TreeState {
+                                expanded: &mut panel.expanded,
+                                selected: &mut panel.selected_file,
+                                file_content: &mut panel.file_content,
+                                show_viewer: &mut panel.show_file_viewer,
+                                image_texture: &mut panel.image_texture,
+                                renaming: &mut panel.renaming,
+                                rename_buffer: &mut panel.rename_buffer,
+                            };
+                            show_tree(ui, root, &mut tree_state);
                         });
                 });
 
@@ -137,34 +140,29 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, panel: &mut ExplorerPanelSt
 
 // -- Recursive tree renderer ---------------------------------------------------
 
-#[allow(clippy::too_many_arguments)]
-fn show_tree(
-    ui: &mut egui::Ui,
-    dir: &std::path::Path,
-    expanded: &mut std::collections::HashSet<String>,
-    selected: &mut Option<String>,
-    file_content: &mut Option<Result<String, String>>,
-    show_viewer: &mut bool,
-    image_texture: &mut Option<(String, TextureHandle)>,
-    renaming: &mut Option<String>,
-    rename_buffer: &mut String,
-) {
+struct TreeState<'a> {
+    expanded: &'a mut std::collections::HashSet<String>,
+    selected: &'a mut Option<String>,
+    file_content: &'a mut Option<Result<String, String>>,
+    show_viewer: &'a mut bool,
+    image_texture: &'a mut Option<(String, TextureHandle)>,
+    renaming: &'a mut Option<String>,
+    rename_buffer: &'a mut String,
+}
+
+fn show_tree(ui: &mut egui::Ui, dir: &std::path::Path, state: &mut TreeState<'_>) {
     let entries = autocode_fs::explorer::list_dir(dir);
 
-    // Use a consistent indent step. CollapsingState.body() already shifts
-    // children into its own sub-UI; we do NOT add any extra Frame margin on
-    // top of that. Setting spacing.indent here controls how far egui shifts
-    // the body content relative to the header toggle arrow.
     ui.spacing_mut().indent = 12.0;
 
     for entry in entries {
         let path_str = entry.path.to_string_lossy().to_string();
 
         if entry.is_dir {
-            let is_open = expanded.contains(&path_str);
+            let is_open = state.expanded.contains(&path_str);
             let id = ui.make_persistent_id(&path_str);
 
-                let is_renaming = renaming.as_deref() == Some(&path_str);
+            let is_renaming = state.renaming.as_deref() == Some(&path_str);
             let header_resp = egui::collapsing_header::CollapsingState::load_with_default_open(
                 ui.ctx(),
                 id,
@@ -172,26 +170,28 @@ fn show_tree(
             )
             .show_header(ui, |ui| {
                 if is_renaming {
-                    if rename_buffer.is_empty() {
-                        *rename_buffer = entry.name.clone();
+                    if state.rename_buffer.is_empty() {
+                        *state.rename_buffer = entry.name.clone();
                     }
                     let resp = ui.add_sized(
                         ui.available_size(),
-                        TextEdit::singleline(rename_buffer)
-                            .font(egui::TextStyle::Monospace),
+                        TextEdit::singleline(state.rename_buffer).font(egui::TextStyle::Monospace),
                     );
                     let enter = ui.input(|i| i.key_pressed(Key::Enter));
-                    if enter && !rename_buffer.is_empty() && rename_buffer != &entry.name {
-                        let new_path = entry.path.with_file_name(rename_buffer.as_str());
+                    if enter
+                        && !state.rename_buffer.is_empty()
+                        && state.rename_buffer != &entry.name
+                    {
+                        let new_path = entry.path.with_file_name(state.rename_buffer.as_str());
                         let _ = fsutil::rename(&entry.path, &new_path);
-                        *selected = Some(new_path.to_string_lossy().to_string());
+                        *state.selected = Some(new_path.to_string_lossy().to_string());
                     }
-                    let click_outside = ui.input(|i| i.pointer.any_pressed())
-                        && !resp.contains_pointer();
+                    let click_outside =
+                        ui.input(|i| i.pointer.any_pressed()) && !resp.contains_pointer();
                     if enter || resp.lost_focus() || click_outside {
-                        *renaming = None;
-                        *selected = None;
-                        rename_buffer.clear();
+                        *state.renaming = None;
+                        *state.selected = None;
+                        state.rename_buffer.clear();
                     }
                 } else {
                     let item_frame = Frame::NONE
@@ -223,21 +223,23 @@ fn show_tree(
                         }
                         ui.separator();
                         if ui.button("Rename").clicked() {
-                            *renaming = Some(path_str.clone());
-                            *selected = Some(path_str.clone());
-                            rename_buffer.clear();
+                            *state.renaming = Some(path_str.clone());
+                            *state.selected = Some(path_str.clone());
+                            state.rename_buffer.clear();
                             ui.close();
                         }
                         ui.separator();
                         if ui
-                            .button(egui::RichText::new("Delete folder")
-                                .color(autocode_core::theme::Palette::ERROR))
+                            .button(
+                                egui::RichText::new("Delete folder")
+                                    .color(autocode_core::theme::Palette::ERROR),
+                            )
                             .clicked()
                         {
                             let _ = fsutil::remove_dir(&entry.path);
-                            if selected.as_deref() == Some(&path_str) {
-                                *selected = None;
-                                *file_content = None;
+                            if state.selected.as_deref() == Some(&path_str) {
+                                *state.selected = None;
+                                *state.file_content = None;
                             }
                             ui.close();
                         }
@@ -246,143 +248,135 @@ fn show_tree(
             });
             let now_open = header_resp.is_open();
             header_resp.body(|ui| {
-                // CollapsingState already indented the body sub-UI by
-                // spacing.indent. Just recurse with no extra offset.
-                show_tree(
-                    ui,
-                    &entry.path,
-                    expanded,
-                    selected,
-                    file_content,
-                    show_viewer,
-                    image_texture,
-                    renaming,
-                    rename_buffer,
-                );
+                show_tree(ui, &entry.path, state);
             });
             if now_open {
-                expanded.insert(path_str.clone());
+                state.expanded.insert(path_str.clone());
             } else {
-                expanded.remove(&path_str);
+                state.expanded.remove(&path_str);
             }
         } else {
             ui.push_id(("file", &path_str), |ui| {
-            // File leaf. egui's CollapsingState body already placed us at the
-            // right indent level. Just render the label with a small spacer to
-            // clear the area where the toggle arrow would be.
-            let is_selected = selected.as_deref() == Some(&path_str);
-            let is_renaming = renaming.as_deref() == Some(&path_str);
+                let is_selected = state.selected.as_deref() == Some(&path_str);
+                let is_renaming = state.renaming.as_deref() == Some(&path_str);
 
-            if is_renaming {
-                if rename_buffer.is_empty() {
-                    *rename_buffer = entry.name.clone();
-                }
-                let resp = ui.add_sized(
-                    ui.available_size(),
-                    TextEdit::singleline(rename_buffer)
-                        .font(egui::TextStyle::Monospace),
-                );
-                let enter = ui.input(|i| i.key_pressed(Key::Enter));
-                if enter && !rename_buffer.is_empty() && rename_buffer != &entry.name {
-                    let new_path = entry.path.with_file_name(rename_buffer.as_str());
-                    let _ = fsutil::rename(&entry.path, &new_path);
-                    *selected = Some(new_path.to_string_lossy().to_string());
-                }
-                let click_outside = ui.input(|i| i.pointer.any_pressed())
-                    && !resp.contains_pointer();
-                if enter || resp.lost_focus() || click_outside {
-                    *renaming = None;
-                    rename_buffer.clear();
-                }
-            } else {
-                let (bg_fill, border_color) = if is_selected {
-                    (Palette::BG_ACTIVE, Palette::ACCENT_DIM)
-                } else {
-                    (Color32::TRANSPARENT, Color32::TRANSPARENT)
-                };
-
-                let item_frame = Frame::NONE
-                    .fill(bg_fill)
-                    .corner_radius(ROUND_SM)
-                    .stroke(Stroke::new(1.0, border_color))
-                    .inner_margin(Margin {
-                        left: 6,
-                        right: 6,
-                        top: 3,
-                        bottom: 3,
-                    })
-                    .show(ui, |ui| {
-                        ui.set_min_width(ui.available_width());
-                        let text = egui::RichText::new(&entry.name)
-                            .size(12.0)
-                            .color(if is_selected {
-                                Palette::ACCENT
-                            } else {
-                                Palette::TEXT_SECONDARY
-                            });
-                        ui.label(text);
-                    });
-
-                let resp = item_frame
-                    .response
-                    .interact(egui::Sense::click())
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
-
-                if resp.clicked() {
-                    *selected = Some(path_str.clone());
-                    *image_texture = None;
-                    let ext = entry
-                        .path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .map(|e| e.to_lowercase())
-                        .unwrap_or_default();
-                    let is_image = matches!(
-                        ext.as_str(),
-                        "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp"
+                if is_renaming {
+                    if state.rename_buffer.is_empty() {
+                        *state.rename_buffer = entry.name.clone();
+                    }
+                    let resp = ui.add_sized(
+                        ui.available_size(),
+                        TextEdit::singleline(state.rename_buffer).font(egui::TextStyle::Monospace),
                     );
-                    if is_image {
-                        *file_content = None;
-                    } else {
-                        *file_content = Some(autocode_fs::explorer::read_file(&entry.path));
-                    }
-                    *show_viewer = true;
-                }
-
-                if resp.hovered() && !is_selected {
-                    ui.painter().rect_filled(
-                        resp.rect,
-                        ROUND_SM,
-                        Color32::from_rgba_premultiplied(33, 39, 50, 40),
-                    );
-                }
-
-                resp.context_menu(|ui| {
-                    if ui.button("Copy path").clicked() {
-                        ui.ctx().copy_text(path_str.clone());
-                        ui.close();
-                    }
-                    ui.separator();
-                    if ui.button("Rename").clicked() {
-                        *renaming = Some(path_str.clone());
-                        *selected = Some(path_str.clone());
-                        rename_buffer.clear();
-                        ui.close();
-                    }
-                    ui.separator();
-                    if ui
-                        .button(egui::RichText::new("Delete file").color(autocode_core::theme::Palette::ERROR))
-                        .clicked()
+                    let enter = ui.input(|i| i.key_pressed(Key::Enter));
+                    if enter
+                        && !state.rename_buffer.is_empty()
+                        && state.rename_buffer != &entry.name
                     {
-                        let _ = fsutil::remove_file(&entry.path);
-                        if selected.as_deref() == Some(&path_str) {
-                            *selected = None;
-                            *file_content = None;
-                        }
-                        ui.close();
+                        let new_path = entry.path.with_file_name(state.rename_buffer.as_str());
+                        let _ = fsutil::rename(&entry.path, &new_path);
+                        *state.selected = Some(new_path.to_string_lossy().to_string());
                     }
-                });
-            }
+                    let click_outside =
+                        ui.input(|i| i.pointer.any_pressed()) && !resp.contains_pointer();
+                    if enter || resp.lost_focus() || click_outside {
+                        *state.renaming = None;
+                        state.rename_buffer.clear();
+                    }
+                } else {
+                    let (bg_fill, border_color) = if is_selected {
+                        (Palette::BG_ACTIVE, Palette::ACCENT_DIM)
+                    } else {
+                        (Color32::TRANSPARENT, Color32::TRANSPARENT)
+                    };
+
+                    let item_frame = Frame::NONE
+                        .fill(bg_fill)
+                        .corner_radius(ROUND_SM)
+                        .stroke(Stroke::new(1.0, border_color))
+                        .inner_margin(Margin {
+                            left: 6,
+                            right: 6,
+                            top: 3,
+                            bottom: 3,
+                        })
+                        .show(ui, |ui| {
+                            ui.set_min_width(ui.available_width());
+                            let text =
+                                egui::RichText::new(&entry.name)
+                                    .size(12.0)
+                                    .color(if is_selected {
+                                        Palette::ACCENT
+                                    } else {
+                                        Palette::TEXT_SECONDARY
+                                    });
+                            ui.label(text);
+                        });
+
+                    let resp = item_frame
+                        .response
+                        .interact(egui::Sense::click())
+                        .on_hover_cursor(egui::CursorIcon::PointingHand);
+
+                    if resp.clicked() {
+                        *state.selected = Some(path_str.clone());
+                        *state.image_texture = None;
+                        let ext = entry
+                            .path
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .map(|e| e.to_lowercase())
+                            .unwrap_or_default();
+                        let is_image = matches!(
+                            ext.as_str(),
+                            "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp"
+                        );
+                        if is_image {
+                            *state.file_content = None;
+                        } else {
+                            *state.file_content =
+                                Some(autocode_fs::explorer::read_file(&entry.path));
+                        }
+                        *state.show_viewer = true;
+                    }
+
+                    if resp.hovered() && !is_selected {
+                        ui.painter().rect_filled(
+                            resp.rect,
+                            ROUND_SM,
+                            Color32::from_rgba_premultiplied(33, 39, 50, 40),
+                        );
+                    }
+
+                    resp.context_menu(|ui| {
+                        if ui.button("Copy path").clicked() {
+                            ui.ctx().copy_text(path_str.clone());
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button("Rename").clicked() {
+                            *state.renaming = Some(path_str.clone());
+                            *state.selected = Some(path_str.clone());
+                            state.rename_buffer.clear();
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui
+                            .button(
+                                egui::RichText::new("Delete file")
+                                    .color(autocode_core::theme::Palette::ERROR),
+                            )
+                            .clicked()
+                        {
+                            let _ = fsutil::remove_file(&entry.path);
+                            if state.selected.as_deref() == Some(&path_str) {
+                                *state.selected = None;
+                                *state.file_content = None;
+                            }
+                            ui.close();
+                        }
+                    });
+                }
             }); // end push_id("file", path_str)
         }
     }

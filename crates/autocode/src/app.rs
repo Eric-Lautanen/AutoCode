@@ -64,11 +64,15 @@ impl AutocodeApp {
     }
 
     fn load_and_prune_projects(state: &mut AppState) {
-        let proj_dir = autocode_core::fsutil::exe_dir().join("data").join("projects");
+        let proj_dir = autocode_core::fsutil::exe_dir()
+            .join("data")
+            .join("projects");
         state.projects.retain(|p| {
             let dir = proj_dir.join(&p.data_dir_name);
             if !dir.exists() {
-                state.sessions.retain(|s| s.project_id.as_ref() != Some(&p.id));
+                state
+                    .sessions
+                    .retain(|s| s.project_id.as_ref() != Some(&p.id));
                 false
             } else {
                 true
@@ -92,7 +96,10 @@ impl AutocodeApp {
             state.handoff_enabled = false;
             state.settings_open = false;
         } else if state.active_session_id.is_some()
-            && !state.sessions.iter().any(|s| Some(&s.id) == state.active_session_id.as_ref())
+            && !state
+                .sessions
+                .iter()
+                .any(|s| Some(&s.id) == state.active_session_id.as_ref())
         {
             state.active_session_id = state.sessions.last().map(|s| s.id.clone());
         }
@@ -106,24 +113,27 @@ impl AutocodeApp {
             .sessions
             .iter()
             .filter(|s| {
-                s.project_id.as_ref().and_then(|pid| {
-                    state.projects.iter().find(|p| &p.id == pid).map(|proj| {
-                        let dir = autocode_core::session_storage::project_sessions_dir(proj);
-                        let candidate = dir.join(s.filename());
-                        if candidate.exists() {
-                            return false;
-                        }
-                        let prefix = format!("{}_", s.id);
-                        if let Ok(entries) = std::fs::read_dir(&dir) {
-                            !entries.flatten().any(|e| {
-                                let name = e.file_name().to_string_lossy().to_string();
-                                name.starts_with(&prefix) && name.ends_with(".json")
-                            })
-                        } else {
-                            true
-                        }
+                s.project_id
+                    .as_ref()
+                    .and_then(|pid| {
+                        state.projects.iter().find(|p| &p.id == pid).map(|proj| {
+                            let dir = autocode_core::session_storage::project_sessions_dir(proj);
+                            let candidate = dir.join(s.filename());
+                            if candidate.exists() {
+                                return false;
+                            }
+                            let prefix = format!("{}_", s.id);
+                            if let Ok(entries) = std::fs::read_dir(&dir) {
+                                !entries.flatten().any(|e| {
+                                    let name = e.file_name().to_string_lossy().to_string();
+                                    name.starts_with(&prefix) && name.ends_with(".json")
+                                })
+                            } else {
+                                true
+                            }
+                        })
                     })
-                }).unwrap_or(true)
+                    .unwrap_or(true)
             })
             .map(|s| s.id.clone())
             .collect();
@@ -131,14 +141,20 @@ impl AutocodeApp {
             state.sessions.retain(|s| s.id != *sid);
         }
         if !sessions_to_remove.is_empty() {
-            autocode_core::debug_log!("app: purged {} stale session stub(s) from ron", sessions_to_remove.len());
+            autocode_core::debug_log!(
+                "app: purged {} stale session stub(s) from ron",
+                sessions_to_remove.len()
+            );
         }
     }
 
     fn restore_active_session(state: &mut AppState) {
         if let Some(ref sid) = state.active_session_id
             && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == *sid)
-            && let Some(proj) = state.projects.iter().find(|p| Some(&p.id) == sess.project_id.as_ref())
+            && let Some(proj) = state
+                .projects
+                .iter()
+                .find(|p| Some(&p.id) == sess.project_id.as_ref())
         {
             autocode_core::session_storage::load_session(proj, sess);
             state.todo_list = sess.todo_list.clone();
@@ -218,10 +234,12 @@ impl eframe::App for AutocodeApp {
         use autocode_core::state::ShellStatus;
         if self.state.shell_tasks.len() > 200 {
             let excess = self.state.shell_tasks.len() - 200;
-            self.state.shell_tasks.extract_if(
-                0..excess,
-                |t| matches!(t.status, ShellStatus::Done { .. } | ShellStatus::Failed(_)),
-            ).for_each(drop);
+            self.state
+                .shell_tasks
+                .extract_if(0..excess, |t| {
+                    matches!(t.status, ShellStatus::Done { .. } | ShellStatus::Failed(_))
+                })
+                .for_each(drop);
             if self.state.shell_tasks.len() > 200 {
                 let extra = self.state.shell_tasks.len() - 200;
                 self.state.shell_tasks.drain(0..extra);
@@ -233,7 +251,10 @@ impl eframe::App for AutocodeApp {
             self.prev_session_id = self.state.active_session_id.clone();
         }
         let waiting_sysinfo = if session_changed
-            || self.state.active_session().is_some_and(|s| s.messages.is_empty())
+            || self
+                .state
+                .active_session()
+                .is_some_and(|s| s.messages.is_empty())
         {
             session::ensure_session(&mut self.state)
         } else {

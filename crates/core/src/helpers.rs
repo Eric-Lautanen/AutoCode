@@ -153,7 +153,9 @@ pub fn is_blocked_path(path: &std::path::Path) -> bool {
 pub fn blocked_error(raw_path: &str) -> String {
     format!(
         "{{\"error\":{},\"suggestion\":{}}}",
-        serde_json::Value::String(format!("Path traversal blocked for \"{raw_path}\" -- path escapes the project root")),
+        serde_json::Value::String(format!(
+            "Path traversal blocked for \"{raw_path}\" -- path escapes the project root"
+        )),
         serde_json::Value::String("Use a path within the project directory".to_string()),
     )
 }
@@ -365,23 +367,57 @@ pub fn deserialize_secret<'de, D: serde::Deserializer<'de>>(
 
 // -- Default value functions for serde -----------------------------------------
 
-pub fn default_context_tokens() -> u32 { 128_000 }
-pub fn default_handoff_percent() -> u8 { 80 }
-pub fn default_handoff_prompt_string() -> String { crate::state::DEFAULT_HANDOFF_PROMPT.to_string() }
-pub fn default_handoff_enabled() -> bool { false }
-pub fn default_thinking_mode() -> bool { false }
-pub fn default_reasoning_effort() -> String { "high".into() }
-pub fn default_max_output_tokens() -> u32 { 16384 }
-pub fn default_max_output_tokens_thinking() -> u32 { 32768 }
-pub fn default_stream_idle_timeout() -> u64 { 120 }
-pub fn default_request_timeout() -> u64 { 300 }
-pub fn default_tool_timeout() -> u64 { 120 }
-pub fn default_shell_timeout() -> u64 { 120 }
-pub fn default_shell_timeout_max() -> u64 { 600 }
-pub fn default_max_retries() -> u8 { 3 }
-pub fn default_max_retry_wait() -> u64 { 900 }
-pub fn default_ui_display_window() -> usize { 50 }
-pub fn default_disk_read_delay_ms() -> u64 { 300 }
+pub fn default_context_tokens() -> u32 {
+    128_000
+}
+pub fn default_handoff_percent() -> u8 {
+    80
+}
+pub fn default_handoff_prompt_string() -> String {
+    crate::state::DEFAULT_HANDOFF_PROMPT.to_string()
+}
+pub fn default_handoff_enabled() -> bool {
+    false
+}
+pub fn default_thinking_mode() -> bool {
+    false
+}
+pub fn default_reasoning_effort() -> String {
+    "high".into()
+}
+pub fn default_max_output_tokens() -> u32 {
+    16384
+}
+pub fn default_max_output_tokens_thinking() -> u32 {
+    32768
+}
+pub fn default_stream_idle_timeout() -> u64 {
+    120
+}
+pub fn default_request_timeout() -> u64 {
+    300
+}
+pub fn default_tool_timeout() -> u64 {
+    120
+}
+pub fn default_shell_timeout() -> u64 {
+    120
+}
+pub fn default_shell_timeout_max() -> u64 {
+    600
+}
+pub fn default_max_retries() -> u8 {
+    3
+}
+pub fn default_max_retry_wait() -> u64 {
+    900
+}
+pub fn default_ui_display_window() -> usize {
+    50
+}
+pub fn default_disk_read_delay_ms() -> u64 {
+    300
+}
 
 // -- Simple regex-like pattern matcher -----------------------------------------
 //

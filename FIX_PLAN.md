@@ -178,8 +178,8 @@
   - `crates/ui/src/ui_chat.rs:207-218`: Collapsed nested `if` with `if-let` chain (`collapsible_if`)
   - `crates/ui/src/ui_chat.rs:234`: `and_then(|x| Some(...))` → `map(|x| ...)` (`bind_instead_of_map`)
   - `crates/ui/src/ui_settings.rs:671`: `&p` → `p` (`needless_borrow`)
-  - `crates/ai/src/provider.rs:947,974`: Added `#[allow(clippy::too_many_arguments)]` to `send_http`/`send_https`
-  - `crates/ui/src/ui_explorer.rs:140`: Added `#[allow(clippy::too_many_arguments)]` to `show_tree`
+  - `crates/ai/src/provider.rs`: Replaced `#[allow(clippy::too_many_arguments)]` with `TimeoutConfig` struct + `apply_timeouts` helper for `send_http`/`send_https` (8→7 args)
+  - `crates/ui/src/ui_explorer.rs`: Replaced `#[allow(clippy::too_many_arguments)]` with `TreeState` struct for `show_tree` (9→3 args)
 - **Verification**: `cargo clippy` — 0 warnings. `cargo check` — clean. `cargo test` — 22/22 pass.
 - **Status**: ✅ Done
 

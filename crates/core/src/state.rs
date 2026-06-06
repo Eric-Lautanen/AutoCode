@@ -967,9 +967,10 @@ impl AppState {
 
         // If the saved global per-session state is orphaned (no active
         // session or the active session doesn't exist), clear it.
-        let active_ok = state.active_session_id.as_ref().is_some_and(|sid| {
-            state.sessions.iter().any(|s| s.id == *sid)
-        });
+        let active_ok = state
+            .active_session_id
+            .as_ref()
+            .is_some_and(|sid| state.sessions.iter().any(|s| s.id == *sid));
         if !active_ok {
             state.todo_list.clear();
             state.show_todo = false;

@@ -769,6 +769,10 @@ fn run_request(
 
     let (host, path, port, use_tls) = parse_url(&url)?;
 
+    let timeouts = TimeoutConfig {
+        request: req.request_timeout_secs,
+        stream_idle: req.stream_idle_timeout_secs,
+    };
     if use_tls {
         let conn = HttpConn {
             host: &host,
@@ -782,8 +786,7 @@ fn run_request(
             req.stream,
             &req.model,
             tx,
-            req.request_timeout_secs,
-            req.stream_idle_timeout_secs,
+            &timeouts,
         )
     } else {
         let conn = HttpConn {
@@ -798,8 +801,7 @@ fn run_request(
             req.stream,
             &req.model,
             tx,
-            req.request_timeout_secs,
-            req.stream_idle_timeout_secs,
+            &timeouts,
         )
     }
 }
@@ -917,11 +919,7 @@ fn parse_url(
     Ok((host.to_string(), path, port, use_tls))
 }
 
-fn connect_tcp(
-    host: &str,
-    port: u16,
-    timeout_secs: u64,
-) -> std::io::Result<TcpStream> {
+fn connect_tcp(host: &str, port: u16, timeout_secs: u64) -> std::io::Result<TcpStream> {
     use std::net::ToSocketAddrs;
     let timeout = std::time::Duration::from_secs(timeout_secs);
     let addrs = (host, port).to_socket_addrs()?;
@@ -938,13 +936,28 @@ fn connect_tcp(
         }
     }
     Err(last_err.unwrap_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::ConnectionRefused, format!(
-            "could not connect to {}:{}", host, port
-        ))
+        std::io::Error::new(
+            std::io::ErrorKind::ConnectionRefused,
+            format!("could not connect to {}:{}", host, port),
+        )
     }))
 }
 
-#[allow(clippy::too_many_arguments)]
+struct TimeoutConfig {
+    request: u64,
+    stream_idle: u64,
+}
+
+fn apply_timeouts(stream: &TcpStream, is_stream: bool, cfg: &TimeoutConfig) -> std::io::Result<()> {
+    let read_timeout = if is_stream {
+        cfg.stream_idle
+    } else {
+        cfg.request
+    };
+    stream.set_read_timeout(Some(Duration::from_secs(read_timeout)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(cfg.request)))
+}
+
 fn send_http(
     conn: HttpConn<'_>,
     api_key: &str,
@@ -952,17 +965,10 @@ fn send_http(
     stream: bool,
     model: &str,
     tx: Sender<ProviderEvent>,
-    request_timeout_secs: u64,
-    stream_idle_timeout_secs: u64,
+    timeouts: &TimeoutConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut stream_conn = connect_tcp(conn.host, conn.port, request_timeout_secs)?;
-    let read_timeout = if stream {
-        stream_idle_timeout_secs
-    } else {
-        request_timeout_secs
-    };
-    stream_conn.set_read_timeout(Some(std::time::Duration::from_secs(read_timeout)))?;
-    stream_conn.set_write_timeout(Some(std::time::Duration::from_secs(request_timeout_secs)))?;
+    let mut stream_conn = connect_tcp(conn.host, conn.port, timeouts.request)?;
+    apply_timeouts(&stream_conn, stream, timeouts)?;
 
     let request = build_http_request(conn.host, conn.path, api_key, body);
     stream_conn.write_all(request.as_bytes())?;
@@ -972,7 +978,6 @@ fn send_http(
     process_http_response(&mut reader, stream, model, tx)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn send_https(
     conn: &HttpConn<'_>,
     api_key: &str,
@@ -980,8 +985,7 @@ fn send_https(
     is_stream: bool,
     model: &str,
     tx: Sender<ProviderEvent>,
-    request_timeout_secs: u64,
-    stream_idle_timeout_secs: u64,
+    timeouts: &TimeoutConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     debug_log!(
         "provider::send_https: host={} port={} stream={}",
@@ -990,14 +994,8 @@ fn send_https(
         is_stream
     );
 
-    let stream = connect_tcp(conn.host, conn.port, request_timeout_secs)?;
-    let read_timeout = if is_stream {
-        stream_idle_timeout_secs
-    } else {
-        request_timeout_secs
-    };
-    stream.set_read_timeout(Some(Duration::from_secs(read_timeout)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(request_timeout_secs)))?;
+    let stream = connect_tcp(conn.host, conn.port, timeouts.request)?;
+    apply_timeouts(&stream, is_stream, timeouts)?;
 
     let config = tls_config();
     let dns_name = rustls::pki_types::DnsName::try_from(conn.host.to_string())

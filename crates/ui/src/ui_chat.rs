@@ -11,12 +11,12 @@ use egui::{
     TextFormat, Vec2,
 };
 
+use crate::helpers;
 use autocode_ai::chat::{self, ChatRuntime};
 use autocode_core::{
     state::{AppState, ChatMessage, DesignSettings, Role, ToolMeta},
     theme::{Palette, ROUND_LG, ROUND_MD, ROUND_SM},
 };
-use crate::helpers;
 
 thread_local! {
     static CURRENT_DESIGN: RefCell<Option<DesignSettings>> = const { RefCell::new(None) };
@@ -240,7 +240,12 @@ pub fn show(
                 })
             });
             let count = state.ui_display_window;
-            let older = autocode_core::session_storage::load_messages_before(proj, sess, panel_state.loaded_min_id, count);
+            let older = autocode_core::session_storage::load_messages_before(
+                proj,
+                sess,
+                panel_state.loaded_min_id,
+                count,
+            );
             if !older.is_empty() {
                 let added = older.len();
                 panel_state.loaded_min_id = older.first().map(|m| m.id).unwrap_or(0);
@@ -333,22 +338,32 @@ pub fn show(
                             });
                             ui.add_space(8.0);
                         }
-                        ui.push_id(("chat_messages", active_sid.as_deref().unwrap_or("")), |ui| {
-                        for (i, msg) in panel_state.display_buffer.iter().enumerate() {
-                            if msg.role == Role::System {
-                                show_system_pill(ui, msg);
-                            } else if msg.role == Role::Error {
-                                continue;
-                            } else if msg.role == Role::Assistant
-                                && msg.content.trim().is_empty()
-                                && msg.tool_calls.is_some()
-                            {
-                            } else {
-                                show_bubble(ui, msg, i, chat_w, false, active_sid.as_deref().unwrap_or(""));
-                            }
-                            ui.add_space(8.0);
-                        }
-                        }); // end push_id("chat_messages", ...)
+                        ui.push_id(
+                            ("chat_messages", active_sid.as_deref().unwrap_or("")),
+                            |ui| {
+                                for (i, msg) in panel_state.display_buffer.iter().enumerate() {
+                                    if msg.role == Role::System {
+                                        show_system_pill(ui, msg);
+                                    } else if msg.role == Role::Error {
+                                        continue;
+                                    } else if msg.role == Role::Assistant
+                                        && msg.content.trim().is_empty()
+                                        && msg.tool_calls.is_some()
+                                    {
+                                    } else {
+                                        show_bubble(
+                                            ui,
+                                            msg,
+                                            i,
+                                            chat_w,
+                                            false,
+                                            active_sid.as_deref().unwrap_or(""),
+                                        );
+                                    }
+                                    ui.add_space(8.0);
+                                }
+                            },
+                        ); // end push_id("chat_messages", ...)
                     } else {
                         empty_state(ui);
                     }
@@ -363,7 +378,13 @@ pub fn show(
                             ui.add_space(8.0);
                         } else {
                             if !r.reasoning_buf.is_empty() {
-                                show_reasoning_bubble(ui, &r.reasoning_buf, chat_w, true, active_sid.as_deref().unwrap_or(""));
+                                show_reasoning_bubble(
+                                    ui,
+                                    &r.reasoning_buf,
+                                    chat_w,
+                                    true,
+                                    active_sid.as_deref().unwrap_or(""),
+                                );
                             }
                             if !r.pending_response.is_empty() {
                                 show_streaming_bubble(ui, &r.pending_response, chat_w);
@@ -402,7 +423,11 @@ pub fn show(
                     let dropped = panel_state.display_buffer.split_off(overshoot);
                     panel_state.display_buffer = dropped;
                     panel_state.display_buffer.shrink_to(0);
-                    panel_state.loaded_min_id = panel_state.display_buffer.first().map(|m| m.id).unwrap_or(0);
+                    panel_state.loaded_min_id = panel_state
+                        .display_buffer
+                        .first()
+                        .map(|m| m.id)
+                        .unwrap_or(0);
                 }
             }
         }
@@ -498,7 +523,11 @@ fn load_new_session(state: &mut AppState, panel_state: &mut ChatPanelState) -> O
                 let total = new_sess.messages.len();
                 let start = total.saturating_sub(window);
                 panel_state.display_buffer = new_sess.messages[start..].to_vec();
-                panel_state.loaded_min_id = panel_state.display_buffer.first().map(|m| m.id).unwrap_or(0);
+                panel_state.loaded_min_id = panel_state
+                    .display_buffer
+                    .first()
+                    .map(|m| m.id)
+                    .unwrap_or(0);
                 if !new_sess.provider_label.is_empty()
                     && state.providers.contains_key(&new_sess.provider_label)
                 {
@@ -546,11 +575,7 @@ fn handle_purge_on_missing(
     }
 }
 
-fn restore_scroll_offset(
-    ui: &egui::Ui,
-    state: &AppState,
-    panel_state: &mut ChatPanelState,
-) {
+fn restore_scroll_offset(ui: &egui::Ui, state: &AppState, panel_state: &mut ChatPanelState) {
     if let Some(sa_id) = panel_state.scroll_area_id {
         if let Some(ref prev) = panel_state.prev_session_id {
             let sid = ui.ctx().data_mut(|d| {
@@ -730,7 +755,14 @@ fn empty_state(ui: &mut egui::Ui) {
 
 // -- Message bubbles -----------------------------------------------------------
 
-fn show_bubble(ui: &mut egui::Ui, msg: &ChatMessage, idx: usize, panel_w: f32, suppress_ts: bool, sid: &str) {
+fn show_bubble(
+    ui: &mut egui::Ui,
+    msg: &ChatMessage,
+    idx: usize,
+    panel_w: f32,
+    suppress_ts: bool,
+    sid: &str,
+) {
     // Skip hidden tool results.
     if msg.role == Role::Tool
         && msg
@@ -893,7 +925,10 @@ fn show_bubble(ui: &mut egui::Ui, msg: &ChatMessage, idx: usize, panel_w: f32, s
                                         .color(theme().accent)
                                         .strong(),
                                 )
-                                .id_salt(format!("reasoning_saved_{}_{}_{}", idx, msg.timestamp, sid))
+                                .id_salt(format!(
+                                    "reasoning_saved_{}_{}_{}",
+                                    idx, msg.timestamp, sid
+                                ))
                                 .default_open(false)
                                 .show(ui, |ui| {
                                     Frame::NONE
@@ -2222,7 +2257,10 @@ fn show_input_row(
                         let provider_key_popup = provider_key.clone();
                         let popup_id = egui::Popup::default_response_id(&effort_resp);
                         let available_efforts =
-                            autocode_core::state::reasoning_efforts_for_provider(&provider_kind, &model);
+                            autocode_core::state::reasoning_efforts_for_provider(
+                                &provider_kind,
+                                &model,
+                            );
                         egui::Popup::menu(&effort_resp).show(|ui| {
                             ui.set_min_width(80.0);
                             ui.spacing_mut().button_padding = Vec2::new(8.0, 4.0);
@@ -2238,7 +2276,9 @@ fn show_input_row(
                                     };
                                     let selected = effort == *label;
                                     if ui.selectable_label(selected, &display).clicked() {
-                                        if let Some(p) = state.providers.get_mut(&provider_key_popup) {
+                                        if let Some(p) =
+                                            state.providers.get_mut(&provider_key_popup)
+                                        {
                                             p.reasoning_effort = label.clone();
                                         }
                                         egui::Popup::close_id(ui.ctx(), popup_id);

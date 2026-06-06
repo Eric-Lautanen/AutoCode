@@ -399,10 +399,7 @@ fn search_file_for_pattern(
         None
     };
 
-    let file_name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
     for (i, line) in content.lines().enumerate() {
         if results.len() >= max_results {

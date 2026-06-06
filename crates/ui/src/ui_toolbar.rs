@@ -6,13 +6,13 @@ use egui::{Align, Frame, Layout, Margin, RichText, Sense, Stroke, StrokeKind, Ve
 
 use std::collections::HashMap;
 
+use crate::helpers;
 use autocode_ai::{chat::ChatRuntime, session};
 use autocode_core::{
     helpers as core_helpers,
     state::{AppState, Project},
     theme::Palette,
 };
-use crate::helpers;
 
 pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<String, ChatRuntime>) {
     Frame::NONE
@@ -70,8 +70,13 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                         .iter()
                         .filter(|s| {
                             s.project_id.as_ref() == Some(pid)
-                                && state.projects.iter().find(|p| &p.id == pid)
-                                    .map(|proj| autocode_core::session_storage::session_exists(proj, s))
+                                && state
+                                    .projects
+                                    .iter()
+                                    .find(|p| &p.id == pid)
+                                    .map(|proj| {
+                                        autocode_core::session_storage::session_exists(proj, s)
+                                    })
                                     .unwrap_or(true)
                         })
                         .map(|s| (s.id.clone(), s.label.clone()))
@@ -90,10 +95,14 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                             .show_ui(ui, |ui| {
                                 for (sid, slabel) in &sessions_here {
                                     ui.push_id(("sess_sel", sid), |ui| {
-                                        let selected = state.active_session_id.as_deref() == Some(sid);
-                                        if ui.selectable_label(selected, slabel).clicked() && !selected
+                                        let selected =
+                                            state.active_session_id.as_deref() == Some(sid);
+                                        if ui.selectable_label(selected, slabel).clicked()
+                                            && !selected
                                         {
-                                            if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == *sid) {
+                                            if let Some(sess) =
+                                                state.sessions.iter_mut().find(|s| s.id == *sid)
+                                            {
                                                 sess.closed = false;
                                             }
                                             state.active_session_id = Some(sid.clone());

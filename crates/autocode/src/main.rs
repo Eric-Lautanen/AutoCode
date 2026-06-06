@@ -25,8 +25,10 @@ fn main() -> eframe::Result {
             .with_inner_size(Vec2::new(1400.0, 900.0))
             .with_min_inner_size(Vec2::new(900.0, 600.0))
             .with_icon(
-                eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/linux/icon-256.png"))
-                    .unwrap_or_default(),
+                eframe::icon_data::from_png_bytes(include_bytes!(
+                    "../../../assets/linux/icon-256.png"
+                ))
+                .unwrap_or_default(),
             ),
         renderer: if autocode_core::sysinfo::has_opengl() {
             eframe::Renderer::Glow

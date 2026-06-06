@@ -119,7 +119,8 @@ fn atomic_write_json<T: serde::Serialize>(path: &Path, value: &T) -> std::io::Re
 pub fn save_session(project: &Project, session: &Session) -> std::io::Result<()> {
     crate::debug_log!(
         "session_save: session={} msgs={} ids=[{}..{}] next_id={}",
-        session.id, session.messages.len(),
+        session.id,
+        session.messages.len(),
         session.messages.first().map(|m| m.id).unwrap_or(0),
         session.messages.last().map(|m| m.id).unwrap_or(0),
         session.next_message_id,
@@ -175,8 +176,12 @@ pub fn load_all_messages(project: &Project, session: &Session) -> Vec<ChatMessag
         Some(p) => p,
         None => return Vec::new(),
     };
-    let Ok(json) = fsutil::read_to_string(&path) else { return Vec::new(); };
-    let Ok(file) = serde_json::from_str::<SessionFile>(&json) else { return Vec::new(); };
+    let Ok(json) = fsutil::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let Ok(file) = serde_json::from_str::<SessionFile>(&json) else {
+        return Vec::new();
+    };
     file.messages
 }
 
@@ -212,13 +217,12 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
                 crate::debug_log!("session_storage: corrupt JSON for {}: {}", session.id, e);
             }
         },
-            Err(e) => {
-                crate::debug_log!("session_storage: read error for {}: {}", session.id, e);
-            }
+        Err(e) => {
+            crate::debug_log!("session_storage: read error for {}: {}", session.id, e);
         }
+    }
     true
 }
-
 
 pub fn delete_session_file(project: &Project, session: &Session) {
     let dir = project_sessions_dir(project);
@@ -259,8 +263,12 @@ pub fn load_messages_before(
         Some(p) => p,
         None => return Vec::new(),
     };
-    let Ok(json) = fsutil::read_to_string(&path) else { return Vec::new(); };
-    let Ok(file) = serde_json::from_str::<SessionFile>(&json) else { return Vec::new(); };
+    let Ok(json) = fsutil::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let Ok(file) = serde_json::from_str::<SessionFile>(&json) else {
+        return Vec::new();
+    };
     let end = file
         .messages
         .iter()
@@ -275,7 +283,9 @@ pub fn load_messages_before(
     crate::debug_log!(
         "load_before: session={} before_id={} disk_total={} \
          loaded={} ids=[{}..{}]",
-        session.id, before_id, file.messages.len(),
+        session.id,
+        before_id,
+        file.messages.len(),
         loaded.len(),
         loaded_ids.first().copied().unwrap_or(0),
         loaded_ids.last().copied().unwrap_or(0),
