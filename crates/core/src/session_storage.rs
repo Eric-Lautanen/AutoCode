@@ -88,15 +88,10 @@ pub fn switch_to_project(state: &mut AppState, project_id: &str) {
     state.active_project_id = Some(project_id.to_string());
 }
 
-/// On-disk session metadata (no messages). Backward-compatible with the old
-/// format that embedded messages in the JSON — if `messages` is non-empty
-/// after deserialization, a migration step writes them to a separate JSONL.
-#[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[derive(serde::Serialize, serde::Deserialize)]
 struct SessionMeta {
     pub id: String,
     pub label: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub messages: Vec<ChatMessage>,
     #[serde(default)]
     pub next_message_id: u64,
     #[serde(default)]
@@ -210,11 +205,9 @@ pub fn save_session(project: &Project, session: &Session) -> std::io::Result<()>
         let _ = fsutil::remove_file(&id_only_jsonl);
     }
 
-    // Write metadata JSON (messages field is always empty).
     let meta = SessionMeta {
         id: session.id.clone(),
         label: session.label.clone(),
-        messages: Vec::new(),
         next_message_id: session.next_message_id,
         provider_label: session.provider_label.clone(),
         model: session.model.clone(),
@@ -247,27 +240,8 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
     match fsutil::read_to_string(&path) {
         Ok(json) => match serde_json::from_str::<SessionMeta>(&json) {
             Ok(meta) => {
-                // Migrate old format: messages embedded in the JSON.
-                // Write JSONL first, then metadata (safe ordering — if crash
-                // occurs between writes the metadata still has messages and
-                // migration will retry on next load).
-                let messages = if !meta.messages.is_empty() {
-                    let msgs = meta.messages.clone();
-                    let new_meta = SessionMeta {
-                        messages: Vec::new(),
-                        ..meta.clone()
-                    };
-                    let msg_path = dir.join(session.messages_filename());
-                    let _ = atomic_write_jsonl(&msg_path, &msgs);
-                    let meta_path = dir.join(session.filename());
-                    let _ = atomic_write_json(&meta_path, &new_meta);
-                    msgs
-                } else {
-                    read_jsonl_messages_from_dir(&dir, session)
-                };
-
                 session.label = meta.label;
-                session.messages = messages;
+                session.messages = read_jsonl_messages_from_dir(&dir, session);
                 session.next_message_id = if meta.next_message_id > 0 {
                     meta.next_message_id
                 } else {
@@ -293,28 +267,12 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
     true
 }
 
-/// Load all messages from disk for a session, without modifying the session.
-/// Returns an empty vec if the file is missing.
 pub fn load_all_messages(project: &Project, session: &Session) -> Vec<ChatMessage> {
     let dir = project_sessions_dir(project);
-    let msg_path = match find_messages_file(&dir, session) {
-        Some(p) => p,
-        None => {
-            // Fallback: try old-format metadata JSON with embedded messages.
-            let meta_path = match find_session_file(&dir, session) {
-                Some(p) => p,
-                None => return Vec::new(),
-            };
-            let Ok(json) = fsutil::read_to_string(&meta_path) else {
-                return Vec::new();
-            };
-            let Ok(meta) = serde_json::from_str::<SessionMeta>(&json) else {
-                return Vec::new();
-            };
-            return meta.messages;
-        }
-    };
-    read_jsonl_messages(&msg_path)
+    match find_messages_file(&dir, session) {
+        Some(p) => read_jsonl_messages(&p),
+        None => Vec::new(),
+    }
 }
 
 fn read_jsonl_messages_from_dir(dir: &Path, session: &Session) -> Vec<ChatMessage> {
