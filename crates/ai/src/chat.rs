@@ -80,6 +80,8 @@ fn is_transient_error(msg: &str) -> bool {
         "ssl",                // TLS/SSL error
         "certificate",        // TLS certificate error
         "handshake",          // TLS handshake failure
+        "bad request",        // 400 — often a transient provider glitch
+        "unterminated string",// Provider-side JSON parse failure (transient)
     ];
     for pattern in &transient_patterns {
         if msg_lower.contains(pattern) {

@@ -85,7 +85,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                         let active_label = state
                             .active_session()
                             .map(|s| s.label.clone())
-                            .unwrap_or_else(|| "Session".into());
+                            .unwrap_or_else(|| "Select Session".into());
                         egui::ComboBox::from_id_salt("session_picker")
                             .selected_text(
                                 RichText::new(&active_label)
@@ -93,6 +93,14 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                                     .color(Palette::TEXT_MUTED),
                             )
                             .show_ui(ui, |ui| {
+                                let has_active = state.active_session_id.is_some();
+                                if ui
+                                    .selectable_label(!has_active, "Select Session")
+                                    .clicked()
+                                    && has_active
+                                {
+                                    state.active_session_id = None;
+                                }
                                 for (sid, slabel) in &sessions_here {
                                     ui.push_id(("sess_sel", sid), |ui| {
                                         let selected =
