@@ -264,421 +264,35 @@ pub enum ProviderEvent {
 pub(crate) fn tool_definitions() -> serde_json::Value {
     let grep_note = autocode_core::sysinfo::grep_note();
     let grep_desc = if grep_note.is_empty() {
-        "Fast code search. Returns matching file paths with line numbers. Supports regex, glob filtering. Respects .gitignore.".to_string()
+        "Search code. Returns file:line matches. Regex, glob filter, .gitignore respect.".to_string()
     } else {
-        format!(
-            "Fast code search. Returns matching file paths with line numbers. Supports regex, glob filtering. Respects .gitignore. [!] {}",
-            grep_note
-        )
+        format!("Search code. Returns file:line matches. Regex, glob filter, .gitignore respect. [!] {}", grep_note)
     };
 
     let shell_note = autocode_core::sysinfo::shell_tools_note();
     let shell_desc = format!(
-        "Run a shell command. Returns stdout, stderr, exit code. Use ONLY for: builds, tests, git, cargo/npm, listing directories, finding filenames. NEVER use for reading file contents, searching code, or generating diffs — use the dedicated read_file/read_files, grep, and patch_file tools instead (they handle encoding, line numbers, whitespace, and fuzzy matching correctly). {}",
+        "Run shell command. Use ONLY for: builds, tests, git, cargo/npm, listing dirs. NEVER for file I/O or code search. {}",
         shell_note
     );
 
     serde_json::json!([
-        {
-            "type": "function",
-            "function": {
-                "name": "run_shell",
-                "strict": true,
-                "description": shell_desc,
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "command": {
-                            "type": "string",
-                            "description": "Shell command. Windows: cmd /C. Unix: sh -c. e.g. 'cargo build'"
-                        },
-                        "cwd": {
-                            "type": "string",
-                            "description": "Working directory. Defaults to project root."
-                        },
-                        "timeout_secs": {
-                            "type": "integer",
-                            "description": "Timeout in seconds (default 120, max 600)."
-                        }
-                    },
-                    "required": ["command"],
-                    "additionalProperties": false
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "read_file",
-                "strict": true,
-                "description": "Read a file. Returns numbered lines with total line/byte counts. Use offset+limit for large files. For multiple files use read_files.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "File path (absolute or relative to project)."
-                        },
-                        "offset": {
-                            "type": "integer",
-                            "description": "1-based line to start from (default 1)."
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "description": "Max lines to return (default 2000)."
-                        }
-                    },
-                    "required": ["path"],
-                    "additionalProperties": false
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "read_files",
-                "strict": true,
-                "description": "Read multiple files at once. Always use this instead of repeated read_file calls. Returns content labelled by path.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "paths": {
-                            "type": "array",
-                            "items": { "type": "string" },
-                            "description": "File paths to read (max 10)."
-                        }
-                    },
-                    "required": ["paths"],
-                    "additionalProperties": false
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "read_entire_file",
-                "strict": true,
-                "description": "Read an ENTIRE file without truncation. Returns ALL lines with line numbers. Use SPARINGLY — only when patch_file keeps failing or you need the full picture for correctness (e.g. mismatched delimiters, odd encoding). Prefer read_file with offset/limit for normal use.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "File path (absolute or relative to project)."
-                        },
-                        "entire": {
-                            "type": "boolean",
-                            "description": "Must be set to true to use this tool."
-                        }
-                    },
-                    "required": ["path", "entire"],
-                    "additionalProperties": false
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "write_file",
-                "strict": true,
-                "description": "Write a file (overwrites). Creates parent directories. For small edits prefer patch_file.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "File path (absolute or relative)."
-                        },
-                        "content": {
-                            "type": "string",
-                            "description": "Complete file content."
-                        }
-                    },
-                    "required": ["path", "content"],
-                    "additionalProperties": false
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "list_dir",
-                "strict": true,
-                "description": "List a directory. Returns names (trailing / for dirs). Respects .gitignore.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Directory path. Defaults to project root."
-                        }
-                    },
-                    "required": ["path"],
-                    "additionalProperties": false
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "delete_file",
-                "strict": true,
-                "description": "Delete a file or empty directory. Irreversible.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Path to delete."
-                        }
-                    },
-                    "required": ["path"],
-                    "additionalProperties": false
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "rename_file",
-                "strict": true,
-                "description": "Move/rename a file or directory. Creates destination parent dirs.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "from": { "type": "string", "description": "Source path. Must exist." },
-                        "to": { "type": "string", "description": "Destination path." }
-                    },
-                    "required": ["from", "to"],
-                    "additionalProperties": false
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "create_dir",
-                "strict": true,
-                "description": "Create a directory (mkdir -p). No-op if exists.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": { "type": "string", "description": "Directory path to create." }
-                    },
-                    "required": ["path"],
-                    "additionalProperties": false
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "grep",
-                "strict": true,
-                "description": grep_desc,
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "pattern": {
-                            "type": "string",
-                            "description": "Search pattern (literal or regex). e.g. 'fn main', 'TODO'"
-                        },
-                        "path": {
-                            "type": "string",
-                            "description": "Directory or file to search. Defaults to project root."
-                        },
-                        "file_glob": {
-                            "type": "string",
-                            "description": "Glob filter e.g. '*.rs'. Defaults to all files."
-                        },
-                        "case_sensitive": {
-                            "type": "boolean",
-                            "description": "Case sensitive? Default true."
-                        },
-                        "max_results": {
-                            "type": "integer",
-                            "description": "Max matches (default 50, max 200)."
-                        }
-                    },
-                    "required": ["pattern"],
-                    "additionalProperties": false
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "patch_file",
-                "strict": true,
-                "description": "Surgical find-and-replace file edit. Handles whitespace/CRLF/tab differences and fuzzy-matches similar lines. Fails on ambiguous matches. Prefer over write_file for small edits.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": { "type": "string", "description": "File to patch." },
-                        "old_text": {
-                            "type": "string",
-                            "description": "Text to replace. Copy exact lines from read_file output (line numbers auto-stripped)."
-                        },
-                        "new_text": {
-                            "type": "string",
-                            "description": "Replacement text. Empty to delete."
-                        },
-                        "replace_all": {
-                            "type": "boolean",
-                            "description": "Replace all occurrences (default: first only)."
-                        }
-                    },
-                    "required": ["path", "old_text", "new_text"],
-                    "additionalProperties": false
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "web_search",
-                "strict": true,
-                "description": "Search the web. Returns plain-text result summaries with URLs. Use fetch_url to read full pages.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Search query. Be specific. e.g. 'rust reqwest async POST'"
-                        },
-                        "num_results": {
-                            "type": "integer",
-                            "description": "Results to return (1-10, default 5)."
-                        }
-                    },
-                    "required": ["query"],
-                    "additionalProperties": false
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "fetch_url",
-                "strict": true,
-                "description": "Fetch a URL's text content. HTML is auto-stripped. Use after web_search.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "url": {
-                            "type": "string",
-                            "description": "Full URL. e.g. 'https://docs.rs/tokio'"
-                        },
-                        "max_bytes": {
-                            "type": "integer",
-                            "description": "Max bytes to return (default 32768, max 131072)."
-                        }
-                    },
-                    "required": ["url"],
-                    "additionalProperties": false
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "todo_list",
-                "strict": true,
-                "description": "Create/update a visible task list. Use for multi-step tasks. Send complete list each call. Mark 'completed' immediately.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "title": { "type": "string", "description": "Short title (max 35 chars)." },
-                        "items": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "id": { "type": "string", "description": "Stable id e.g. '1','2'." },
-                                    "content": { "type": "string", "description": "Short step description." },
-                                    "status": {
-                                        "type": "string",
-                                        "enum": ["pending", "in_progress", "completed", "cancelled"],
-                                        "description": "Current status."
-                                    },
-                                    "priority": {
-                                        "type": "string",
-                                        "enum": ["high", "medium", "low"],
-                                        "description": "Priority (default 'medium')."
-                                    }
-                                },
-                                "required": ["id", "content", "status"],
-                                "additionalProperties": false
-                            },
-                            "description": "All items. Send complete list each call."
-                        }
-                    },
-                    "required": ["title", "items"],
-                    "additionalProperties": false
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "glob",
-                "strict": true,
-                "description": "Find files matching a glob pattern. Walks the project tree. Returns relative paths sorted alphabetically.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "pattern": {
-                            "type": "string",
-                            "description": "Glob pattern. Supports * (any chars except /), ** (any directory depth), ? (single char). e.g. '**/*.rs', 'src/**/*.rs', '*.toml'"
-                        },
-                        "path": {
-                            "type": "string",
-                            "description": "Directory to search in. Defaults to project root."
-                        }
-                    },
-                    "required": ["pattern"],
-                    "additionalProperties": false
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "handoff",
-                "strict": true,
-                "description": "Signal that the current session should end and a fresh session should start. Call this after saving RESUME.md and any other handoff files via write_file. The next session will begin by reading RESUME.md to continue the work.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "reason": {
-                            "type": "string",
-                            "description": "Why the handoff is needed (e.g. 'context nearly full', 'task milestone complete')."
-                        }
-                    },
-                    "required": ["reason"],
-                    "additionalProperties": false
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "name_session",
-                "strict": true,
-                "description": "Set a descriptive label for this session. Call this immediately at the start of every session so the conversation gets a meaningful filename and tab name.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "name": {
-                            "type": "string",
-                            "description": "Short descriptive name, e.g. 'fixing_chat_pruning'"
-                        }
-                    },
-                    "required": ["name"],
-                    "additionalProperties": false
-                }
-            }
-        },
+        {"type":"function","function":{"name":"run_shell","strict":true,"description":shell_desc,"parameters":{"type":"object","properties":{"command":{"type":"string","description":"Shell command."},"cwd":{"type":"string","description":"Working dir (default: project root)."},"timeout_secs":{"type":"integer","description":"Timeout secs (default 120, max 600)."}},"required":["command"],"additionalProperties":false}}},
+        {"type":"function","function":{"name":"read_file","strict":true,"description":"Read a file. Numbered lines, line/byte totals. Use offset+limit for large files. For multi-file use read_files.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"File path."},"offset":{"type":"integer","description":"Start line (1-based, default 1)."},"limit":{"type":"integer","description":"Max lines (default 2000)."}},"required":["path"],"additionalProperties":false}}},
+        {"type":"function","function":{"name":"read_files","strict":true,"description":"Read multiple files at once (max 10). Use instead of repeated read_file.","parameters":{"type":"object","properties":{"paths":{"type":"array","items":{"type":"string"},"description":"File paths (max 10)."}},"required":["paths"],"additionalProperties":false}}},
+        {"type":"function","function":{"name":"read_entire_file","strict":true,"description":"Read entire file without truncation. Use sparingly -- only when patch_file fails or you need absolute certainty about content.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"File path."},"entire":{"type":"boolean","description":"Must be true to use this tool."}},"required":["path","entire"],"additionalProperties":false}}},
+        {"type":"function","function":{"name":"write_file","strict":true,"description":"Write/overwrite a file. Creates parent dirs. For small edits prefer patch_file.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"File path."},"content":{"type":"string","description":"Full file content."}},"required":["path","content"],"additionalProperties":false}}},
+        {"type":"function","function":{"name":"list_dir","strict":true,"description":"List directory contents. Trailing / for dirs. Respects .gitignore.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"Dir path (default: project root)."}},"required":["path"],"additionalProperties":false}}},
+        {"type":"function","function":{"name":"delete_file","strict":true,"description":"Delete a file or empty directory. Irreversible.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"Path to delete."}},"required":["path"],"additionalProperties":false}}},
+        {"type":"function","function":{"name":"rename_file","strict":true,"description":"Move/rename file or directory. Creates dest parent dirs.","parameters":{"type":"object","properties":{"from":{"type":"string","description":"Source path. Must exist."},"to":{"type":"string","description":"Destination path."}},"required":["from","to"],"additionalProperties":false}}},
+        {"type":"function","function":{"name":"create_dir","strict":true,"description":"Create directory tree (mkdir -p). No-op if exists.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"Directory to create."}},"required":["path"],"additionalProperties":false}}},
+        {"type":"function","function":{"name":"grep","strict":true,"description":grep_desc,"parameters":{"type":"object","properties":{"pattern":{"type":"string","description":"Search pattern (literal or regex)."},"path":{"type":"string","description":"Dir/file to search (default: project root)."},"file_glob":{"type":"string","description":"Glob filter e.g. '*.rs'."},"case_sensitive":{"type":"boolean","description":"Case sensitive? (default true)."},"max_results":{"type":"integer","description":"Max matches (default 50, max 200)."}},"required":["pattern"],"additionalProperties":false}}},
+        {"type":"function","function":{"name":"patch_file","strict":true,"description":"Surgical find-and-replace edit. Fuzzy-matches similar lines, handles CRLF/tab differences. Fails on ambiguous match.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"File to patch."},"old_text":{"type":"string","description":"Text to replace (copy exact lines from read_file, numbers auto-stripped)."},"new_text":{"type":"string","description":"Replacement text. Empty to delete."},"replace_all":{"type":"boolean","description":"Replace all occurrences (default: first only)."}},"required":["path","old_text","new_text"],"additionalProperties":false}}},
+        {"type":"function","function":{"name":"web_search","strict":true,"description":"Search the web. Returns summary text + URLs. Use fetch_url to read pages.","parameters":{"type":"object","properties":{"query":{"type":"string","description":"Search query. Be specific."},"num_results":{"type":"integer","description":"Results to return (1-10, default 5)."}},"required":["query"],"additionalProperties":false}}},
+        {"type":"function","function":{"name":"fetch_url","strict":true,"description":"Fetch URL text content. HTML auto-stripped.","parameters":{"type":"object","properties":{"url":{"type":"string","description":"Full URL."},"max_bytes":{"type":"integer","description":"Max bytes (default 32768, max 131072)."}},"required":["url"],"additionalProperties":false}}},
+        {"type":"function","function":{"name":"todo_list","strict":true,"description":"Track multi-step tasks. Send full list on every update.","parameters":{"type":"object","properties":{"title":{"type":"string","description":"Short title (max 35 chars)."},"items":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string","description":"Stable id e.g. '1'."},"content":{"type":"string","description":"Task description."},"status":{"type":"string","enum":["pending","in_progress","completed","cancelled"],"description":"Status."},"priority":{"type":"string","enum":["high","medium","low"],"description":"Priority (default medium)."}},"required":["id","content","status"],"additionalProperties":false},"description":"All items."}},"required":["title","items"],"additionalProperties":false}}},
+        {"type":"function","function":{"name":"glob","strict":true,"description":"Find files by glob pattern. Returns sorted relative paths.","parameters":{"type":"object","properties":{"pattern":{"type":"string","description":"Glob pattern (*, **, ?). e.g. '**/*.rs'."},"path":{"type":"string","description":"Search dir (default: project root)."}},"required":["pattern"],"additionalProperties":false}}},
+        {"type":"function","function":{"name":"handoff","strict":true,"description":"End this session, resume in a fresh one. Save RESUME.md first.","parameters":{"type":"object","properties":{"reason":{"type":"string","description":"Why handoff is needed (e.g. 'context nearing limit')."}},"required":["reason"],"additionalProperties":false}}},
+        {"type":"function","function":{"name":"name_session","strict":true,"description":"Set a descriptive label for this session. Call first in every session.","parameters":{"type":"object","properties":{"name":{"type":"string","description":"Short name e.g. 'fixing_build'."}},"required":["name"],"additionalProperties":false}}},
     ])
 }
 
@@ -809,7 +423,8 @@ fn run_request(
 #[derive(serde::Serialize)]
 struct ReqMsg<'a> {
     role: &'a str,
-    content: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -853,7 +468,7 @@ fn build_request_body(
         .iter()
         .map(|m| ReqMsg {
             role: &m.role,
-            content: &m.content,
+            content: if m.tool_calls.is_some() { None } else { Some(&m.content) },
             tool_call_id: m.tool_call_id.as_deref(),
             tool_calls: m.tool_calls.as_ref(),
             reasoning_content: m.reasoning_content.as_deref(),
@@ -922,12 +537,29 @@ fn parse_url(
 fn connect_tcp(host: &str, port: u16, timeout_secs: u64) -> std::io::Result<TcpStream> {
     use std::net::ToSocketAddrs;
     let timeout = std::time::Duration::from_secs(timeout_secs);
-    let addrs = (host, port).to_socket_addrs()?;
+    let start = std::time::Instant::now();
+    let addrs = match (host, port).to_socket_addrs() {
+        Ok(a) => a,
+        Err(e) => {
+            debug_log!("provider::connect_tcp DNS FAIL: {}:{} — {}", host, port, e);
+            return Err(e);
+        }
+    };
     let mut last_err = None;
     for addr in addrs {
         match TcpStream::connect_timeout(&addr, timeout) {
-            Ok(s) => return Ok(s),
+            Ok(s) => {
+                debug_log!(
+                    "provider::connect_tcp OK: {}:{} -> {} (took {:?})",
+                    host, port, addr, start.elapsed()
+                );
+                return Ok(s);
+            }
             Err(e) => {
+                debug_log!(
+                    "provider::connect_tcp RETRY: {}:{} -> {} failed: {}",
+                    host, port, addr, e
+                );
                 if e.kind() == std::io::ErrorKind::TimedOut {
                     return Err(e);
                 }
@@ -967,12 +599,23 @@ fn send_http(
     tx: Sender<ProviderEvent>,
     timeouts: &TimeoutConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let t0 = std::time::Instant::now();
+    debug_log!(
+        "provider::send_http: host={} port={} stream={} body_len={}",
+        conn.host,
+        conn.port,
+        stream,
+        body.len()
+    );
     let mut stream_conn = connect_tcp(conn.host, conn.port, timeouts.request)?;
+    debug_log!("provider::send_http tcp_connect took {:?}", t0.elapsed());
     apply_timeouts(&stream_conn, stream, timeouts)?;
 
     let request = build_http_request(conn.host, conn.path, api_key, body);
+    let t1 = std::time::Instant::now();
     stream_conn.write_all(request.as_bytes())?;
     stream_conn.flush()?;
+    debug_log!("provider::send_http write_all took {:?}", t1.elapsed());
 
     let mut reader = BufReader::with_capacity(8192, stream_conn);
     process_http_response(&mut reader, stream, model, tx)
@@ -987,14 +630,17 @@ fn send_https(
     tx: Sender<ProviderEvent>,
     timeouts: &TimeoutConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let t0 = std::time::Instant::now();
     debug_log!(
-        "provider::send_https: host={} port={} stream={}",
+        "provider::send_https: host={} port={} stream={} body_len={}",
         conn.host,
         conn.port,
-        is_stream
+        is_stream,
+        body.len()
     );
 
     let stream = connect_tcp(conn.host, conn.port, timeouts.request)?;
+    debug_log!("provider::send_https tcp_connect took {:?}", t0.elapsed());
     apply_timeouts(&stream, is_stream, timeouts)?;
 
     let config = tls_config();
@@ -1002,11 +648,15 @@ fn send_https(
         .map_err(|_| "invalid DNS name")?;
     let server_name = ServerName::DnsName(dns_name);
     let client = rustls::ClientConnection::new(config, server_name)?;
+    let t1 = std::time::Instant::now();
     let mut tls_stream = rustls::StreamOwned::new(client, stream);
+    debug_log!("provider::send_https tls_handshake took {:?}", t1.elapsed());
 
     let request = build_http_request(conn.host, conn.path, api_key, body);
+    let t2 = std::time::Instant::now();
     tls_stream.write_all(request.as_bytes())?;
     tls_stream.flush()?;
+    debug_log!("provider::send_https write_all took {:?}", t2.elapsed());
 
     let mut reader = BufReader::with_capacity(16384, tls_stream);
     process_http_response(&mut reader, is_stream, model, tx)
@@ -1040,6 +690,7 @@ fn process_http_response<R: BufRead>(
     let mut status_text = String::new();
     let mut retry_after_secs: Option<u64> = None;
     let mut is_chunked = false;
+    let mut header_count = 0u32;
 
     for line in reader.by_ref().lines().map_while(Result::ok) {
         if line.starts_with("HTTP/") {
@@ -1060,10 +711,16 @@ fn process_http_response<R: BufRead>(
         if lower.contains("transfer-encoding:") && lower.contains("chunked") {
             is_chunked = true;
         }
+        header_count += 1;
         if line.trim().is_empty() {
             break;
         }
     }
+
+    debug_log!(
+        "provider::process_http_response: {} {} chunked={} stream={} headers={}",
+        status_code, status_text, is_chunked, stream, header_count
+    );
 
     if status_code >= 400 {
         let mut raw_body = Vec::new();
@@ -1148,6 +805,7 @@ fn parse_sse_stream_from_reader<R: BufRead>(
     reader: R,
     tx: &Sender<ProviderEvent>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let sse_start = std::time::Instant::now();
     let mut lines = reader.lines();
     let mut tool_acc: std::collections::HashMap<usize, (String, String, String)> =
         std::collections::HashMap::new();
@@ -1160,6 +818,7 @@ fn parse_sse_stream_from_reader<R: BufRead>(
     let mut had_error = false;
     let mut raw_buf = String::new();
     let mut line_count = 0u32;
+    let mut last_log = std::time::Instant::now();
 
     for line in &mut lines {
         let line = match line {
@@ -1175,6 +834,13 @@ fn parse_sse_stream_from_reader<R: BufRead>(
                 &line[..line.len().min(120)]
             );
         }
+        if last_log.elapsed().as_secs() >= 30 {
+            debug_log!(
+                "provider::sse heartbeat: lines={} content={} reason={} elapsed={:?}",
+                line_count, content_count, reasoning_count, sse_start.elapsed()
+            );
+            last_log = std::time::Instant::now();
+        }
         if line.starts_with(':') {
             continue;
         }
@@ -1182,6 +848,12 @@ fn parse_sse_stream_from_reader<R: BufRead>(
             raw_buf.push_str(&line);
             raw_buf.push('\n');
             continue;
+        }
+        if !saw_data_line {
+            debug_log!(
+                "provider::sse FIRST_DATA at line={} elapsed={:?}",
+                line_count, sse_start.elapsed()
+            );
         }
         saw_data_line = true;
         let data = line["data: ".len()..].trim();
@@ -1312,6 +984,11 @@ fn parse_sse_stream_from_reader<R: BufRead>(
         }
     }
 
+    debug_log!(
+        "provider::sse loop done: lines={} content={} reason={} finish={} error={} elapsed={:?}",
+        line_count, content_count, reasoning_count, saw_finish, had_error, sse_start.elapsed()
+    );
+
     if !saw_data_line && !raw_buf.trim().is_empty() {
         let api_msg = serde_json::from_str::<serde_json::Value>(raw_buf.trim())
             .ok()
@@ -1362,13 +1039,7 @@ fn parse_sse_stream_from_reader<R: BufRead>(
 
 pub fn fetch_models(provider: &ApiProvider) -> Vec<String> {
     let url = format!("{}/models", provider.base_url.trim_end_matches('/'));
-
-    // Use native_get so we get cookie handling, chunked decoding, and
-    // header stripping for free.  Pass the API key via the Authorization
-    // header which is already built into the request by native_get... wait,
-    // native_get doesn't support custom headers.  We'll do it inline but
-    // with chunked decoding added.
-
+    debug_log!("provider::fetch_models: {}", url);
     let (host, path, port, use_tls) = match parse_url(&url) {
         Ok(p) => p,
         Err(_) => return Vec::new(),
@@ -1485,7 +1156,12 @@ pub fn native_post(
     timeout_secs: u64,
     extra_headers: &[(&str, &str)],
 ) -> Result<String, String> {
+    let t0 = std::time::Instant::now();
     let (host, path, port, use_tls) = parse_url(url).map_err(|e| e.to_string())?;
+    debug_log!(
+        "provider::native_post: {} body_len={} timeout={}",
+        url, body.len(), timeout_secs
+    );
     let stream = connect_tcp(&host, port, timeout_secs).map_err(|e| e.to_string())?;
     stream
         .set_read_timeout(Some(Duration::from_secs(timeout_secs)))
@@ -1576,9 +1252,17 @@ pub fn native_post(
         Ok(())
     })();
 
-    read_result?;
+    read_result.map_err(|e| {
+        debug_log!("provider::native_post FAIL after {:?}: {}", t0.elapsed(), e);
+        e
+    })?;
 
     let body_bytes = http_response_body(&buffer);
+    debug_log!(
+        "provider::native_post OK after {:?}: body_bytes={}",
+        t0.elapsed(),
+        body_bytes.len()
+    );
     Ok(String::from_utf8_lossy(&body_bytes).to_string())
 }
 
@@ -1586,6 +1270,9 @@ pub fn native_post(
 /// Supports:
 /// - OpenAI: `POST /v1/responses/input_tokens` (Responses API format)
 /// - Anthropic: `POST /v1/messages/count_tokens` (Messages API format)
+/// - OpenRouter: `POST /api/v1/tokenize` (OpenAI-compatible format)
+/// - NVIDIA NIM: `POST /v1/tokenize` (OpenAI-compatible format)
+/// - Generic OpenAI-compatible: `POST /v1/tokenize` (OpenAI-compatible format)
 ///
 /// `request_json` is the pre-serialized `{"messages": [...], "tools": [...]}` body
 /// from the pre-flight check. The body is transformed as needed for each provider.
@@ -1595,52 +1282,77 @@ pub fn count_input_tokens(
     model: &str,
     timeout_secs: u64,
 ) -> Result<usize, String> {
+    let t0 = std::time::Instant::now();
     let url = provider
         .counting_endpoint_url()
         .ok_or_else(|| "no counting API for this provider".to_string())?;
+    debug_log!(
+        "provider::count_input_tokens: url={} model={} json_len={} timeout={}",
+        url, model, request_json.len(), timeout_secs
+    );
 
     // Parse and transform the body for the provider's counting endpoint
     let mut base: serde_json::Value =
         serde_json::from_str(request_json).map_err(|e| format!("json parse: {}", e))?;
     base["model"] = serde_json::json!(model);
 
-    let body_str: String;
-    let extra_headers: Vec<(&str, &str)>;
+    let body_str = serde_json::to_string(&base).map_err(|e| format!("json stringify: {}", e))?;
 
-    if url.contains("anthropic.com") {
-        // Anthropic: same format, just use as-is with model added
-        // Add required headers
-        extra_headers = vec![
-            ("x-api-key", provider.api_key.as_str()),
-            ("anthropic-version", "2023-06-01"),
-        ];
-        body_str = serde_json::to_string(&base).map_err(|e| format!("json stringify: {}", e))?;
-    } else {
-        // OpenAI Responses API: rename "messages" → "input"
-        if let Some(messages) = base.as_object_mut().and_then(|o| o.remove("messages")) {
-            base["input"] = messages;
+    let mut extra_headers: Vec<(String, String)> = Vec::new();
+    if let Some(prov) = autocode_core::state::provider_manifest(&provider.kind) {
+        if prov.auth_type.as_deref() == Some("x-api-key") {
+            extra_headers.push(("x-api-key".into(), provider.api_key.as_str().to_string()));
         }
-        extra_headers = vec![]; // Will use default Bearer auth
-        body_str = serde_json::to_string(&base).map_err(|e| format!("json stringify: {}", e))?;
+        if let Some(ver) = &prov.anthropic_version {
+            extra_headers.push(("anthropic-version".into(), ver.clone()));
+        }
     }
+    let extra_refs: Vec<(&str, &str)> = extra_headers
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
 
-    let response = native_post(&url, provider.api_key.as_str(), &body_str, timeout_secs, &extra_headers)?;
+    let response = native_post(&url, provider.api_key.as_str(), &body_str, timeout_secs, &extra_refs)?;
+
+    debug_log!(
+        "provider::count_input_tokens response after {:?}: len={}",
+        t0.elapsed(),
+        response.len()
+    );
 
     let v: serde_json::Value =
         serde_json::from_str(&response).map_err(|e| format!("json parse response: {}", e))?;
 
+    // Try different response field names used by different providers.
+    // total_tokens is last because it typically includes completion tokens (overestimate).
     v["input_tokens"]
         .as_u64()
-        .map(|n| n as usize)
-        .ok_or_else(|| format!("no input_tokens in response: {}", response.trim()))
+        .or_else(|| v["token_count"].as_u64())
+        .or_else(|| v["count"].as_u64())
+        .or_else(|| v["usage"]["prompt_tokens"].as_u64())
+        .or_else(|| v["total_tokens"].as_u64())
+        .or_else(|| v["usage"]["total_tokens"].as_u64())
+        .map(|n| {
+            debug_log!("provider::count_input_tokens result: {} (took {:?})", n, t0.elapsed());
+            n as usize
+        })
+        .ok_or_else(|| {
+            debug_log!("provider::count_input_tokens no count field in response after {:?}", t0.elapsed());
+            format!("no token count in response: {}", response.trim())
+        })
 }
 
 /// Perform a native HTTP GET request, returning the response body with
 /// HTTP headers stripped. Supports both HTTP and HTTPS. Does not follow
 /// redirects. The max_bytes limit applies to the body only (headers excluded).
 pub fn native_get(url: &str, timeout_secs: u64, max_bytes: usize) -> Result<Vec<u8>, String> {
+    let t0 = std::time::Instant::now();
     let (host, path, port, use_tls) = parse_url(url).map_err(|e| e.to_string())?;
     let addr = format!("{}:{}", host, port);
+    debug_log!(
+        "provider::native_get: {} timeout={} max_bytes={}",
+        url, timeout_secs, max_bytes
+    );
     let stream = TcpStream::connect(&addr).map_err(|e| format!("connect: {}", e))?;
     stream
         .set_read_timeout(Some(Duration::from_secs(timeout_secs)))
@@ -1750,6 +1462,10 @@ pub fn native_get(url: &str, timeout_secs: u64, max_bytes: usize) -> Result<Vec<
 
     // Cap body to max_bytes
     let end = body.len().min(max_bytes);
+    debug_log!(
+        "provider::native_get OK after {:?}: body_len={} capped={}",
+        t0.elapsed(), body.len(), end
+    );
     Ok(body[..end].to_vec())
 }
 

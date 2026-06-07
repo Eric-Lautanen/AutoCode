@@ -315,6 +315,8 @@ pub struct ChatRuntime {
     pub next_completion_allowed: Option<std::time::Instant>,
     /// Guard to prevent re-entrant handoff handling.
     pub handoff_in_progress: bool,
+    /// Orphaned tool-call retry counter to prevent infinite loops.
+    pub orphaned_retry_count: u8,
 }
 
 impl Default for ChatRuntime {
@@ -348,6 +350,7 @@ impl Default for ChatRuntime {
             retry_after: None,
             next_completion_allowed: None,
             handoff_in_progress: false,
+            orphaned_retry_count: 0,
         }
     }
 }
@@ -374,6 +377,7 @@ impl ChatRuntime {
         self.request_start = None;
         self.last_delta_time = None;
         self.live_shell_rx = None;
+        self.orphaned_retry_count = 0;
         if let Some(pid) = self.live_shell_pid.take() {
             kill_process(pid);
         }
@@ -434,8 +438,8 @@ fn context_usage_info_for_session(state: &AppState, session_id: &str) -> (usize,
         .map(|s| {
             if s.actual_tokens_used > 0 {
                 s.actual_tokens_used
-            } else if s.estimated_full_tokens > 0 {
-                s.estimated_full_tokens
+            } else if s.estimated_messages_tokens > 0 {
+                s.estimated_messages_tokens
             } else {
                 s.token_count()
             }
@@ -513,6 +517,7 @@ pub fn send_message(
     runtime.partial_response_backup.clear();
     runtime.stream_drop_retries = 0;
     runtime.continuation_chain = 0;
+    runtime.orphaned_retry_count = 0;
     runtime.retry_after = None;
     runtime.active_session_id = Some(sid);
     start_completion(state, runtime);
@@ -531,6 +536,10 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
         if let Some(allowed) = runtime.next_completion_allowed {
             let now = std::time::Instant::now();
             if now < allowed {
+                let sleep_ms = (allowed - now).as_millis();
+                if sleep_ms > 50 {
+                    debug_log!("chat: rate-limit sleep {}ms (blocking UI thread)", sleep_ms);
+                }
                 std::thread::sleep(allowed - now);
             }
         }
@@ -565,7 +574,7 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
                     state.active_provider.clone()
                 };
                 state.providers.get(&label).and_then(|p| {
-                    if !p.api_key.is_empty() {
+                    if p.enabled && !p.api_key.is_empty() {
                         Some((label, p.clone()))
                     } else {
                         None
@@ -577,7 +586,7 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
             None => {
                 let label = state.active_provider.clone();
                 match state.providers.get(&label) {
-                    Some(p) if !p.api_key.is_empty() => (label, p.clone()),
+                    Some(p) if p.enabled && !p.api_key.is_empty() => (label, p.clone()),
                     Some(_) => {
                         runtime.status = "API key not set.".into();
                         push_runtime(
@@ -656,7 +665,7 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
 
     // Pre-flight context check: estimate if this request fits within the
     // model's context window before sending. Prevents opaque API errors.
-    {
+    let estimated = {
         let tools_json = tool_definitions();
         let msgs: Vec<serde_json::Value> = messages.iter().map(|m| {
             let mut obj = serde_json::json!({
@@ -681,9 +690,10 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
         let json_str = serde_json::to_string(&body).unwrap_or_default();
         // Phase 4: try API-based counting, then offline tokenizer, then heuristic
         let estimated = 'block: {
-            // Tier 1: API-based counting (most accurate)
+            // Tier 1: API-based counting (most accurate) with short timeout.
+            // Long timeouts block the main thread since this runs synchronously.
             if provider.has_counting_api() {
-                match count_input_tokens(&provider, &json_str, &provider.model, state.request_timeout_secs) {
+                match count_input_tokens(&provider, &json_str, &provider.model, 5) {
                     Ok(count) => {
                         debug_log!("chat: pre-flight API count={}", count);
                         break 'block count;
@@ -693,13 +703,37 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
                     }
                 }
             }
-            // Tier 2: Offline tokenizer via tiktoken
+            // Tier 2: Offline tokenizer via tiktoken (with fallback encodings)
             if let Some(count) = autocode_core::tokenizer::offline_token_count(&provider.model, &json_str) {
                 debug_log!("chat: pre-flight offline count={}", count);
                 break 'block count;
             }
-            // Tier 3: Heuristic fallback
-            let count = core_helpers::estimate_tokens(&json_str);
+            // Tier 3: Improved heuristic fallback (JSON-optimized) on the
+            // already-serialized body. Avoids redundant re-serialization from ApiMessages.
+            let count = core_helpers::estimate_full_request_tokens(
+                &messages.iter().map(|m| {
+                    autocode_core::state::ChatMessage {
+                        id: 0,
+                        role: match m.role.as_str() {
+                            "system" => autocode_core::state::Role::System,
+                            "user" => autocode_core::state::Role::User,
+                            "assistant" => autocode_core::state::Role::Assistant,
+                            "tool" => autocode_core::state::Role::Tool,
+                            _ => autocode_core::state::Role::User,
+                        },
+                        content: m.content.clone(),
+                        timestamp: 0,
+                        token_count: 0,
+                        tool_call_id: m.tool_call_id.clone(),
+                        tool_calls: m.tool_calls.clone(),
+                        tool_meta: None,
+                        reasoning_content: m.reasoning_content.clone(),
+                        full_content: None,
+                    }
+                }).collect::<Vec<_>>(),
+                Some(&tools_json),
+                Some(&provider.model),
+            );
             debug_log!("chat: pre-flight heuristic count={}", count);
             count
         };
@@ -732,7 +766,8 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
                 return;
             }
         }
-    }
+        estimated
+    };
 
     let req = CompletionRequest {
         messages,
@@ -761,6 +796,12 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
     }
     runtime.request_start = Some(std::time::Instant::now());
     runtime.last_delta_time = None;
+    debug_log!(
+        "chat::start_completion: model={} estimated={} msg_count={} max_tokens={} req_timeout={} stream_idle={} retry_count={} stream_drops={}",
+        provider.model, estimated, req.messages.len(), max_tokens,
+        state.request_timeout_secs, state.stream_idle_timeout_secs,
+        runtime.retry_count, runtime.stream_drop_retries
+    );
     let event_rx = ProviderClient::complete(provider, req);
     runtime.stream_rx = Some(event_rx);
     runtime.net_status.reset();
@@ -797,6 +838,10 @@ fn update_runtime(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
             && runtime.tool_rx.is_none()
             && runtime.live_shell_rx.is_none()
         {
+            debug_log!(
+                "chat: retry timer fired (retry_count={}) — starting completion",
+                runtime.retry_count
+            );
             runtime.retry_after = None;
             start_completion(state, runtime);
         }
@@ -928,7 +973,12 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => break,
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                debug_log!("chat: stream Disconnected (no Done/Error)");
+                debug_log!(
+                    "chat: stream Disconnected (no Done/Error) — events_this_frame={} bytes={} elapsed={:?}",
+                    events_this_frame,
+                    runtime.net_status.bytes,
+                    runtime.request_start.map(|t| t.elapsed()).unwrap_or_default()
+                );
                 disconnected = true;
                 done = true;
                 break;
@@ -946,6 +996,15 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 .saturating_mul(backoff_multiplier)
                 .min(300);
             if last.elapsed().as_secs() >= effective_timeout {
+                debug_log!(
+                    "chat: STALL DETECTED: idle={}s effective_timeout={}s last_delta={:?} bytes={} retry_count={} stream_drops={}",
+                    last.elapsed().as_secs(),
+                    effective_timeout,
+                    runtime.last_delta_time,
+                    runtime.net_status.bytes,
+                    runtime.retry_count,
+                    runtime.stream_drop_retries
+                );
                 runtime.provider_error = Some(format!(
                     "Stream stalled -- no data for {}s",
                     effective_timeout
@@ -960,6 +1019,14 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
             // while the connection is still waiting for the first byte.
             let timeout = state.request_timeout_secs;
             if start.elapsed().as_secs() >= timeout {
+                debug_log!(
+                    "chat: INITIAL TIMEOUT: elapsed={:?} timeout={}s bytes={} retry_count={} stream_drops={}",
+                    start.elapsed(),
+                    timeout,
+                    runtime.net_status.bytes,
+                    runtime.retry_count,
+                    runtime.stream_drop_retries
+                );
                 runtime.provider_error = Some(format!(
                     "No response received after {}s -- timed out",
                     timeout
@@ -1011,6 +1078,11 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 || err_msg.contains("timed out");
             let has_partial = !runtime.pending_response.is_empty();
 
+            debug_log!(
+                "chat: provider_error='{}' is_stream_drop={} has_partial={} pending_bytes={}",
+                err_msg, is_stream_drop, has_partial, runtime.net_status.bytes
+            );
+
             if is_stream_drop && has_partial {
                 // Save partial response for continuation on retry.
                 // Append to any existing backup in case of multiple drops.
@@ -1048,8 +1120,33 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 || err_msg.contains("tool_calls")
                     && err_msg.contains("must be followed by tool messages");
             if orphaned {
+                runtime.orphaned_retry_count =
+                    runtime.orphaned_retry_count.saturating_add(1);
+                if runtime.orphaned_retry_count > 3 {
+                    debug_log!(
+                        "chat: orphaned retry limit exceeded ({}), giving up",
+                        runtime.orphaned_retry_count
+                    );
+                    runtime.orphaned_retry_count = 0;
+                    runtime.status = format!("Provider error: {}", shorten_err(&err_msg));
+                    push_runtime(
+                        state,
+                        runtime,
+                        ChatMessage::new(
+                            Role::Error,
+                            format!(
+                                "Orphaned tool calls persist after {} retries — giving up.\n\nError: {}",
+                                runtime.orphaned_retry_count - 1,
+                                err_msg,
+                            ),
+                        ),
+                    );
+                    return true;
+                }
+                let mut removed = false;
                 debug_log!(
-                    "chat: orphaned tool_calls detected, stripping and retrying: {}",
+                    "chat: orphaned tool_calls detected (attempt {}), stripping and retrying: {}",
+                    runtime.orphaned_retry_count,
                     err_msg
                 );
                 runtime.retry_count = 0;
@@ -1058,7 +1155,9 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 if let Some(sid) = runtime.active_session_id.as_deref()
                     && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
                 {
-                    for i in (0..sess.messages.len()).rev() {
+                    let mut i = sess.messages.len();
+                    while i > 0 {
+                        i -= 1;
                         if sess.messages[i].role == Role::Assistant
                             && sess.messages[i].tool_calls.is_some()
                         {
@@ -1066,10 +1165,26 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                                 sess.messages[i + 1..].iter().any(|m| m.role == Role::Tool);
                             if !has_results {
                                 sess.messages.remove(i);
+                                removed = true;
                             }
-                            break;
                         }
                     }
+                }
+                if !removed {
+                    debug_log!(
+                        "chat: orphaned stripping found nothing to remove — giving up"
+                    );
+                    runtime.orphaned_retry_count = 0;
+                    runtime.status = format!("Provider error: {}", shorten_err(&err_msg));
+                    push_runtime(
+                        state,
+                        runtime,
+                        ChatMessage::new(
+                            Role::Error,
+                            format!("Provider error: {}", err_msg),
+                        ),
+                    );
+                    return true;
                 }
                 start_completion(state, runtime);
             } else if is_transient_error(&err_msg) {
@@ -1083,6 +1198,10 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     shorten_err(&err_msg),
                     runtime.retry_count,
                     backoff_secs,
+                );
+                debug_log!(
+                    "chat: transient error, retry {} in {}s: {}",
+                    runtime.retry_count, backoff_secs, err_msg
                 );
                 push_runtime(
                     state,
@@ -1919,7 +2038,28 @@ fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     let Some(sid) = runtime.active_session_id.as_ref() else {
         return;
     };
-    let (used, max, _pct) = context_usage_info_for_session(state, sid);
+    // Use full estimate (messages + tool definitions) for auto-handoff since
+    // that's what's actually sent to the API and consumes the context window.
+    let (used, max, _pct) = state
+        .sessions
+        .iter()
+        .find(|s| s.id == *sid)
+        .map(|s| {
+            let max = state
+                .providers
+                .get(if !s.provider_label.is_empty() { &s.provider_label } else { &state.active_provider })
+                .map(|p| p.max_context_tokens as usize)
+                .unwrap_or(128_000);
+            let used = if s.actual_tokens_used > 0 {
+                s.actual_tokens_used
+            } else if s.estimated_full_tokens > 0 {
+                s.estimated_full_tokens
+            } else {
+                s.token_count()
+            };
+            (used, max, (used * 100).checked_div(max).unwrap_or(0).min(100))
+        })
+        .unwrap_or((0, 0, 0));
     if max == 0 {
         return;
     }
@@ -2096,6 +2236,17 @@ fn build_tool_meta(tc: &ToolCall, result: &str, duration_ms: u64) -> ToolMeta {
             let path = args["path"].as_str().unwrap_or("").to_string();
             let old_text = helpers::strip_line_numbers(args["old_text"].as_str().unwrap_or(""));
             let new_text = helpers::strip_line_numbers(args["new_text"].as_str().unwrap_or(""));
+            // Parse "line N" from result: "Patched ... via ... (N -> M bytes, line 42)"
+            let edit_line = if !is_error {
+                result
+                    .rsplit_once(", line ")
+                    .and_then(|(_, rest)| {
+                        let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                        num.parse::<usize>().ok()
+                    })
+            } else {
+                None
+            };
             ToolMeta {
                 tool_name: "patch_file".into(),
                 file_path: Some(path),
@@ -2103,6 +2254,7 @@ fn build_tool_meta(tc: &ToolCall, result: &str, duration_ms: u64) -> ToolMeta {
                 new_text: Some(new_text),
                 is_error,
                 duration_ms: Some(duration_ms),
+                edit_line,
                 ..Default::default()
             }
         }
@@ -2640,14 +2792,19 @@ fn execute_tool_with_cache(
             };
 
             match helpers::fuzzy_find_replace(&content, &old_text, &new_text, replace_all) {
-                Some((patched, strategy)) => match fsutil::write(&path, &patched) {
-                    Ok(_) => format!(
-                        "Patched {} via {} ({} -> {} bytes)",
-                        path.display(),
-                        strategy,
-                        content.len(),
-                        patched.len()
-                    ),
+                Some((patched, strategy, start_line)) => match fsutil::write(&path, &patched) {
+                    Ok(_) => {
+                        // start_line is 0-based; convert to 1-based for display
+                        let line_num = start_line + 1;
+                        format!(
+                            "Patched {} via {} ({} -> {} bytes, line {})",
+                            path.display(),
+                            strategy,
+                            content.len(),
+                            patched.len(),
+                            line_num,
+                        )
+                    }
                     Err(e) => helpers::tool_error(
                         &format!("Error writing {}: {}", path.display(), e),
                         "Check that the path is writable",
