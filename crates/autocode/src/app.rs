@@ -279,23 +279,34 @@ impl eframe::App for AutocodeApp {
         };
         let needs_repaint = chat::update_all(&mut self.state, &mut self.runtimes);
         let any_busy = self.runtimes.values().any(|r| r.is_busy());
+        let visible = ctx.input(|i| i.viewport().visible()).unwrap_or(true);
 
         if waiting_sysinfo && !needs_repaint {
-            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+            ctx.request_repaint_after(if visible {
+                std::time::Duration::from_millis(50)
+            } else {
+                std::time::Duration::from_millis(2000)
+            });
             return;
         }
 
         if needs_repaint {
             self.repaint_scheduled = false;
-            let delay = if any_busy {
+            let delay = if !visible {
+                std::time::Duration::from_millis(2000)
+            } else if any_busy {
                 std::time::Duration::from_millis(16)
             } else {
-                std::time::Duration::from_millis(50)
+                std::time::Duration::from_millis(100)
             };
             ctx.request_repaint_after(delay);
         } else if any_busy && !self.repaint_scheduled {
             self.repaint_scheduled = true;
-            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+            ctx.request_repaint_after(if visible {
+                std::time::Duration::from_millis(100)
+            } else {
+                std::time::Duration::from_millis(2000)
+            });
         }
 
         // Poll folder picker result (can arrive while minimized).
