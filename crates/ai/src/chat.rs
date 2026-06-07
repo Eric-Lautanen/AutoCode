@@ -529,6 +529,8 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
         debug_log!("chat: start_completion skipped — stream already active");
         return;
     }
+    // Sync web rate limit from state so provider uses the latest value.
+    crate::provider::set_web_rate_limit_ms(state.web_rate_limit_ms);
     // Rate limit: enforce minimum delay between completion starts.
     // If we're called before the delay has elapsed, sleep the remainder
     // so rapid tool-call loops are naturally paced.
@@ -1127,7 +1129,6 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                         "chat: orphaned retry limit exceeded ({}), giving up",
                         runtime.orphaned_retry_count
                     );
-                    runtime.orphaned_retry_count = 0;
                     runtime.status = format!("Provider error: {}", shorten_err(&err_msg));
                     push_runtime(
                         state,
@@ -1141,6 +1142,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                             ),
                         ),
                     );
+                    runtime.orphaned_retry_count = 0;
                     return true;
                 }
                 let mut removed = false;

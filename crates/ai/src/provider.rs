@@ -5,6 +5,7 @@
 use autocode_core::debug_log;
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::{
     io::{BufRead, BufReader, Read, Write},
@@ -19,6 +20,78 @@ use std::{
 /// Global cookie jar: hostname → "NAME=VALUE" cookie string.
 /// Persisted across calls so DDG doesn't treat each request as a new session.
 static COOKIE_JAR: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+
+/// Rotating user-agent strings that mimic real browsers across OS and version.
+static UA_NEXT: AtomicUsize = AtomicUsize::new(0);
+
+const USER_AGENTS: &[&str] = &[
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+];
+
+/// Global web request rate limit in milliseconds (0 = disabled).
+static WEB_RATE_LIMIT_MS: AtomicU64 = AtomicU64::new(1500);
+
+/// Timestamp of the last web request (any web_search or fetch_url).
+static LAST_WEB_REQUEST: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+fn next_user_agent() -> &'static str {
+    let i = UA_NEXT.fetch_add(1, Ordering::Relaxed) % USER_AGENTS.len();
+    USER_AGENTS[i]
+}
+
+fn current_accept() -> &'static str {
+    let i = (UA_NEXT.load(Ordering::Relaxed) / USER_AGENTS.len()) % 3;
+    match i {
+        0 => "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        1 => "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        _ => "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    }
+}
+
+fn current_accept_language() -> &'static str {
+    let i = (UA_NEXT.load(Ordering::Relaxed) / USER_AGENTS.len()) % 3;
+    match i {
+        0 => "en-US,en;q=0.9",
+        1 => "en-US,en;q=0.9,fr;q=0.8",
+        _ => "en-GB,en;q=0.9,en-US;q=0.8",
+    }
+}
+
+/// Set the minimum delay (ms) enforced between web requests. 0 disables.
+pub fn set_web_rate_limit_ms(ms: u64) {
+    WEB_RATE_LIMIT_MS.store(ms, Ordering::Relaxed);
+}
+
+fn enforce_web_rate_limit() {
+    let rate_ms = WEB_RATE_LIMIT_MS.load(Ordering::Relaxed);
+    if rate_ms == 0 {
+        return;
+    }
+    let mut last = match LAST_WEB_REQUEST.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            LAST_WEB_REQUEST.clear_poison();
+            poisoned.into_inner()
+        }
+    };
+    let now = std::time::Instant::now();
+    if let Some(prev) = *last {
+        let elapsed = now.duration_since(prev);
+        let elapsed_ms = elapsed.as_millis() as u64;
+        if elapsed_ms < rate_ms {
+            let sleep = Duration::from_millis(rate_ms - elapsed_ms);
+            std::thread::sleep(sleep);
+        }
+    }
+    *last = Some(std::time::Instant::now());
+}
 
 /// Returns the Cookie header value for a given host, or None if no cookie is stored.
 fn cookie_header(host: &str) -> Option<String> {
@@ -1346,6 +1419,9 @@ pub fn count_input_tokens(
 /// HTTP headers stripped. Supports both HTTP and HTTPS. Does not follow
 /// redirects. The max_bytes limit applies to the body only (headers excluded).
 pub fn native_get(url: &str, timeout_secs: u64, max_bytes: usize) -> Result<Vec<u8>, String> {
+    // Rate limit: enforce minimum delay between web requests.
+    enforce_web_rate_limit();
+
     let t0 = std::time::Instant::now();
     let (host, path, port, use_tls) = parse_url(url).map_err(|e| e.to_string())?;
     let addr = format!("{}:{}", host, port);
@@ -1397,14 +1473,22 @@ pub fn native_get(url: &str, timeout_secs: u64, max_bytes: usize) -> Result<Vec<
 
     let cookie_line = cookie_header(&host);
     let cookie_str = cookie_line.as_deref().unwrap_or("");
+    let ua = next_user_agent();
+    let accept = current_accept();
+    let accept_lang = current_accept_language();
 
     let request = format!(
         "GET {path} HTTP/1.1\r\n\
          Host: {host}\r\n\
-         User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36\r\n\
-         Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n\
-         Accept-Language: en-US,en;q=0.9\r\n\
+         User-Agent: {ua}\r\n\
+         Accept: {accept}\r\n\
+         Accept-Language: {accept_lang}\r\n\
          Accept-Encoding: identity\r\n\
+         Upgrade-Insecure-Requests: 1\r\n\
+         Sec-Fetch-Dest: document\r\n\
+         Sec-Fetch-Mode: navigate\r\n\
+         Sec-Fetch-Site: none\r\n\
+         Sec-Fetch-User: ?1\r\n\
          {cookie_str}\
          Connection: close\r\n\
          \r\n"

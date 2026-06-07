@@ -158,6 +158,15 @@ impl AutocodeApp {
                 .find(|p| Some(&p.id) == sess.project_id.as_ref())
         {
             autocode_core::session_storage::load_session(proj, sess);
+            // Evict excess messages from RAM — full history is on disk.
+            // The UI will page in older messages on demand via load_messages_before.
+            let window = state.ui_display_window;
+            let total = sess.messages.len();
+            if total > window * 2 {
+                let keep = window;
+                let _ = sess.messages.split_off(total - keep);
+                sess.messages.shrink_to(0);
+            }
             state.todo_list = sess.todo_list.clone();
             state.show_todo = sess.show_todo;
             state.todo_user_dismissed = sess.todo_user_dismissed;

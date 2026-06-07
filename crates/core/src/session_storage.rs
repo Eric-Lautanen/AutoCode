@@ -2,6 +2,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::fsutil;
+use crate::helpers;
 use crate::state::{AppState, ChatMessage, Project, Role, Session};
 
 /// Find a session metadata file on disk by its ID prefix.
@@ -110,6 +111,8 @@ struct SessionMeta {
     show_explorer: bool,
     #[serde(default)]
     settings_open: bool,
+    #[serde(default)]
+    actual_tokens_used: usize,
 }
 
 fn atomic_write(path: &Path, contents: &str) -> std::io::Result<()> {
@@ -217,6 +220,7 @@ pub fn save_session(project: &Project, session: &Session) -> std::io::Result<()>
         handoff_enabled: session.handoff_enabled,
         show_explorer: session.show_explorer,
         settings_open: session.settings_open,
+        actual_tokens_used: session.actual_tokens_used,
     };
     let meta_path = dir.join(session.filename());
     atomic_write_json(&meta_path, &meta)?;
@@ -255,6 +259,24 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
                 session.handoff_enabled = meta.handoff_enabled;
                 session.show_explorer = meta.show_explorer;
                 session.settings_open = meta.settings_open;
+                session.actual_tokens_used = meta.actual_tokens_used;
+                // Recompute token estimates from loaded messages so the UI shows
+                // accurate context usage immediately after startup, rather than
+                // falling back to the less-accurate per-message token_count().
+                let filtered: Vec<ChatMessage> = session
+                    .messages
+                    .iter()
+                    .filter(|m| m.role != Role::Error)
+                    .cloned()
+                    .collect();
+                let model = if session.model.is_empty() {
+                    None
+                } else {
+                    Some(session.model.as_str())
+                };
+                session.estimated_messages_tokens =
+                    helpers::estimate_full_request_tokens(&filtered, None, model);
+                session.estimated_full_tokens = session.estimated_messages_tokens;
             }
             Err(e) => {
                 crate::debug_log!("session_storage: corrupt JSON for {}: {}", session.id, e);

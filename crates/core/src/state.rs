@@ -877,7 +877,6 @@ pub struct AppState {
     pub inspection_open: bool,
 
     /// Transient: when set, the next click samples a screen pixel into this design field.
-    /// Transient: when set, the next click samples a screen pixel into this design field.
     #[serde(skip)]
     pub sampling_target: Option<String>,
     /// Frame ID when sampling was activated — avoids self-click.
@@ -925,6 +924,11 @@ pub struct AppState {
     /// Paces rapid tool-call loops to reduce disk/RAM pressure.
     #[serde(default = "crate::helpers::default_disk_read_delay_ms")]
     pub disk_read_delay_ms: u64,
+
+    /// Minimum delay (ms) between web requests (web_search, fetch_url).
+    /// Prevents IP bans from aggressive requests.
+    #[serde(default = "crate::helpers::default_web_rate_limit_ms")]
+    pub web_rate_limit_ms: u64,
 }
 
 use std::collections::{HashMap, HashSet};
@@ -974,6 +978,7 @@ impl Default for AppState {
             max_retry_wait_secs: crate::helpers::default_max_retry_wait(),
             ui_display_window: crate::helpers::default_ui_display_window(),
             disk_read_delay_ms: crate::helpers::default_disk_read_delay_ms(),
+            web_rate_limit_ms: crate::helpers::default_web_rate_limit_ms(),
         }
     }
 }
@@ -1100,7 +1105,7 @@ RULES
 - Read relevant files before editing.
 - Ensure code compiles. Eliminate warnings, dead code, unused imports.
 - Use latest stable deps/tools. Check versions before adding new ones.
-- REQUIRED: Call `name_session` first with a short label (e.g. 'fixing_build').
+- REQUIRED: Call `name_session` with the work being done (e.g. 'fixing_helper_compile_error').
 - REQUIRED: Call `todo_list` at task start with numbered steps. Update status live, re-send ALL items. Result shows context usage (e.g. '45678/128000 tokens (35%)') for handoff timing.
 - When near context limit: save RESUME.md, call `handoff` with reason. Next session reads RESUME.md.
 - Use file tools (read_file, grep, patch_file, write_file) for code I/O. `run_shell` only for builds, tests, git, package managers.

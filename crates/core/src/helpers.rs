@@ -588,6 +588,9 @@ pub fn default_ui_display_window() -> usize {
 pub fn default_disk_read_delay_ms() -> u64 {
     300
 }
+pub fn default_web_rate_limit_ms() -> u64 {
+    1500
+}
 
 // -- Simple regex-like pattern matcher -----------------------------------------
 //

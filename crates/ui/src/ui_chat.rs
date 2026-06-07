@@ -166,7 +166,7 @@ impl Default for ChatPanelState {
         Self {
             input: String::new(),
             scroll_to_bottom: true,
-            needs_focus: true,
+            needs_focus: false,
             focus_attempts: 0,
             prev_session_id: None,
             scroll_offsets: std::collections::HashMap::new(),
@@ -516,6 +516,15 @@ fn load_new_session(state: &mut AppState, panel_state: &mut ChatPanelState) -> O
                 let found = autocode_core::session_storage::load_session(new_proj, new_sess);
                 if !found {
                     purge_on_missing = Some(new_id.clone());
+                }
+                // Evict excess messages from RAM now that they're loaded from disk.
+                // Full history remains on disk for on-demand loading.
+                let window = state.ui_display_window;
+                let total = new_sess.messages.len();
+                if total > window * 2 {
+                    let keep = window;
+                    let _ = new_sess.messages.split_off(total - keep);
+                    new_sess.messages.shrink_to(0);
                 }
             }
             if purge_on_missing.is_none() {
@@ -1457,6 +1466,7 @@ fn render_unified_diff(
                 });
 
                 // -- scrollable diff content --
+                ui.set_max_width(ui.available_width());
                 let mut job = egui::text::LayoutJob {
                     wrap: egui::text::TextWrapping {
                         max_rows: usize::MAX,
@@ -1538,6 +1548,7 @@ fn render_unified_diff(
                     .max_height(400.0)
                     .min_scrolled_height(0.0)
                     .show(ui, |ui| {
+                        ui.set_max_width(ui.available_width());
                         ui.set_min_width(ui.available_width());
                         ui.label(job);
                     });
@@ -1793,6 +1804,7 @@ fn show_live_shell_bubble(ui: &mut egui::Ui, text: &str, panel_w: f32) {
             .stroke(Stroke::new(1.0, theme().live_terminal_border))
             .inner_margin(Margin::same(10))
             .show(ui, |ui| {
+                ui.set_max_width(ui.available_width());
                 let mut job = egui::text::LayoutJob {
                     wrap: egui::text::TextWrapping {
                         max_rows: usize::MAX,
@@ -1817,6 +1829,7 @@ fn show_live_shell_bubble(ui: &mut egui::Ui, text: &str, panel_w: f32) {
                     .min_scrolled_height(0.0)
                     .stick_to_bottom(true)
                     .show(ui, |ui| {
+                        ui.set_max_width(ui.available_width());
                         ui.set_min_width(ui.available_width());
                         ui.label(job);
                     });
@@ -1854,6 +1867,7 @@ fn render_code_block_impl(ui: &mut egui::Ui, lang: &str, code: &str, _streaming:
                 bottom: 6,
             })
             .show(ui, |ui| {
+                ui.set_max_width(ui.available_width());
                 ui.horizontal(|ui| {
                     let lang_display = if lang.is_empty() { "code" } else { lang };
                     ui.label(
@@ -1877,6 +1891,7 @@ fn render_code_block_impl(ui: &mut egui::Ui, lang: &str, code: &str, _streaming:
                     .max_height(400.0)
                     .min_scrolled_height(0.0)
                     .show(ui, |ui| {
+                        ui.set_max_width(ui.available_width());
                         let inner_w = ui.available_width();
                         let mut code_job = egui::text::LayoutJob {
                             wrap: egui::text::TextWrapping {
@@ -2498,6 +2513,7 @@ fn render_shell_terminal(ui: &mut egui::Ui, code: &str, sid: &str) {
                 bottom: 6,
             })
             .show(ui, |ui| {
+                ui.set_max_width(ui.available_width());
                 ui.horizontal(|ui| {
                     ui.label(
                         RichText::new(format!("{} | {} lines", label, lines.len()))
@@ -2520,6 +2536,7 @@ fn render_shell_terminal(ui: &mut egui::Ui, code: &str, sid: &str) {
                     .max_height(400.0)
                     .min_scrolled_height(0.0)
                     .show(ui, |ui| {
+                        ui.set_max_width(ui.available_width());
                         let inner_w = ui.available_width();
                         let mut job = egui::text::LayoutJob {
                             wrap: egui::text::TextWrapping {

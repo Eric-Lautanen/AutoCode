@@ -840,6 +840,17 @@ fn show_session_settings(ui: &mut egui::Ui, state: &mut AppState) {
                         ui.label(RichText::new("ms").size(10.5).color(Palette::TEXT_MUTED));
                     });
                     ui.end_row();
+
+                    ui.label(helpers::field_label("Web Rate Limit"));
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut state.web_rate_limit_ms)
+                                .speed(50.0)
+                                .range(0..=10000),
+                        );
+                        ui.label(RichText::new("ms").size(10.5).color(Palette::TEXT_MUTED));
+                    });
+                    ui.end_row();
                 });
 
             ui.add_space(6.0);
