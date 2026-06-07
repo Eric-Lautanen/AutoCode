@@ -801,6 +801,11 @@ fn show_bubble(
                                     .color(theme().text_muted),
                             );
                         }
+                        let copy_src = msg
+                            .full_content
+                            .as_deref()
+                            .unwrap_or(&msg.content)
+                            .to_string();
                         if ui
                             .add(
                                 egui::Button::new(
@@ -812,7 +817,7 @@ fn show_bubble(
                             .on_hover_text("Copy message")
                             .clicked()
                         {
-                            ui.ctx().copy_text(msg.content.clone());
+                            ui.ctx().copy_text(copy_src);
                         }
                     });
                     Frame::NONE
@@ -870,6 +875,11 @@ fn show_bubble(
                                 .color(theme().text_muted),
                         );
                     }
+                    let copy_src = msg
+                        .full_content
+                        .as_deref()
+                        .unwrap_or(&msg.content)
+                        .to_string();
                     if ui
                         .add(
                             egui::Button::new(
@@ -881,7 +891,7 @@ fn show_bubble(
                         .on_hover_text("Copy message")
                         .clicked()
                     {
-                        ui.ctx().copy_text(msg.content.clone());
+                        ui.ctx().copy_text(copy_src);
                     }
                 });
 
@@ -1085,8 +1095,10 @@ fn render_structured_tool_result(
                 );
                 let old_text = meta.old_text.as_deref().unwrap_or("");
                 let new_text = meta.new_text.as_deref().unwrap_or("");
+                // edit_line is 1-based in ToolMeta; convert to 0-based offset
+                let line_offset = meta.edit_line.map(|l| l.saturating_sub(1)).unwrap_or(0);
                 ui.push_id(format!("patch_{}", msg.timestamp), |ui| {
-                    render_unified_diff(ui, old_text, new_text, sid);
+                    render_unified_diff(ui, old_text, new_text, sid, line_offset);
                 });
             }
         }
@@ -1304,7 +1316,16 @@ fn render_structured_tool_result(
 ///
 /// Uses an LCS-based diff algorithm to produce multiple separate hunks
 /// with surrounding context lines, separated by ` [...] ` when non-adjacent.
-fn render_unified_diff(ui: &mut egui::Ui, old: &str, new: &str, sid: &str) {
+///
+/// `line_offset` is a 0-based offset added to snippet line numbers to produce
+/// actual file line numbers. Pass 0 when the snippet is the full file.
+fn render_unified_diff(
+    ui: &mut egui::Ui,
+    old: &str,
+    new: &str,
+    sid: &str,
+    line_offset: usize,
+) {
     let old_lines: Vec<&str> = old.lines().collect();
     let new_lines: Vec<&str> = new.lines().collect();
 
@@ -1380,11 +1401,12 @@ fn render_unified_diff(ui: &mut egui::Ui, old: &str, new: &str, sid: &str) {
     let max_line_num = diff_lines
         .iter()
         .map(|dl| {
-            if dl.prefix == '-' {
+            let raw = if dl.prefix == '-' {
                 dl.old_lineno
             } else {
                 dl.new_lineno
-            }
+            };
+            if raw > 0 { raw + line_offset } else { 0 }
         })
         .max()
         .unwrap_or(0);
@@ -1446,11 +1468,12 @@ fn render_unified_diff(ui: &mut egui::Ui, old: &str, new: &str, sid: &str) {
                 };
 
                 for dl in &diff_lines {
-                    let line_num = if dl.prefix == '-' {
+                    let raw_num = if dl.prefix == '-' {
                         dl.old_lineno
                     } else {
                         dl.new_lineno
                     };
+                    let line_num = if raw_num > 0 { raw_num + line_offset } else { 0 };
                     let fg = match dl.prefix {
                         '-' => del_color,
                         '+' => add_color,
@@ -1849,31 +1872,30 @@ fn render_code_block_impl(ui: &mut egui::Ui, lang: &str, code: &str, _streaming:
                         }
                     });
                 });
-                let mut code_job = egui::text::LayoutJob {
-                    wrap: egui::text::TextWrapping {
-                        max_rows: usize::MAX,
-                        max_width: ui.available_width(),
-                        break_anywhere: true,
-                        overflow_character: Some('\u{23CE}'),
-                    },
-                    ..Default::default()
-                };
-                code_job.append(
-                    &display_text,
-                    0.0,
-                    TextFormat {
-                        font_id: FontId::monospace(12.0),
-                        color: theme().text_code,
-                        ..Default::default()
-                    },
-                );
-                let viewport_width = ui.available_width();
                 ScrollArea::vertical()
                     .id_salt(("code_scroll", _inst))
                     .max_height(400.0)
                     .min_scrolled_height(0.0)
                     .show(ui, |ui| {
-                        ui.set_width(viewport_width);
+                        let inner_w = ui.available_width();
+                        let mut code_job = egui::text::LayoutJob {
+                            wrap: egui::text::TextWrapping {
+                                max_rows: usize::MAX,
+                                max_width: inner_w,
+                                break_anywhere: true,
+                                overflow_character: Some('\u{23CE}'),
+                            },
+                            ..Default::default()
+                        };
+                        code_job.append(
+                            &display_text,
+                            0.0,
+                            TextFormat {
+                                font_id: FontId::monospace(12.0),
+                                color: theme().text_code,
+                                ..Default::default()
+                            },
+                        );
                         ui.label(code_job);
                     });
                 if truncated_count > 0 {
@@ -2493,31 +2515,30 @@ fn render_shell_terminal(ui: &mut egui::Ui, code: &str, sid: &str) {
                         }
                     });
                 });
-                let mut job = egui::text::LayoutJob {
-                    wrap: egui::text::TextWrapping {
-                        max_rows: usize::MAX,
-                        max_width: ui.available_width(),
-                        break_anywhere: true,
-                        overflow_character: Some('\u{23CE}'),
-                    },
-                    ..Default::default()
-                };
-                job.append(
-                    &display_text,
-                    0.0,
-                    TextFormat {
-                        font_id: FontId::monospace(12.0),
-                        color: theme().terminal_text,
-                        ..Default::default()
-                    },
-                );
-                let viewport_width = ui.available_width();
                 ScrollArea::vertical()
                     .id_salt(format!("terminal_scroll_{}", sid))
                     .max_height(400.0)
                     .min_scrolled_height(0.0)
                     .show(ui, |ui| {
-                        ui.set_width(viewport_width);
+                        let inner_w = ui.available_width();
+                        let mut job = egui::text::LayoutJob {
+                            wrap: egui::text::TextWrapping {
+                                max_rows: usize::MAX,
+                                max_width: inner_w,
+                                break_anywhere: true,
+                                overflow_character: Some('\u{23CE}'),
+                            },
+                            ..Default::default()
+                        };
+                        job.append(
+                            &display_text,
+                            0.0,
+                            TextFormat {
+                                font_id: FontId::monospace(12.0),
+                                color: theme().terminal_text,
+                                ..Default::default()
+                            },
+                        );
                         ui.label(job);
                     });
             });

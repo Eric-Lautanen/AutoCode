@@ -264,6 +264,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
 
     let mut to_remove: Vec<String> = Vec::new();
     let mut set_active_key: Option<(String, String)> = None;
+    let mut disable_switch_key: Option<String> = None;
 
     for key in keys {
         ui.push_id(("provider", &key), |ui| {
@@ -331,6 +332,9 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                 .clicked()
                             {
                                 p.enabled = !p.enabled;
+                                if !p.enabled && is_active {
+                                    disable_switch_key = Some(key.clone());
+                                }
                             }
                         });
                     });
@@ -599,6 +603,22 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
         if let Some(sess) = state.active_session_mut() {
             sess.provider_label = label;
             sess.model = model;
+        }
+    }
+    if let Some(disabled_key) = disable_switch_key {
+        let next = state.providers.iter()
+            .find(|(k, v)| *k != &disabled_key && v.enabled)
+            .map(|(k, _)| k.clone())
+            .or_else(|| state.providers.keys().find(|k| *k != &disabled_key).cloned());
+        if let Some(next_key) = next {
+            let model = state.providers.get(&next_key)
+                .map(|p| p.model.clone())
+                .unwrap_or_default();
+            state.active_provider = next_key.clone();
+            if let Some(sess) = state.active_session_mut() {
+                sess.provider_label = next_key;
+                sess.model = model;
+            }
         }
     }
 }
@@ -1325,14 +1345,21 @@ fn show_about(ui: &mut egui::Ui, state: &mut AppState) {
     );
     ui.add_space(14.0);
 
+    let providers_str = ["openrouter", "nvidia-nim", "openai-compatible", "opencode-go"]
+        .iter()
+        .filter_map(|id| {
+            autocode_core::state::provider_manifest(
+                &autocode_core::state::ProviderKind::new(id),
+            )
+            .map(|m| m.label.as_str())
+        })
+        .collect::<Vec<&str>>()
+        .join(" | ");
     let info = [
         ("Version", "0.1.0"),
         ("UI", "egui 0.34 / eframe 0.34"),
         ("Language", "Rust -- serde, egui only"),
-        (
-            "Providers",
-            "OpenRouter | NVIDIA NIM | OpenAI-compatible | OpenCode Go",
-        ),
+        ("Providers", providers_str.as_str()),
     ];
 
     Grid::new("about_grid")

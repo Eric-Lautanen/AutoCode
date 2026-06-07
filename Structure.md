@@ -1,44 +1,44 @@
 # AutoCode — Workspace structure
 
-**Mission — A lightweight, resource-efficient AI coding assistant.**
-- Minimize RAM usage — every allocation counts
-- Keep `app.ron` files as small as possible
-- Keep the codebase clean, organized, and maintainable
-- Provide the essential functionality without bloat
-- As few deps as possible.  std rust is best practice
+**Mission — A lightweight, egui-based AI coding assistant.**
+- Minimize RAM usage and binary size
+- Keep codebase clean, organized, maintainable
+- Essential features only, no bloat
+- Prefer `std`; minimize deps
 
-Cargo.toml (25 lines) — workspace root, 5 crate members, release LTO/strip/panic=unwind
+Cargo.toml (25) — workspace root, 5 crate members (autocode/core/ai/fs/ui), release LTO/strip, panic=unwind
 
-## crates/autocode/ — binary
-main.rs (39) — entry: debug init, rustls crypto install, eframe::run_native (1400x900, glow/wgpu)
-app.rs (427) — AutocodeApp (eframe::App): owns AppState + ChatRuntime map + panel states; logic/ui/save/on_exit
+## crates/autocode/ — binary entry
+main.rs (41) — debug init, rustls crypto install, eframe::run_native (1400x900)
+app.rs (439) — AutocodeApp (eframe::App): AppState + ChatRuntime map, panel wiring, frame update/save/exit
 helpers.rs (1) — reserved
 
-## crates/core/ — autocode-core
-state.rs (914) — AppState, Project, ApiProvider, Session, ChatMessage, SecretString, ShellTask, TodoList, DesignSettings, manifest system, DEFAULT_SYSTEM_PROMPT
-helpers.rs (920) — ID gen, token estimation, string utils, path resolution + traversal guard, tiny regex engine, serde defaults, budget display, `unique_data_dir_name`
-fsutil.rs (128) — exe_dir, extended_path (\\?\ prefix), read/write/metadata/read_dir/create_dir_all/remove_file|dir/rename/is_dir/display_path, write_cmd_script, TEMP_FILES tracking
-debug.rs (85) — file logging to %TEMP%\autocode_debug.log, debug_log! macro, panic_msg
-theme.rs (147) — dark Visuals+Style, Palette (20 colors), ROUND_SM/MD/LG, system emoji font
-extract.rs (298) — HTML scraping (scraper), DDG result extraction, GitHub content, search cache
-sysinfo.rs (677) — OS/CPU/GPU/RAM/tool detection; Windows Win32 FFI, Unix /proc/sysctl/lspci; `has_opengl`
-session_storage.rs (289) — exe-relative JSON session persistence: atomic write, prefix-based load/save/delete, orphan temp scavenge, load_messages_before
+## crates/core/ — state, utilities, tokenizer
+state.rs (988) — AppState, Project, ApiProvider, Session, ChatMessage (with reasoning_content, tool_calls), SecretString, TodoItem, DesignSettings, embedded provider/model manifest, `DEFAULT_SYSTEM_PROMPT`
+helpers.rs (1275) — ID gen, token estimation (heuristic + tiktoken with model-family fallbacks), path resolution + traversal guard, tiny regex engine, serde defaults, budget/usage display, `unique_data_dir_name`; 22 unit tests (regex + token estimation)
+fsutil.rs (128) — exe_dir, `\\?\` extended paths, read/write/metadata/read_dir/create_dir_all/remove_file|dir/rename/is_dir/display_path, write_cmd_script, TEMP_FILES tracking
+debug.rs (83) — file logging to `%TEMP%\autocode_debug.log`, `debug_log!` macro, panic_msg
+theme.rs (147) — dark Visuals+Style, Palette (20 colors), ROUND_SM/MD/LG
+extract.rs (298) — HTML scraping (scraper), DDG result + GitHub content extraction, search cache
+sysinfo.rs (677) — OS/CPU/GPU/RAM/tool detection; Win32 FFI; Unix /proc/sysctl/lspci; `has_opengl`
+session_storage.rs (350) — atomic JSON/JSONL session persistence, prefix-based load/save/delete, orphan temp scavenge, `load_messages_before`
+tokenizer/mod.rs (90) — Tokenizer trait; TiktokenTokenizer (o200k/cl100k/p50k/gpt2 fallbacks by model family); HeuristicTokenizer fallback; `offline_token_count`
 
-## crates/ai/ — autocode-ai
-chat.rs (2766) — orchestration: send_message, start_completion, stream/tool/shell polling, 16 tool handlers, auto_name_session, handoff
-provider.rs (1473) — raw TCP+rustls HTTP client: CompletionRequest, SSE parsing, ProviderEvent streaming, model fetch, native_get
-session.rs (122) — ensure_session (seed system prompt), prepare_request_messages (disk checkpoint + cache_control), delete_session
-helpers.rs (795) — fuzzy find-replace (6 strategies), similarity metrics, line-number stripping, tool error formatting, todo parsing, incomplete-task detection
+## crates/ai/ — AI provider client + chat orchestration
+chat.rs (3234) — orchestration: `send_message`, `start_completion`, SSE stream poll, error classification + exponential backoff retry, tool-call dispatch (17 tool handlers), pre-flight context check (API → tiktoken → heuristic), auto-continuation + auto-handoff, continuation-chain detection
+provider.rs (1311) — raw TCP+rustls HTTP client: CompletionRequest, SSE parsing, chunked transfer decoding, 17 tool definitions (token-efficient), request building, counting API (OpenAI/Anthropic/OpenRouter/NVIDIA/generic), `native_get`/`native_post`, cookie jar
+session.rs (148) — `ensure_session` (seed system prompt + sysinfo), `prepare_request_messages_for_session` (disk checkpoint, cache_control, full-history estimate), `delete_session`
+helpers.rs (795) — fuzzy find-replace (6 strategies: exact → CRLF → whitespace → tabs → fuzzy line → Myers DP alignment), Levenshtein/Jaro-Winkler/token-set similarity, line-number stripping, tool error formatting, todo parsing, incomplete-task detection
 
-## crates/fs/ — autocode-fs
-shell.rs (296) — async shell via channels (cmd on Windows, sh on Unix), extract_files/write_extracted_files
-explorer.rs (468) — FsEntry, gitignore-respecting list_dir/read_file/glob_files/grep_files, find_project_root
-helpers.rs (1) — reserved
+## crates/fs/ — filesystem tools
+shell.rs (168) — background shell execution via channels (cmd on Windows, sh on Unix), temp script cleanup
+explorer.rs (398) — FsEntry, gitignore-respecting list_dir/glob/grep, find_project_root
+helpers.rs (151) — `extract_files`/`write_extracted_files` (code-fence parsing with path-traversal protection), `glob_match` with `*`/`**`/`?` support
 
-## crates/ui/ — autocode-ui
-ui_chat.rs (2352) — chat panel: session tabs, message bubbles (markdown, code, diff, reasoning, streaming), display buffering, scroll locking, unified diff renderer
-ui_toolbar.rs (273) — project/session/provider pickers, token meter, network blink dot, action buttons
-ui_settings.rs (1441) — 7 tabs: Providers, Projects, Prompt, Session, Timeouts, Design (color picker + eyedropper), About
-ui_explorer.rs (586) — recursive tree, file preview (text+images), context menu, show_file_viewer
-helpers.rs (422) — format_time, tool result summary/body, inline formatting, screen pixel sampling
+## crates/ui/ — egui UI panels
+ui_chat.rs (2407) — chat panel: session tabs, message bubbles (markdown, code blocks, diffs, reasoning, streaming, live shell), collapsible tool-result cards with unified-diff view, scroll lock, lazy-load from disk
+ui_toolbar.rs (290) — project/session/provider pickers, context-budget meter bar, network blink-dot, action buttons
+ui_settings.rs (1490) — 7 tabs: Providers, Projects, Prompt, Session, Timeouts, Design (color picker + eyedropper), About
+ui_explorer.rs (580) — recursive tree, file preview (text+image), rename/delete context menu, show_file_viewer
+helpers.rs (422) — `format_time`, tool result summary/body extraction, markdown inline formatting, LayoutJob builder, screen pixel sampling
 ui_todo.rs (271) — floating task list, progress bar, priority dots, auto-close on completion

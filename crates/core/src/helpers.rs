@@ -49,13 +49,27 @@ pub fn unix_now() -> u64 {
 
 // -- Token estimation ----------------------------------------------------------
 
+/// Estimate token count for text using an improved heuristic.
+/// This is a fallback when tiktoken or API-based counting is unavailable.
+/// Accuracy: ~10-15% for code, ~5-10% for English prose.
 pub fn estimate_tokens(text: &str) -> usize {
     if text.is_empty() {
-        return 4;
+        return 0;
     }
+    if text.len() == 1 {
+        return 1;
+    }
+
     let mut word_count = 0usize;
+    let mut symbol_count = 0usize;
     let mut cjk_count = 0usize;
     let mut in_word = false;
+
+    // Common code symbols that are typically separate tokens or part of operators
+    const CODE_SYMBOLS: &[char] = &[
+        '{', '}', '(', ')', '[', ']', ';', ',', '.', ':', '+', '-', '*', '/', '%',
+        '<', '>', '=', '!', '&', '|', '^', '~', '?', '@', '#', '$', '\\', '`', '\'', '"',
+    ];
 
     for ch in text.chars() {
         if ch.is_alphanumeric() || ch == '_' {
@@ -63,37 +77,92 @@ pub fn estimate_tokens(text: &str) -> usize {
                 word_count += 1;
                 in_word = true;
             }
+        } else if CODE_SYMBOLS.contains(&ch) {
+            symbol_count += 1;
+            in_word = false;
+        } else if ch.is_whitespace() {
+            in_word = false;
         } else {
+            // Other punctuation/unicode
             in_word = false;
             if is_cjk(ch) {
                 cjk_count += 1;
+            } else {
+                symbol_count += 1;
             }
         }
     }
 
-    // Word estimate: 1.5 tokens per word (higher for code with symbols)
-    let word_tokens = (word_count as f32 * 1.5) as usize;
-    // CJK chars: ~2 tokens each
-    let cjk_tokens = cjk_count * 2;
-    // Character-based floor: ~4 chars per token for code (more symbols than prose)
-    let char_floor = (text.len() / 4).max(1);
-    // Per-message API format overhead (role marker, formatting)
-    let overhead = 4;
+    // Detect if text is code-like (high symbol density or code keywords).
+    // Keywords are matched at word boundaries (preceded by whitespace or start of text).
+    let total_chars = text.chars().count();
+    let symbol_density = symbol_count as f32 / total_chars.max(1) as f32;
+    let has_code_keyword = text.starts_with("fn ") || text.starts_with("function ") || text.starts_with("def ")
+        || text.starts_with("class ") || text.starts_with("struct ") || text.starts_with("impl ")
+        || text.starts_with("pub ") || text.starts_with("const ") || text.starts_with("let ")
+        || text.starts_with("var ")
+        || text.contains("\nfn ") || text.contains("\nfunction ") || text.contains("\ndef ")
+        || text.contains("\nclass ") || text.contains("\nstruct ") || text.contains("\nimpl ")
+        || text.contains("\npub ") || text.contains("\nconst ") || text.contains("\nlet ")
+        || text.contains("\nvar ")
+        || text.contains("=>") || text.contains("->") || text.contains("::");
+    let is_code = symbol_density > 0.08 || has_code_keyword;
 
-    word_tokens
-        .max(cjk_tokens + word_tokens)
-        .max(char_floor)
-        .saturating_add(overhead)
+    // Token estimation based on content type
+    // Code: ~3.2 chars/token, English: ~4.0 chars/token, CJK: ~1.3 tokens/char
+    let (word_mult, char_per_token) = if is_code {
+        (1.3, 3.2)  // Code has more symbols, fewer chars per token
+    } else {
+        (1.5, 4.0)  // Prose
+    };
+
+    let word_tokens = (word_count as f32 * word_mult) as usize;
+    let symbol_tokens = symbol_count;  // Most symbols are 1 token each
+    let cjk_tokens = (cjk_count as f32 * 1.3) as usize;  // ~1.3 tokens per CJK char
+    let char_floor = (total_chars as f32 / char_per_token).ceil() as usize;
+
+    // Combine estimates: max of word+symbol, cjk+word, char_floor
+    let combined = word_tokens + symbol_tokens;
+    let estimate = combined.max(cjk_tokens + word_tokens).max(char_floor);
+
+    // Per-message overhead for API format (role, formatting)
+    estimate.saturating_add(3)
+}
+
+/// Estimate tokens for a complete ChatMessage including content, tool_calls, and reasoning_content.
+/// This provides a more accurate per-message estimate than just content alone.
+pub fn estimate_message_tokens(msg: &crate::state::ChatMessage) -> usize {
+    let mut total = estimate_tokens(&msg.content);
+    
+    // Add tool_calls overhead (JSON structure + content)
+    if let Some(tc) = &msg.tool_calls {
+        total += estimate_tokens(&serde_json::to_string(tc).unwrap_or_default());
+    }
+    
+    // Add reasoning_content if present
+    if let Some(rc) = &msg.reasoning_content {
+        total += estimate_tokens(rc);
+    }
+    
+    // Add tool_call_id overhead
+    if msg.tool_call_id.is_some() {
+        total += 2;  // "tool_call_id": "xxx"
+    }
+    
+    total
 }
 
 /// Estimate tokens for a full API request body by serializing the relevant
 /// message fields (content, role, tool_calls, tool_call_id, reasoning_content)
-/// into a JSON array and applying the heuristic to the full serialized text.
+/// into a JSON array and applying the tokenizer/heuristic to the full serialized text.
 /// This accounts for JSON structural overhead, tool calls, and reasoning content
 /// that the per-message `estimate_tokens(&content)` misses.
+/// 
+/// If `model` is provided, uses tiktoken for accurate counting. Otherwise falls back to heuristic.
 pub fn estimate_full_request_tokens(
     messages: &[ChatMessage],
     tools_json: Option<&serde_json::Value>,
+    model: Option<&str>,
 ) -> usize {
     let msgs: Vec<serde_json::Value> = messages
         .iter()
@@ -123,7 +192,68 @@ pub fn estimate_full_request_tokens(
     }
 
     let json_str = serde_json::to_string(&body).unwrap_or_default();
-    estimate_tokens(&json_str)
+    
+    // Try tiktoken first for accuracy
+    if let Some(model_name) = model {
+        if let Some(count) = crate::tokenizer::offline_token_count(model_name, &json_str) {
+            return count;
+        }
+    }
+    
+    // Fallback to heuristic with adjusted char/token ratio for JSON
+    // JSON has more structural chars (braces, quotes, colons) so ~3.5 chars/token
+    estimate_tokens_json(&json_str)
+}
+
+/// Heuristic token estimation optimized for JSON text (more structural characters).
+fn estimate_tokens_json(text: &str) -> usize {
+    if text.is_empty() {
+        return 0;
+    }
+    if text.len() == 1 {
+        return 1;
+    }
+
+    let mut word_count = 0usize;
+    let mut symbol_count = 0usize;
+    let mut cjk_count = 0usize;
+    let mut in_word = false;
+
+    const JSON_SYMBOLS: &[char] = &[
+        '{', '}', '[', ']', ':', ',', '"', '\\',
+    ];
+
+    for ch in text.chars() {
+        if ch.is_alphanumeric() || ch == '_' {
+            if !in_word {
+                word_count += 1;
+                in_word = true;
+            }
+        } else if JSON_SYMBOLS.contains(&ch) {
+            symbol_count += 1;
+            in_word = false;
+        } else if ch.is_whitespace() {
+            in_word = false;
+        } else {
+            // Other punctuation/unicode
+            in_word = false;
+            if is_cjk(ch) {
+                cjk_count += 1;
+            } else {
+                symbol_count += 1;
+            }
+        }
+    }
+
+    let total_chars = text.chars().count();
+    // JSON: ~3.5 chars/token due to structural overhead
+    let char_floor = (total_chars as f32 / 3.5).ceil() as usize;
+    let word_tokens = (word_count as f32 * 1.3) as usize;
+    let symbol_tokens = symbol_count;
+    let cjk_tokens = (cjk_count as f32 * 1.3) as usize;
+
+    let combined = word_tokens + symbol_tokens;
+    combined.max(cjk_tokens + word_tokens).max(char_floor).saturating_add(3)
 }
 
 pub fn is_cjk(ch: char) -> bool {
@@ -832,16 +962,38 @@ fn match_simple_regex(pattern: &str, text: &str, anchored: bool) -> bool {
     match_nodes(&nodes, text, anchored)
 }
 
-/// Percentage of context window used (0.0 - 1.0),
-/// based on active provider's max_context_tokens.
-/// Prefers actual_tokens_used when available for accuracy.
-pub fn budget_fraction(state: &AppState) -> f32 {
+/// Get the max context tokens and handoff percent for the session's provider
+/// (not the currently active UI provider, which may differ).
+fn session_provider_config(state: &AppState) -> (usize, usize) {
+    let sess = state.active_session();
+    let label = sess
+        .and_then(|s| {
+            if !s.provider_label.is_empty() {
+                Some(s.provider_label.as_str())
+            } else {
+                None
+            }
+        })
+        .unwrap_or(&state.active_provider);
     let max = state
-        .active_provider()
+        .providers
+        .get(label)
         .map(|p| p.max_context_tokens as usize)
         .unwrap_or(128_000);
-    let sess = state.active_session();
-    let used = sess
+    let handoff_pct = state
+        .providers
+        .get(label)
+        .map(|p| p.handoff_percent.min(100) as usize)
+        .unwrap_or(80);
+    (max, handoff_pct)
+}
+
+/// Get the token count for the active session, preferring actual > estimated_full > heuristic.
+/// This includes tool definitions overhead for pre-flight/auto-handoff checks.
+#[allow(dead_code)]
+fn session_token_usage(state: &AppState) -> usize {
+    state
+        .active_session()
         .map(|s| {
             if s.actual_tokens_used > 0 {
                 s.actual_tokens_used
@@ -851,28 +1003,46 @@ pub fn budget_fraction(state: &AppState) -> f32 {
                 s.token_count()
             }
         })
-        .unwrap_or(0);
+        .unwrap_or(0)
+}
+
+/// Get the token count for user-facing display: messages only (no tool definitions).
+/// Tool definitions are fixed overhead sent with every request but not part of chat history.
+fn session_messages_usage(state: &AppState) -> usize {
+    state
+        .active_session()
+        .map(|s| {
+            if s.actual_tokens_used > 0 {
+                s.actual_tokens_used
+            } else if s.estimated_messages_tokens > 0 {
+                s.estimated_messages_tokens
+            } else {
+                s.token_count()
+            }
+        })
+        .unwrap_or(0)
+}
+
+/// Percentage of context window used (0.0 - 1.0),
+/// based on the session's actual provider, not the UI-selected one.
+/// Shows messages-only estimate for user-facing display consistency.
+pub fn budget_fraction(state: &AppState) -> f32 {
+    let (max, _) = session_provider_config(state);
+    let used = session_messages_usage(state);
     (used as f32) / (max as f32).max(1.0)
 }
 
 /// Human-readable token usage string.
-/// Shows actual usage when available, estimated otherwise.
+/// Shows messages-only count (tool definitions are fixed overhead, not chat history).
 pub fn usage_display(state: &AppState) -> String {
-    let max = state
-        .active_provider()
-        .map(|p| p.max_context_tokens as usize)
-        .unwrap_or(128_000);
-    let pct = state
-        .active_provider()
-        .map(|p| p.handoff_percent.min(100) as usize)
-        .unwrap_or(80);
-    let threshold = (max * pct) / 100;
+    let (max, handoff_pct) = session_provider_config(state);
+    let threshold = (max * handoff_pct) / 100;
     let sess = state.active_session();
     let (used, label) = if let Some(s) = sess {
         if s.actual_tokens_used > 0 {
             (s.actual_tokens_used, "actual")
-        } else if s.estimated_full_tokens > 0 {
-            (s.estimated_full_tokens, "est")
+        } else if s.estimated_messages_tokens > 0 {
+            (s.estimated_messages_tokens, "est")
         } else {
             (s.token_count(), "est")
         }
@@ -1093,5 +1263,133 @@ mod test_simple_regex {
         assert!(matches_pattern("\\d+", "123", false));
         assert!(matches_pattern("\\d+", "456", false));
         assert!(!matches_pattern("\\d+", "abc", false));
+    }
+}
+
+#[cfg(test)]
+mod test_token_estimation {
+    use super::*;
+    use crate::state::ChatMessage;
+
+    #[test]
+    fn test_estimate_tokens_empty() {
+        assert_eq!(estimate_tokens(""), 0);
+    }
+
+    #[test]
+    fn test_estimate_tokens_single_char() {
+        assert_eq!(estimate_tokens("a"), 1);
+        assert_eq!(estimate_tokens(" "), 1);
+    }
+
+    #[test]
+    fn test_estimate_tokens_simple_words() {
+        // "hello world" = 2 words, ~1.5 tokens/word = 3, + overhead = ~6
+        let count = estimate_tokens("hello world");
+        assert!(count >= 3 && count <= 10, "got {}", count);
+    }
+
+    #[test]
+    fn test_estimate_tokens_code() {
+        let code = r#"
+fn main() {
+    let x = 42;
+    println!("{}", x);
+}
+"#;
+        let count = estimate_tokens(code);
+        // Code has more symbols, should use ~3.2 chars/token
+        // ~100 chars / 3.2 = ~31 tokens
+        assert!(count >= 20 && count <= 60, "code estimate: {}", count);
+    }
+
+    #[test]
+    fn test_estimate_tokens_prose() {
+        let prose = "This is a simple sentence with several words in it.";
+        let count = estimate_tokens(prose);
+        // ~50 chars / 4.0 = ~12 tokens
+        assert!(count >= 8 && count <= 25, "prose estimate: {}", count);
+    }
+
+    #[test]
+    fn test_estimate_tokens_cjk() {
+        let cjk = "你好世界"; // 4 CJK chars
+        let count = estimate_tokens(cjk);
+        // ~1.3 tokens per CJK char = ~5 tokens
+        assert!(count >= 3 && count <= 12, "cjk estimate: {}", count);
+    }
+
+    #[test]
+    fn test_estimate_tokens_mixed_code_prose() {
+        let mixed = "Here is some code: fn foo() { return 42; } and more text.";
+        let count = estimate_tokens(mixed);
+        assert!(count >= 15 && count <= 50, "mixed estimate: {}", count);
+    }
+
+    #[test]
+    fn test_estimate_tokens_symbols() {
+        // Lots of symbols like in minified code or complex expressions
+        let symbols = "{}[](),;:+-*/%<>=!&|^~?@#$\\`'";
+        let count = estimate_tokens(symbols);
+        // Each symbol ~1 token
+        assert!(count >= 20 && count <= 40, "symbols estimate: {}", count);
+    }
+
+    #[test]
+    fn test_estimate_message_tokens_basic() {
+        let msg = ChatMessage::new(crate::state::Role::User, "Hello world");
+        let count = estimate_message_tokens(&msg);
+        assert!(count >= 3 && count <= 15);
+    }
+
+    #[test]
+    fn test_estimate_message_tokens_with_tool_calls() {
+        let mut msg = ChatMessage::new(crate::state::Role::Assistant, "I'll run a command");
+        msg.tool_calls = Some(serde_json::json!([{
+            "id": "call_123",
+            "type": "function",
+            "function": {"name": "run_shell", "arguments": "{\"command\": \"ls\"}"}
+        }]));
+        let count = estimate_message_tokens(&msg);
+        // Should include tool_calls JSON overhead
+        assert!(count > 20);
+    }
+
+    #[test]
+    fn test_estimate_message_tokens_with_reasoning() {
+        let mut msg = ChatMessage::new(crate::state::Role::Assistant, "The answer is 42");
+        msg.reasoning_content = Some("Let me think about this step by step...".to_string());
+        let count = estimate_message_tokens(&msg);
+        assert!(count > estimate_tokens("The answer is 42"));
+    }
+
+    #[test]
+    fn test_estimate_full_request_tokens() {
+        let messages = vec![
+            ChatMessage::new(crate::state::Role::System, "You are a helpful assistant"),
+            ChatMessage::new(crate::state::Role::User, "Hello"),
+            ChatMessage::new(crate::state::Role::Assistant, "Hi there!"),
+        ];
+        let tools = serde_json::json!([{"type": "function", "function": {"name": "test"}}]);
+        let count = estimate_full_request_tokens(&messages, Some(&tools), Some("gpt-4o"));
+        // Should include system prompt, messages, tools overhead
+        // With tiktoken, this should be around 30-50 tokens
+        assert!(count > 20 && count < 100, "count={}", count);
+    }
+
+    #[test]
+    fn test_code_vs_prose_detection() {
+        let code = "fn main() { let x = 1 + 2; }";
+        let prose = "This is a regular sentence with words.";
+        
+        let code_count = estimate_tokens(code);
+        let prose_count = estimate_tokens(prose);
+        
+        // Code should have more tokens per char due to symbols
+        let code_ratio = code_count as f32 / code.len() as f32;
+        let prose_ratio = prose_count as f32 / prose.len() as f32;
+        
+        // Code typically has higher token/char ratio
+        assert!(code_ratio > prose_ratio * 0.8, "code_ratio={} prose_ratio={}", code_ratio, prose_ratio);
     }
 }

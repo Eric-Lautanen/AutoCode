@@ -1,5 +1,6 @@
 // debug.rs -- File-based debug logging for diagnosing drops/stalls.
-// Writes to %TEMP%\autocode_debug.log (or /tmp/autocode_debug.log on Unix).
+// Writes to autocode_debug.log in the current directory.
+// Override with the AUTOCODE_DEBUG_LOG environment variable.
 // Rotates when the file exceeds ~1 MB.
 
 use std::io::Write;
@@ -7,7 +8,9 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn log_path() -> std::path::PathBuf {
-    std::env::temp_dir().join("autocode_debug.log")
+    std::env::var("AUTOCODE_DEBUG_LOG")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("autocode_debug.log"))
 }
 
 static LOG: std::sync::LazyLock<Mutex<std::fs::File>> = std::sync::LazyLock::new(|| {

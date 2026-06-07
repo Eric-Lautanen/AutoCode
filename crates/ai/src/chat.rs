@@ -1155,19 +1155,46 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 if let Some(sid) = runtime.active_session_id.as_deref()
                     && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
                 {
+                    // Walk backwards, removing any assistant tool_calls message
+                    // whose tool_calls count doesn't match the number of following
+                    // tool-result messages. This handles both "no results at all"
+                    // and "partial results" (fewer tool messages than tool calls).
+                    // We also remove the orphaned tool results so they don't
+                    // pollute the conversation on retry.
                     let mut i = sess.messages.len();
                     while i > 0 {
                         i -= 1;
-                        if sess.messages[i].role == Role::Assistant
-                            && sess.messages[i].tool_calls.is_some()
-                        {
-                            let has_results =
-                                sess.messages[i + 1..].iter().any(|m| m.role == Role::Tool);
-                            if !has_results {
-                                sess.messages.remove(i);
-                                removed = true;
-                            }
+                        let tool_calls_count = sess.messages[i]
+                            .tool_calls
+                            .as_ref()
+                            .and_then(|v| v.as_array())
+                            .map(|a| a.len())
+                            .unwrap_or(0);
+                        if tool_calls_count == 0 {
+                            continue;
                         }
+                        // Count consecutive tool messages that follow this assistant.
+                        let mut j = i + 1;
+                        while j < sess.messages.len()
+                            && sess.messages[j].role == Role::Tool
+                        {
+                            j += 1;
+                        }
+                        let tool_count = j - i - 1;
+                        if tool_count != tool_calls_count {
+                            // Remove the assistant message and all adjacent
+                            // tool results (they belong to this orphaned block).
+                            sess.messages.splice(i..j, std::iter::empty());
+                            removed = true;
+                        }
+                    }
+                    // Persist the cleaned state to disk so the next call to
+                    // prepare_request_messages_for_session doesn't re-introduce
+                    // the orphaned messages from stale disk state.
+                    if let Some(pid) = sess.project_id.as_ref()
+                        && let Some(proj) = state.projects.iter().find(|p| &p.id == pid)
+                    {
+                        let _ = autocode_core::session_storage::save_session(proj, sess);
                     }
                 }
                 if !removed {
@@ -1550,7 +1577,9 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                         std::thread::yield_now();
                     }
                     debug_log!("chat: tool-exec finished ok, {} results", results.len());
-                    let _ = tx.send(results);
+                    if tx.send(results).is_err() {
+                        debug_log!("chat: tool-exec results not delivered (receiver dropped)");
+                    }
                 });
             }
 

@@ -30,7 +30,7 @@ Built in **Rust** (edition 2024) with the **egui** immediate-mode GUI framework.
 ├── Cargo.toml                          # workspace root (5 crate members)
 ├── .cargo/config.toml                  # +crt-static for MSVC + musl targets
 ├── assets/
-│   ├── models.json                     # provider/model manifest
+│   ├── providers.json                  # provider/model manifest
 │   └── linux/icon-256.png
 ├── crates/
 │   ├── core/          — autocode-core
@@ -99,7 +99,7 @@ AutoCode automatically detects OpenGL availability at startup:
 
 AutoCode persists its state (API keys, provider settings, projects, prompts, sessions) via eframe's built-in persistence layer (`app.ron` in the executable's `AutoCode_data/` directory). On first launch, open the **Settings** window to configure:
 
-1. **Providers** — Add API keys and select models for OpenRouter, NVIDIA NIM, or custom OpenAI-compatible endpoints (per-model manifests are editable via `<exe>/models.json`)
+1. **Providers** — Add API keys and select models for OpenRouter, NVIDIA NIM, or custom OpenAI-compatible endpoints (per-model manifests are editable via `<exe>/providers.json`)
 2. **Projects** — Add project directories for the file explorer to scan (uses native folder picker via `rfd`)
 3. **Prompts** — Customize the system prompt and summarization/handoff prompt
 4. **Session** — Configure display window size, API tail size, scroll page length
@@ -112,7 +112,7 @@ AutoCode persists its state (API keys, provider settings, projects, prompts, ses
 ```
 <exe_dir>/
 ├── autocode.exe
-├── models.json              # Editable provider/model manifest (auto-copied from assets on first run)
+├── providers.json           # Editable provider/model manifest (auto-copied from assets on first run)
 └── AutoCode_data/
     ├── app.ron               # eframe persistence state
     └── projects/

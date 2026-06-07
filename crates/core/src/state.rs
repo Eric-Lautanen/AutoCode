@@ -15,11 +15,20 @@ struct Manifest {
 
 #[derive(Deserialize, Clone)]
 pub struct ProviderManifest {
+    pub label: String,
     pub base_url: String,
     pub supports_cache_control: bool,
     pub supports_parallel_tool_calls: bool,
     pub default_model: String,
     pub models: std::collections::HashMap<String, ModelManifest>,
+    #[serde(default)]
+    pub counting_endpoint: Option<String>,
+    #[serde(default)]
+    pub auth_type: Option<String>,
+    #[serde(default)]
+    pub anthropic_version: Option<String>,
+    #[serde(default)]
+    pub model_prefix_strip: Option<String>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -38,8 +47,8 @@ pub struct ModelManifest {
 fn manifest() -> &'static Manifest {
     static MANIFEST: OnceLock<Manifest> = OnceLock::new();
     MANIFEST.get_or_init(|| {
-        let json = include_str!("../../../assets/models.json");
-        serde_json::from_str(json).expect("Failed to parse models.json")
+        let json = include_str!("../../../assets/providers.json");
+        serde_json::from_str(json).expect("Failed to parse providers.json")
     })
 }
 
@@ -49,11 +58,11 @@ pub fn provider_manifest(kind: &ProviderKind) -> Option<&'static ProviderManifes
 
 pub fn model_manifest(kind: &ProviderKind, model: &str) -> Option<&'static ModelManifest> {
     let prov = manifest().providers.get(kind.manifest_id())?;
-    let clean = if matches!(kind, ProviderKind::OpenCodeGo) {
-        model.trim_start_matches("opencode-go/")
-    } else {
-        model
-    };
+    let clean = prov
+        .model_prefix_strip
+        .as_deref()
+        .and_then(|prefix| model.strip_prefix(prefix))
+        .unwrap_or(model);
     prov.models.get(model).or_else(|| prov.models.get(clean))
 }
 
@@ -67,7 +76,7 @@ pub fn safe_model_defaults() -> ModelManifest {
         context_window: 128_000,
         max_output_tokens: 16384,
         max_output_tokens_thinking: None,
-        thinking_api: "openai".into(),
+        thinking_api: String::new(),
         reasoning_efforts: vec!["high".into()],
         supports_cache_control: false,
     }
@@ -197,13 +206,15 @@ impl ProviderKind {
         }
     }
 
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::OpenRouter => "OpenRouter",
-            Self::NvidiaNim => "NVIDIA NIM",
-            Self::OpenAiCompatible => "OpenAI-Compatible",
-            Self::OpenCodeGo => "OpenCode Go",
-        }
+    pub fn label(&self) -> String {
+        provider_manifest(self)
+            .map(|m| m.label.clone())
+            .unwrap_or_else(|| match self {
+                Self::OpenRouter => "OpenRouter".into(),
+                Self::NvidiaNim => "NVIDIA NIM".into(),
+                Self::OpenAiCompatible => "OpenAI-Compatible".into(),
+                Self::OpenCodeGo => "OpenCode Go".into(),
+            })
     }
 
     pub fn supports_cache_control(&self) -> bool {
@@ -285,13 +296,12 @@ pub struct ApiProvider {
 
 impl ApiProvider {
     pub fn new(kind: ProviderKind) -> Self {
-        let manifest = provider_manifest(&kind);
-        let base_url = manifest
+        let base_url = provider_manifest(&kind)
             .map(|m| m.base_url.clone())
-            .unwrap_or_else(|| "https://api.openai.com/v1".to_string());
-        let default_model = manifest
+            .unwrap_or_default();
+        let default_model = provider_manifest(&kind)
             .map(|m| m.default_model.clone())
-            .unwrap_or_else(|| "gpt-4o".to_string());
+            .unwrap_or_default();
         let defs = model_or_safe(&kind, &default_model);
         let thinking_api = parse_thinking_api(&defs.thinking_api);
         let default_effort = defs
@@ -319,22 +329,15 @@ impl ApiProvider {
         }
     }
 
-    /// Returns the API-based token counting endpoint URL if the provider
-    /// supports one. Currently detected by hostname in `base_url`:
-    /// - `api.openai.com` → `POST /v1/responses/input_tokens`
-    /// - `api.anthropic.com` → `POST /v1/messages/count_tokens`
-    /// - Otherwise → `None` (no counting API, use offline fallback)
+    /// Returns the API-based token counting endpoint URL from the provider manifest,
+    /// or None if the provider has no known working counting endpoint.
     pub fn counting_endpoint_url(&self) -> Option<String> {
-        let base = self.base_url.trim_end_matches('/');
-        if base.contains("api.openai.com") {
-            // OpenAI: strip /v1 from base then append Responses API path
-            let root = base.strip_suffix("/v1").unwrap_or(base);
-            Some(format!("{}/responses/input_tokens", root))
-        } else if base.contains("api.anthropic.com") {
-            Some(format!("{}/messages/count_tokens", base))
-        } else {
-            None
-        }
+        let prov = provider_manifest(&self.kind);
+        prov.and_then(|m| m.counting_endpoint.as_deref())
+            .map(|template| {
+                let base = self.base_url.trim_end_matches('/');
+                template.replace("{base_url}", base)
+            })
     }
 
     /// Whether this provider has a supported API-based token counting endpoint.
@@ -394,6 +397,8 @@ pub struct ToolMeta {
     pub byte_count: Option<usize>,
     pub is_error: bool,
     pub duration_ms: Option<u64>,
+    /// 1-based line number where the edit starts in the original file.
+    pub edit_line: Option<usize>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -401,6 +406,8 @@ pub struct ChatMessage {
     #[serde(default)]
     pub id: u64,
     pub role: Role,
+    /// Display content (may be truncated for UI rendering).
+    /// Use `full_content` for the complete original text.
     pub content: String,
     #[serde(default)]
     pub timestamp: u64,
@@ -423,11 +430,16 @@ pub struct ChatMessage {
     /// section and passed back on subsequent API requests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
+    /// Full original message text, preserved for copy operations.
+    /// Never truncated — use `content` for display, this for clipboard.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub full_content: Option<String>,
 }
 
 impl ChatMessage {
     pub fn new(role: Role, content: impl Into<String>) -> Self {
-        let mut content: String = content.into();
+        let original: String = content.into();
+        let mut content = original.clone();
         // Tool and system output is usually ASCII-safe; skip expensive filter.
         if !matches!(role, Role::Tool | Role::System) {
             content.retain(|c| {
@@ -446,6 +458,7 @@ impl ChatMessage {
             tool_calls: None,
             tool_meta: None,
             reasoning_content: None,
+            full_content: Some(original),
         }
     }
 }
@@ -490,8 +503,14 @@ pub struct Session {
     /// Populated by prepare_request_messages_for_session(). More accurate than
     /// token_count() (which only covers in-RAM messages) but less accurate than
     /// actual_tokens_used (which is the provider's official count).
+    /// Includes tool definitions which are NOT part of the stored chat history.
     #[serde(default)]
     pub estimated_full_tokens: usize,
+    /// Estimated token count for disk-backed messages only (no tool definitions).
+    /// This is the user-visible count since tool definitions are not stored
+    /// in the chat history and are the same for every request.
+    #[serde(default)]
+    pub estimated_messages_tokens: usize,
 }
 
 impl Session {
@@ -514,19 +533,19 @@ impl Session {
             settings_open: false,
             closed: false,
             estimated_full_tokens: 0,
+            estimated_messages_tokens: 0,
         }
     }
 
     /// Sum of per-message estimated token counts for in-RAM messages only.
-    /// This is a lower-bound heuristic that omits tool definition tokens
-    /// and JSON serialization overhead. Use `actual_tokens_used` for the
-    /// authoritative count reported by the API.
+    /// Includes content, tool_calls, and reasoning_content. Use `actual_tokens_used` 
+    /// for the authoritative count reported by the API.
     pub fn token_count(&self) -> usize {
-        self.messages.iter().map(|m| m.token_count).sum()
+        self.messages.iter().map(|m| crate::helpers::estimate_message_tokens(m)).sum()
     }
 
     pub fn record_actual_usage(&mut self, prompt: usize, _completion: usize) {
-        self.actual_tokens_used += prompt;
+        self.actual_tokens_used = prompt;
     }
 
     fn safe_label(&self) -> String {
@@ -1081,14 +1100,14 @@ RULES
 - Read relevant files before editing.
 - Ensure code compiles. Eliminate warnings, dead code, unused imports.
 - Use latest stable deps/tools. Check versions before adding new ones.
-- ***REQUIRED*** Call `name_session` immediately with a short label (e.g. 'fixing_build'). Must be first action.
-- ***REQUIRED*** Call `todo_list` at task start. Break into numbered steps. Keep updated — mark complete, re-send ALL items on each change. Result includes context usage (e.g. `45678/128000 tokens (35%)`) — use for handoff timing.
-- When context is full, at milestone, or won't finish current task: save RESUME.md via write_file, then call `handoff` with reason. Next session reads RESUME.md and continues.
-- Use dedicated file tools (read_file/read_files, grep, patch_file, write_file). `run_shell` only for builds, tests, git, package managers. Never for reading files, searching code, or generating diffs.
-- ***REQUIRED*** After each file edit: `git add -A && git commit` with meaningful message (feat:/fix:/perf:/chore:). Push every few commits.
-- After each task, state briefly what was done and what remains.
+- REQUIRED: Call `name_session` first with a short label (e.g. 'fixing_build').
+- REQUIRED: Call `todo_list` at task start with numbered steps. Update status live, re-send ALL items. Result shows context usage (e.g. '45678/128000 tokens (35%)') for handoff timing.
+- When near context limit: save RESUME.md, call `handoff` with reason. Next session reads RESUME.md.
+- Use file tools (read_file, grep, patch_file, write_file) for code I/O. `run_shell` only for builds, tests, git, package managers.
+- REQUIRED: After each file edit: `git add -A && git commit` with message (feat:/fix:/perf:/chore:). Push periodically.
+- After each task, briefly state what was done and what remains.
 ";
 
 pub const DEFAULT_HANDOFF_PROMPT: &str = "\
-Read RESUME.md in the project root if it exists — it contains the previous session's progress, task list, and recent work. \
-If RESUME.md does not exist, review the git log and any open files to determine what was being worked on, then continue.";
+Read RESUME.md in the project root for previous session progress and task list. \
+If not found, review git log and open files to determine prior work, then continue.";

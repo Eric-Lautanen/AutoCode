@@ -107,27 +107,31 @@ pub fn fuzzy_find_replace(
     old_text: &str,
     new_text: &str,
     replace_all: bool,
-) -> Option<(String, &'static str)> {
+) -> Option<(String, &'static str, usize)> {
     if content.contains(old_text) {
+        let byte_pos = content.find(old_text).unwrap();
+        let start_line = content[..byte_pos].lines().count();
         let result = if replace_all {
             content.replace(old_text, new_text)
         } else {
             content.replacen(old_text, new_text, 1)
         };
-        return Some((result, "exact"));
+        return Some((result, "exact", start_line));
     }
 
     let nl_content = content.replace("\r\n", "\n");
     let nl_old = old_text.replace("\r\n", "\n");
     if nl_content.contains(&nl_old) {
         if replace_all {
-            if let Some(result) =
+            if let Some((result, start_line)) =
                 apply_replace_all_in_original(content, &nl_content, &nl_old, new_text)
             {
-                return Some((result, "normalized_crlf"));
+                return Some((result, "normalized_crlf", start_line));
             }
+            let byte_pos = nl_content.find(&nl_old).unwrap();
+            let start_line = nl_content[..byte_pos].lines().count();
             let result = nl_content.replace(&nl_old, new_text);
-            return Some((result, "normalized_crlf"));
+            return Some((result, "normalized_crlf", start_line));
         }
         return apply_in_original(content, &nl_content, &nl_old, new_text, "normalized_crlf");
     }
@@ -136,13 +140,15 @@ pub fn fuzzy_find_replace(
     let ws_old = normalize_whitespace(&nl_old);
     if ws_content.contains(&ws_old) {
         if replace_all {
-            if let Some(result) =
+            if let Some((result, start_line)) =
                 apply_replace_all_in_original(content, &ws_content, &ws_old, new_text)
             {
-                return Some((result, "normalized_whitespace"));
+                return Some((result, "normalized_whitespace", start_line));
             }
+            let byte_pos = ws_content.find(&ws_old).unwrap();
+            let start_line = ws_content[..byte_pos].lines().count();
             let result = ws_content.replace(&ws_old, new_text);
-            return Some((result, "normalized_whitespace"));
+            return Some((result, "normalized_whitespace", start_line));
         }
         return apply_in_original(
             content,
@@ -157,13 +163,15 @@ pub fn fuzzy_find_replace(
     let tab_old = normalize_tabs(&ws_old);
     if tab_content.contains(&tab_old) {
         if replace_all {
-            if let Some(result) =
+            if let Some((result, start_line)) =
                 apply_replace_all_in_original(content, &tab_content, &tab_old, new_text)
             {
-                return Some((result, "normalized_tabs"));
+                return Some((result, "normalized_tabs", start_line));
             }
+            let byte_pos = tab_content.find(&tab_old).unwrap();
+            let start_line = tab_content[..byte_pos].lines().count();
             let result = tab_content.replace(&tab_old, new_text);
-            return Some((result, "normalized_tabs"));
+            return Some((result, "normalized_tabs", start_line));
         }
         return apply_in_original(content, &tab_content, &tab_old, new_text, "normalized_tabs");
     }
@@ -173,22 +181,22 @@ pub fn fuzzy_find_replace(
     let orig_lines: Vec<&str> = content.lines().collect();
 
     if old_lines.len() > 1 {
-        if let Some((patched, label)) =
+        if let Some((patched, label, start_line)) =
             fuzzy_line_replace_anchored(&content_lines, &old_lines, &orig_lines, new_text)
         {
-            return Some((patched, label));
+            return Some((patched, label, start_line));
         }
-        if let Some((patched, label)) =
+        if let Some((patched, label, start_line)) =
             fuzzy_subsequence_replace(&content_lines, &old_lines, &orig_lines, new_text)
         {
-            return Some((patched, label));
+            return Some((patched, label, start_line));
         }
     }
 
-    if let Some((patched, label)) =
+    if let Some((patched, label, start_line)) =
         fuzzy_single_line_replace(&content_lines, &orig_lines, old_text, new_text)
     {
-        return Some((patched, label));
+        return Some((patched, label, start_line));
     }
 
     None
@@ -200,14 +208,15 @@ fn apply_in_original(
     norm_needle: &str,
     new_text: &str,
     label: &'static str,
-) -> Option<(String, &'static str)> {
+) -> Option<(String, &'static str, usize)> {
     let (orig_start, orig_end) = map_norm_range(original, normalized, norm_needle)?;
+    let start_line = original[..orig_start].lines().count();
     let mut result =
         String::with_capacity(original.len() + new_text.len().saturating_sub(norm_needle.len()));
     result.push_str(&original[..orig_start]);
     result.push_str(new_text);
     result.push_str(&original[orig_end..]);
-    Some((result, label))
+    Some((result, label, start_line))
 }
 
 fn map_norm_range(original: &str, normalized: &str, norm_needle: &str) -> Option<(usize, usize)> {
@@ -225,12 +234,13 @@ fn apply_replace_all_in_original(
     normalized: &str,
     norm_needle: &str,
     new_text: &str,
-) -> Option<String> {
+) -> Option<(String, usize)> {
     let orig_bytes = original.as_bytes();
     let norm_bytes = normalized.as_bytes();
     let mut result = String::with_capacity(original.len() + new_text.len());
     let mut orig_pos = 0usize;
     let mut search_pos = 0usize;
+    let mut first_start_line = None;
 
     while let Some(pos) = normalized[search_pos..].find(norm_needle) {
         let match_start = pos + search_pos;
@@ -239,6 +249,10 @@ fn apply_replace_all_in_original(
         let orig_start = walk_parallel(orig_bytes, norm_bytes, match_start)?;
         let orig_end = walk_parallel(orig_bytes, norm_bytes, match_end)?;
 
+        if first_start_line.is_none() {
+            first_start_line = Some(original[..orig_start].lines().count());
+        }
+
         result.push_str(&original[orig_pos..orig_start]);
         result.push_str(new_text);
         orig_pos = orig_end;
@@ -246,7 +260,7 @@ fn apply_replace_all_in_original(
     }
 
     result.push_str(&original[orig_pos..]);
-    Some(result)
+    Some((result, first_start_line.unwrap_or(0)))
 }
 
 fn walk_parallel(orig: &[u8], norm: &[u8], norm_target: usize) -> Option<usize> {
@@ -291,7 +305,7 @@ fn fuzzy_line_replace_anchored(
     old_lines: &[&str],
     orig_lines: &[&str],
     new_text: &str,
-) -> Option<(String, &'static str)> {
+) -> Option<(String, &'static str, usize)> {
     if old_lines.is_empty() || old_lines.len() > content_lines.len() {
         return None;
     }
@@ -346,6 +360,7 @@ fn fuzzy_line_replace_anchored(
             !content_lines.is_empty() && content_lines[content_lines.len() - 1].is_empty(),
         ),
         "fuzzy_line_match",
+        *best_start,
     ))
 }
 
@@ -390,7 +405,7 @@ fn fuzzy_subsequence_replace(
     old_lines: &[&str],
     orig_lines: &[&str],
     new_text: &str,
-) -> Option<(String, &'static str)> {
+) -> Option<(String, &'static str, usize)> {
     if old_lines.len() < 2 {
         return None;
     }
@@ -464,6 +479,7 @@ fn fuzzy_subsequence_replace(
             !content_lines.is_empty() && content_lines[content_lines.len() - 1].is_empty(),
         ),
         "fuzzy_subsequence_match",
+        replace_start,
     ))
 }
 
@@ -537,7 +553,7 @@ fn fuzzy_single_line_replace(
     orig_lines: &[&str],
     old_text: &str,
     new_text: &str,
-) -> Option<(String, &'static str)> {
+) -> Option<(String, &'static str, usize)> {
     let trimmed_old = old_text.trim();
     if trimmed_old.len() < 4 {
         return None;
@@ -601,6 +617,7 @@ fn fuzzy_single_line_replace(
             !content_lines.is_empty() && content_lines[content_lines.len() - 1].is_empty(),
         ),
         "fuzzy_single_line_match",
+        idx,
     ))
 }
 
