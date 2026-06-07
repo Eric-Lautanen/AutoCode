@@ -1,21 +1,47 @@
-# Rust
-/target
-**/target
-/srcBak
-**/srcBak
+# --- Rust / Cargo ---
+/target/
+**/*.rs.bk
+# Cargo.lock is committed for applications (workspace member is an app)
 
-# Build artifacts
-*.pdb
-
-# Editor
+# --- IDE / Editor ---
 .vscode/
 .idea/
+*.iml
 *.swp
 *.swo
+*~
+*.orig
 
-# Logs
-*.log
-
-# OS
+# --- OS ---
 .DS_Store
 Thumbs.db
+desktop.ini
+ehthumbs.db
+
+# --- Build artifacts ---
+**/*.dll
+**/*.exe
+**/*.exp
+**/*.lib
+**/*.pdb
+**/*.ilk
+
+# --- Python (if any tooling) ---
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# --- Node (if any JS tooling) ---
+node_modules/
+
+# --- Environment / Secrets ---
+.env
+.env.local
+*.env
+
+# --- Generated / Temp ---
+*.log
+*.tmp
+dist/
+build/
