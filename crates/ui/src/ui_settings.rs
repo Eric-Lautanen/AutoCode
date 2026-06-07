@@ -393,6 +393,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                     .changed()
                                 {
                                     p.model = model;
+                                    p.fill_from_manifest();
                                 }
                                 let p_clone = p.clone();
                                 let key_for_fetch = key.clone();
@@ -430,6 +431,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                                         .clicked()
                                                     {
                                                         p.model = m.clone();
+                                                        p.fill_from_manifest();
                                                     }
                                                 });
                                             }
@@ -446,44 +448,20 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                             }
                             ui.end_row();
 
-                            // Context window (max tokens).
+                            // Context window (from providers.json, read-only).
                             ui.label(helpers::field_label("Context Window"));
-                            ui.horizontal(|ui| {
-                                ui.add(
-                                    egui::DragValue::new(&mut p.max_context_tokens)
-                                        .speed(1000.0)
-                                        .range(4_000..=2_000_000),
-                                );
-                                ui.label(
-                                    RichText::new("tokens")
-                                        .size(10.5)
-                                        .color(Palette::TEXT_MUTED),
-                                );
-                            });
+                            ui.colored_label(
+                                Palette::TEXT_MUTED,
+                                format!("{} tokens", p.max_context_tokens),
+                            );
                             ui.end_row();
 
-                            // Thinking API style.
+                            // Thinking API (from providers.json, read-only).
                             ui.label(helpers::field_label("Thinking API"));
-                            {
-                                let mut current = p.thinking_api.clone();
-                                egui::ComboBox::from_id_salt(format!("thinking_api_{}", key))
-                                    .selected_text(current.label())
-                                    .show_ui(ui, |ui| {
-                                        for api in autocode_core::state::ThinkingApi::variants() {
-                                            ui.push_id(("thinking_sel", api.label()), |ui| {
-                                                if ui
-                                                    .selectable_label(current == *api, api.label())
-                                                    .clicked()
-                                                {
-                                                    current = api.clone();
-                                                }
-                                            });
-                                        }
-                                    });
-                                if current != p.thinking_api {
-                                    p.thinking_api = current;
-                                }
-                            }
+                            ui.colored_label(
+                                Palette::TEXT_MUTED,
+                                p.thinking_api.label(),
+                            );
                             ui.end_row();
 
                             // Handoff percentage.
@@ -554,36 +532,20 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                             });
                             ui.end_row();
 
-                            // Max output tokens.
+                            // Max output tokens (from providers.json, read-only).
                             ui.label(helpers::field_label("Max Output"));
-                            ui.horizontal(|ui| {
-                                ui.add(
-                                    egui::DragValue::new(&mut p.max_output_tokens)
-                                        .speed(1000.0)
-                                        .range(256..=200_000),
-                                );
-                                ui.label(
-                                    RichText::new("tokens")
-                                        .size(10.5)
-                                        .color(Palette::TEXT_MUTED),
-                                );
-                            });
+                            ui.colored_label(
+                                Palette::TEXT_MUTED,
+                                format!("{} tokens", p.max_output_tokens),
+                            );
                             ui.end_row();
 
-                            // Max output tokens when thinking is enabled.
+                            // Max output tokens when thinking is enabled (from providers.json, read-only).
                             ui.label(helpers::field_label("Max Output (Thinking)"));
-                            ui.horizontal(|ui| {
-                                ui.add(
-                                    egui::DragValue::new(&mut p.max_output_tokens_thinking)
-                                        .speed(1000.0)
-                                        .range(256..=200_000),
-                                );
-                                ui.label(
-                                    RichText::new("tokens")
-                                        .size(10.5)
-                                        .color(Palette::TEXT_MUTED),
-                                );
-                            });
+                            ui.colored_label(
+                                Palette::TEXT_MUTED,
+                                format!("{} tokens", p.max_output_tokens_thinking),
+                            );
                             ui.end_row();
                         });
                 });

@@ -108,6 +108,8 @@ struct SessionMeta {
     #[serde(default)]
     handoff_enabled: bool,
     #[serde(default)]
+    session_named: bool,
+    #[serde(default)]
     show_explorer: bool,
     #[serde(default)]
     settings_open: bool,
@@ -252,6 +254,7 @@ pub fn save_session(project: &Project, session: &Session) -> std::io::Result<()>
         show_todo: session.show_todo,
         todo_user_dismissed: session.todo_user_dismissed,
         handoff_enabled: session.handoff_enabled,
+        session_named: session.session_named,
         show_explorer: session.show_explorer,
         settings_open: session.settings_open,
         actual_tokens_used: session.actual_tokens_used,
@@ -283,6 +286,7 @@ pub fn save_session_meta(project: &Project, session: &Session) -> std::io::Resul
         show_todo: session.show_todo,
         todo_user_dismissed: session.todo_user_dismissed,
         handoff_enabled: session.handoff_enabled,
+        session_named: session.session_named,
         show_explorer: session.show_explorer,
         settings_open: session.settings_open,
         actual_tokens_used: session.actual_tokens_used,
@@ -318,6 +322,8 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
                 session.show_todo = meta.show_todo;
                 session.todo_user_dismissed = meta.todo_user_dismissed;
                 session.handoff_enabled = meta.handoff_enabled;
+                session.session_named = meta.session_named
+                    || !session.label.starts_with('S');
                 session.show_explorer = meta.show_explorer;
                 session.settings_open = meta.settings_open;
                 session.actual_tokens_used = meta.actual_tokens_used;

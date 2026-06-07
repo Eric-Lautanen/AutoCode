@@ -311,18 +311,12 @@ pub struct CompletionRequest {
 pub enum ToolChoice {
     #[default]
     Auto,
-    #[allow(dead_code)]
-    None,
-    #[allow(dead_code)]
-    Required,
 }
 
 impl ToolChoice {
     fn to_json(&self) -> serde_json::Value {
         match self {
             Self::Auto => serde_json::Value::String("auto".into()),
-            Self::None => serde_json::Value::String("none".into()),
-            Self::Required => serde_json::json!({"type": "required"}),
         }
     }
 }
@@ -807,6 +801,30 @@ fn build_http_request(host: &str, path: &str, api_key: &str, body: &str) -> Stri
     )
 }
 
+/// Redact common API key patterns from a string for safe debug logging.
+fn sanitize_for_log(s: &str) -> String {
+    let prefixes = ["sk-ant-", "sk-proj-", "sk-"];
+    let mut result = s.to_string();
+    for prefix in prefixes {
+        loop {
+            let Some(start) = result.find(prefix) else { break };
+            let after = start + prefix.len();
+            let end = after
+                + result[after..]
+                    .chars()
+                    .position(|c| !c.is_ascii_alphanumeric() && c != '-' && c != '_')
+                    .unwrap_or(result.len() - after);
+            if end - after >= 5 {
+                let replacement = format!("{}...[REDACTED]", prefix.trim_end_matches('-'));
+                result.replace_range(start..end, &replacement);
+            } else {
+                break;
+            }
+        }
+    }
+    result
+}
+
 fn process_http_response<R: BufRead>(
     reader: &mut R,
     stream: bool,
@@ -878,10 +896,10 @@ fn process_http_response<R: BufRead>(
             .and_then(|v| v["error"]["retry_after_ms"].as_u64());
         let mut msg = format!("[{}] {} ({})", model, status_text, status_code);
         if let Some(detail) = api_msg {
-            msg.push_str(&format!(" — {}", detail));
+            msg.push_str(&format!(" — {}", sanitize_for_log(&detail)));
         } else if !body_str.is_empty() {
             let preview: String = body_str.chars().take(200).collect();
-            msg.push_str(&format!(" — {}", preview));
+            msg.push_str(&format!(" — {}", sanitize_for_log(&preview)));
         }
         if let Some(secs) = retry_after_secs {
             msg.push_str(&format!(" (retry after {}s)", secs));

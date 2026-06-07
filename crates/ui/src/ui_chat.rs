@@ -1256,6 +1256,7 @@ fn render_structured_tool_result(
                     ScrollArea::vertical()
                         .max_height(400.0)
                         .min_scrolled_height(0.0)
+                        .max_width(ui.available_width())
                         .show(ui, |ui| {
                             ui.set_min_width(ui.available_width());
                             render_markdown(ui, &msg.content, false);
@@ -1547,6 +1548,7 @@ fn render_unified_diff(
                     .id_salt(format!("diff_scroll_{}", sid))
                     .max_height(400.0)
                     .min_scrolled_height(0.0)
+                    .max_width(ui.available_width())
                     .show(ui, |ui| {
                         ui.set_max_width(ui.available_width());
                         ui.set_min_width(ui.available_width());
@@ -1727,6 +1729,7 @@ fn show_reasoning_bubble(ui: &mut egui::Ui, text: &str, panel_w: f32, live: bool
                 ScrollArea::vertical()
                     .max_height(400.0)
                     .min_scrolled_height(0.0)
+                    .max_width(ui.available_width())
                     .show(ui, |ui| {
                         ui.set_min_width(ui.available_width());
                         Frame::NONE
@@ -1827,6 +1830,7 @@ fn show_live_shell_bubble(ui: &mut egui::Ui, text: &str, panel_w: f32) {
                 ScrollArea::vertical()
                     .max_height(400.0)
                     .min_scrolled_height(0.0)
+                    .max_width(ui.available_width())
                     .stick_to_bottom(true)
                     .show(ui, |ui| {
                         ui.set_max_width(ui.available_width());
@@ -1890,6 +1894,7 @@ fn render_code_block_impl(ui: &mut egui::Ui, lang: &str, code: &str, _streaming:
                     .id_salt(("code_scroll", _inst))
                     .max_height(400.0)
                     .min_scrolled_height(0.0)
+                    .max_width(ui.available_width())
                     .show(ui, |ui| {
                         ui.set_max_width(ui.available_width());
                         let inner_w = ui.available_width();
@@ -2535,6 +2540,7 @@ fn render_shell_terminal(ui: &mut egui::Ui, code: &str, sid: &str) {
                     .id_salt(format!("terminal_scroll_{}", sid))
                     .max_height(400.0)
                     .min_scrolled_height(0.0)
+                    .max_width(ui.available_width())
                     .show(ui, |ui| {
                         ui.set_max_width(ui.available_width());
                         let inner_w = ui.available_width();

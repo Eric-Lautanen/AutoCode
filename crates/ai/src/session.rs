@@ -62,7 +62,7 @@ pub fn prepare_request_messages_for_session(
     };
 
     // Load full history from disk (the source of truth).
-    let full_messages: Vec<ChatMessage> = {
+    let mut full_messages: Vec<ChatMessage> = {
         let sess = state.sessions.iter().find(|s| s.id == session_id);
         sess.and_then(|s| {
             s.project_id.as_ref().and_then(|pid| {
@@ -75,6 +75,43 @@ pub fn prepare_request_messages_for_session(
         })
         .unwrap_or_default()
     };
+
+    // Deduplicate by message ID. Under normal append-only JSONL operation
+    // duplicates shouldn't occur, but a prior save_session rewrite could
+    // have left stale copies. Collapse them silently.
+    {
+        let mut seen = std::collections::HashSet::new();
+        full_messages.retain(|m| seen.insert(m.id));
+    }
+
+    // Strip orphaned tool_calls: any assistant message whose tool_calls
+    // count doesn't match the number of consecutive tool-result messages
+    // that follow it. This handles both disk state that predates an
+    // in-memory cleanup and the normal case (no-op).
+    {
+        let mut i = full_messages.len();
+        while i > 0 {
+            i -= 1;
+            let tool_calls_count = full_messages[i]
+                .tool_calls
+                .as_ref()
+                .and_then(|v| v.as_array())
+                .map(|a| a.len())
+                .unwrap_or(0);
+            if tool_calls_count == 0 {
+                continue;
+            }
+            let mut j = i + 1;
+            while j < full_messages.len()
+                && full_messages[j].role == Role::Tool
+            {
+                j += 1;
+            }
+            if j - i - 1 != tool_calls_count {
+                full_messages.splice(i..j, std::iter::empty());
+            }
+        }
+    }
 
     // Compute an estimate for the full disk-backed message list + tool definitions.
     // This is stored on the session so the UI can display it instead of the

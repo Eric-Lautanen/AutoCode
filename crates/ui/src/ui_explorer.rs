@@ -240,6 +240,7 @@ fn show_tree(ui: &mut egui::Ui, dir: &std::path::Path, state: &mut TreeState<'_>
                             if state.selected.as_deref() == Some(&path_str) {
                                 *state.selected = None;
                                 *state.file_content = None;
+                                *state.show_viewer = false;
                             }
                             ui.close();
                         }
@@ -372,6 +373,7 @@ fn show_tree(ui: &mut egui::Ui, dir: &std::path::Path, state: &mut TreeState<'_>
                             if state.selected.as_deref() == Some(&path_str) {
                                 *state.selected = None;
                                 *state.file_content = None;
+                                *state.show_viewer = false;
                             }
                             ui.close();
                         }

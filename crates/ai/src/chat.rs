@@ -1188,14 +1188,14 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                             removed = true;
                         }
                     }
-                    // Persist the cleaned state to disk so the next call to
-                    // prepare_request_messages_for_session doesn't re-introduce
-                    // the orphaned messages from stale disk state.
-                    if let Some(pid) = sess.project_id.as_ref()
-                        && let Some(proj) = state.projects.iter().find(|p| &p.id == pid)
-                    {
-                        let _ = autocode_core::session_storage::save_session(proj, sess);
-                    }
+                }
+                // Clear pending writes for this session — the stripped messages
+                // were already queued there and would be re-appended to the
+                // append-only JSONL on the next flush. Instead, the stripping
+                // logic in prepare_request_messages_for_session will clean up
+                // the on-disk messages when loaded for the retry.
+                if let Some(sid) = runtime.active_session_id.as_deref() {
+                    state.pending_writes.pending.retain(|(s, _)| s != sid);
                 }
                 if !removed {
                     debug_log!(
@@ -1420,8 +1420,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     continue;
                 };
 
-                if !sess.label.starts_with('S') {
-                    // Session already has a meaningful name — reject.
+                if sess.session_named {
                     let content = format!(
                         "Session already named as '{}', ignoring duplicate name_session call.",
                         sess.label
@@ -1441,13 +1440,16 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     && let Some(safe) = sanitize_session_name(name)
                 {
                     sess.label = safe.clone();
+                    sess.session_named = true;
                     // Persist the new label to the session file on disk.
+                    // Only write metadata — messages are handled by the
+                    // rate-limited append writer to avoid duplicates.
                     if let Some(proj) = state
                         .projects
                         .iter()
                         .find(|p| Some(&p.id) == sess.project_id.as_ref())
                     {
-                        let _ = autocode_core::session_storage::save_session(proj, sess);
+                        let _ = autocode_core::session_storage::save_session_meta(proj, sess);
                     }
                     // Push a confirmation result so the AI knows it succeeded.
                     let content = format!("Session named as '{}'.", safe);
@@ -1673,7 +1675,6 @@ fn poll_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 let has_handoff = results.iter().any(|r| r.content.starts_with("HANDOFF:"));
 
                 if has_handoff && state.handoff_enabled && !runtime.handoff_in_progress {
-                    runtime.handoff_in_progress = true;
                     push_tool_results_to_state(state, runtime, &results);
                     handle_handoff(state, runtime);
                 } else if has_handoff && !state.handoff_enabled {
@@ -1923,7 +1924,6 @@ fn commit_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) {
             .any(|tr| tr.content.starts_with("HANDOFF:"));
 
         if has_handoff && state.handoff_enabled && !runtime.handoff_in_progress {
-            runtime.handoff_in_progress = true;
             let results = std::mem::take(&mut runtime.pending_tool_results);
             let count = results.len();
             push_tool_results_to_state(state, runtime, &results);
@@ -1985,20 +1985,20 @@ fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     }
 
     // Save the old session to disk before creating the new one.
+    // The JSONL is append-only — just flush pending writes and update metadata.
     if let Some(sess) = state.active_session()
         && let Some(pid) = sess.project_id.as_ref()
         && let Some(proj) = state.projects.iter().find(|p| &p.id == pid)
     {
-        let resume_content = generate_resume_content(sess);
-        let _ = autocode_core::session_storage::save_session(proj, sess);
-
-        // Ensure RESUME.md exists in the project root for the next session.
+        let _ = autocode_core::session_storage::save_session_meta(proj, sess);
         let resume_path = std::path::Path::new(&proj.root_path).join("RESUME.md");
         if !resume_path.exists() {
-            let _ = std::fs::write(&resume_path, &resume_content);
+            let content = generate_resume_content(sess);
+            let _ = std::fs::write(&resume_path, &content);
             debug_log!("chat: auto-generated RESUME.md for handoff");
         }
     }
+    state.flush_pending_writes(true);
     let handoff_was_enabled = state.handoff_enabled;
     state.new_session_for_project(state.active_project_id.clone());
 
@@ -2108,7 +2108,6 @@ fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
         threshold,
         handoff_pct
     );
-    runtime.handoff_in_progress = true;
     handle_handoff(state, runtime);
 }
 
@@ -3532,16 +3531,18 @@ fn auto_name_session(state: &mut AppState, text: &str) {
 
     if let Some(ref sid) = state.active_session_id
         && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == *sid)
-        && sess.label.starts_with('S')
-    // still the default label
+        && !sess.session_named
     {
         sess.label = name;
+        sess.session_named = true;
         if let Some(proj) = state
             .projects
             .iter()
             .find(|p| Some(&p.id) == sess.project_id.as_ref())
         {
-            let _ = autocode_core::session_storage::save_session(proj, sess);
+            // Only write metadata — messages are handled by the
+            // rate-limited append writer to avoid duplicates.
+            let _ = autocode_core::session_storage::save_session_meta(proj, sess);
         }
     }
 }

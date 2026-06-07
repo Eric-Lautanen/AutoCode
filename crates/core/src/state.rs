@@ -267,7 +267,8 @@ pub struct ApiProvider {
     pub base_url: String,
     pub model: String,
     pub enabled: bool,
-    #[serde(default = "crate::helpers::default_context_tokens")]
+    /// Always populated from providers.json. Not persisted in app.ron.
+    #[serde(skip)]
     pub max_context_tokens: u32,
     #[serde(default = "crate::helpers::default_handoff_percent")]
     pub handoff_percent: u8,
@@ -284,13 +285,16 @@ pub struct ApiProvider {
     #[serde(default = "crate::helpers::default_reasoning_effort")]
     pub reasoning_effort: String,
 
-    #[serde(default)]
+    /// Always populated from providers.json. Not persisted in app.ron.
+    #[serde(skip)]
     pub thinking_api: ThinkingApi,
 
-    #[serde(default = "crate::helpers::default_max_output_tokens")]
+    /// Always populated from providers.json. Not persisted in app.ron.
+    #[serde(skip)]
     pub max_output_tokens: u32,
 
-    #[serde(default = "crate::helpers::default_max_output_tokens_thinking")]
+    /// Always populated from providers.json. Not persisted in app.ron.
+    #[serde(skip)]
     pub max_output_tokens_thinking: u32,
 }
 
@@ -345,18 +349,28 @@ impl ApiProvider {
         self.counting_endpoint_url().is_some()
     }
 
+    /// Populate provider-spec fields from the providers.json manifest
+    /// based on the current `kind` and `model`. These fields are skipped
+    /// from serialization so that app.ron never stores stale values.
+    pub fn fill_from_manifest(&mut self) {
+        let defs = model_or_safe(&self.kind, &self.model);
+        self.max_context_tokens = defs.context_window;
+        self.max_output_tokens = defs.max_output_tokens;
+        self.max_output_tokens_thinking = defs
+            .max_output_tokens_thinking
+            .unwrap_or(defs.max_output_tokens * 2);
+        self.thinking_api = parse_thinking_api(&defs.thinking_api);
+    }
+
     pub fn reset_defaults(&mut self) {
         let defaults = ApiProvider::new(self.kind.clone());
         self.base_url = defaults.base_url;
         self.model = defaults.model;
-        self.max_context_tokens = defaults.max_context_tokens;
         self.handoff_percent = 80;
         self.allow_project_escape = false;
         self.thinking_mode = false;
         self.reasoning_effort = defaults.reasoning_effort;
-        self.thinking_api = defaults.thinking_api;
-        self.max_output_tokens = defaults.max_output_tokens;
-        self.max_output_tokens_thinking = defaults.max_output_tokens_thinking;
+        self.fill_from_manifest();
     }
 }
 
@@ -490,6 +504,8 @@ pub struct Session {
     #[serde(default)]
     pub todo_user_dismissed: bool,
     #[serde(default)]
+    pub session_named: bool,
+    #[serde(default)]
     pub handoff_enabled: bool,
     #[serde(default)]
     pub show_explorer: bool,
@@ -528,6 +544,7 @@ impl Session {
             todo_list: TodoList::default(),
             show_todo: false,
             todo_user_dismissed: false,
+            session_named: false,
             handoff_enabled: false,
             show_explorer: true,
             settings_open: false,
@@ -1040,6 +1057,12 @@ impl AppState {
                 .entry(label)
                 .or_insert_with(|| ApiProvider::new(kind));
         }
+        // Populate provider-spec fields from manifest (they are skipped from
+        // serialization so stale values in app.ron are never used).
+        for p in state.providers.values_mut() {
+            p.fill_from_manifest();
+        }
+
         // Prune stale entries whose keys don't match any known label
         // (e.g. "Unknown" from a dev build before the manifest was finalised).
         let valid: HashSet<String> = [
@@ -1172,7 +1195,7 @@ RULES
 - Read relevant files before editing.
 - Ensure code compiles. Eliminate warnings, dead code, unused imports.
 - Use latest stable deps/tools. Check versions before adding new ones.
-- REQUIRED: Call `name_session` with the work being done (e.g. 'fixing_helper_compile_error').
+- REQUIRED: Call `name_session` once at session start with the current task name.
 - REQUIRED: Call `todo_list` at task start with numbered steps. Update status live, re-send ALL items. Result shows context usage (e.g. '45678/128000 tokens (35%)') for handoff timing.
 - When near context limit: save RESUME.md, call `handoff` with reason. Next session reads RESUME.md.
 - Use file tools (read_file, grep, patch_file, write_file) for code I/O. `run_shell` only for builds, tests, git, package managers.
