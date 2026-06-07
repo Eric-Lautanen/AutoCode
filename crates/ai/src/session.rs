@@ -33,45 +33,15 @@ pub fn ensure_session(state: &mut AppState) -> bool {
     false
 }
 
-/// Build the messages list for an API request.
-/// Filters out Error-role messages (display-only) and converts
-/// to ApiMessage format. Cache_control is sent only when the
-/// specific model supports it (per-model flag from the manifest).
-#[allow(dead_code)]
-pub fn prepare_request_messages(state: &mut AppState) -> Vec<ApiMessage> {
-    let session_id = state.active_session_id.clone().unwrap_or_default();
-    prepare_request_messages_for_session(state, &session_id)
-}
-
 /// Build the messages list for a specific session.
+/// The JSONL file is the source of truth — messages are written to disk
+/// immediately on push (rate-limited) and loaded here for API requests.
 pub fn prepare_request_messages_for_session(
     state: &mut AppState,
     session_id: &str,
 ) -> Vec<ApiMessage> {
-    // Merge RAM messages with existing disk history before checkpointing.
-    // This prevents RAM trimming from permanently losing early messages
-    // on disk, which would orphan tool results without their matching
-    // assistant tool_calls messages in subsequent API requests.
-    let mut save_succeeded = true;
-    {
-        if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == session_id)
-            && let Some(proj) = state
-                .projects
-                .iter()
-                .find(|p| Some(&p.id) == sess.project_id.as_ref())
-        {
-            let disk = autocode_core::session_storage::load_all_messages(proj, sess);
-            let ram = sess.messages.clone();
-            let mut merged: Vec<ChatMessage> = disk.into_iter().collect();
-            for msg in ram {
-                if !merged.iter().any(|m| m.id == msg.id) {
-                    merged.push(msg);
-                }
-            }
-            sess.messages = merged;
-            save_succeeded = autocode_core::session_storage::save_session(proj, sess).is_ok();
-        }
-    }
+    // Flush any pending message writes so disk is fully up to date.
+    state.flush_pending_writes(true);
 
     let supports_cache = {
         let sess = state.sessions.iter().find(|s| s.id == session_id);
@@ -91,27 +61,19 @@ pub fn prepare_request_messages_for_session(
             .unwrap_or(false)
     };
 
-    // Load full history for the API request.
-    // When the merge+save above succeeded, load from the durable disk
-    // checkpoint. When save failed, the on-disk state may be stale
-    // (e.g. missing tool response messages that were only in RAM), so
-    // use the in-memory merged list which is already complete.
+    // Load full history from disk (the source of truth).
     let full_messages: Vec<ChatMessage> = {
         let sess = state.sessions.iter().find(|s| s.id == session_id);
-        if save_succeeded {
-            sess.and_then(|s| {
-                s.project_id.as_ref().and_then(|pid| {
-                    state
-                        .projects
-                        .iter()
-                        .find(|p| p.id == *pid)
-                        .map(|proj| autocode_core::session_storage::load_all_messages(proj, s))
-                })
+        sess.and_then(|s| {
+            s.project_id.as_ref().and_then(|pid| {
+                state
+                    .projects
+                    .iter()
+                    .find(|p| p.id == *pid)
+                    .map(|proj| autocode_core::session_storage::load_all_messages(proj, s))
             })
-            .unwrap_or_default()
-        } else {
-            sess.map(|s| s.messages.clone()).unwrap_or_default()
-        }
+        })
+        .unwrap_or_default()
     };
 
     // Compute an estimate for the full disk-backed message list + tool definitions.
@@ -130,9 +92,6 @@ pub fn prepare_request_messages_for_session(
             .find(|s| s.id == session_id)
             .map(|s| s.model.as_str());
         let estimated_full = autocode_core::helpers::estimate_full_request_tokens(&filtered, Some(&tools), model);
-        // Also compute messages-only estimate (no tool definitions) for accurate
-        // user-facing display. Tool definitions are sent with every request but
-        // are NOT part of the stored chat history.
         let estimated_messages = autocode_core::helpers::estimate_full_request_tokens(&filtered, None, model);
         if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == session_id) {
             sess.estimated_full_tokens = estimated_full;

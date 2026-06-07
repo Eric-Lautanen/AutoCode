@@ -22,47 +22,101 @@ use std::{
 static COOKIE_JAR: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
 
 /// Rotating user-agent strings that mimic real browsers across OS and version.
-static UA_NEXT: AtomicUsize = AtomicUsize::new(0);
+static PROFILE_NEXT: AtomicUsize = AtomicUsize::new(0);
 
-const USER_AGENTS: &[&str] = &[
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+struct BrowserProfile {
+    user_agent: &'static str,
+    sec_ch_ua: &'static str,
+    sec_ch_ua_platform: &'static str,
+    accept: &'static str,
+    accept_language: &'static str,
+}
+
+const BROWSER_PROFILES: &[BrowserProfile] = &[
+    // Chrome 125 Windows
+    BrowserProfile {
+        user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        sec_ch_ua: "\"Google Chrome\";v=\"125\", \"Chromium\";v=\"125\", \"Not.A/Brand\";v=\"24\"",
+        sec_ch_ua_platform: "\"Windows\"",
+        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        accept_language: "en-US,en;q=0.9",
+    },
+    // Chrome 126 Windows
+    BrowserProfile {
+        user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        sec_ch_ua: "\"Google Chrome\";v=\"126\", \"Chromium\";v=\"126\", \"Not.A/Brand\";v=\"24\"",
+        sec_ch_ua_platform: "\"Windows\"",
+        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        accept_language: "en-US,en;q=0.9",
+    },
+    // Chrome 125 macOS
+    BrowserProfile {
+        user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        sec_ch_ua: "\"Google Chrome\";v=\"125\", \"Chromium\";v=\"125\", \"Not.A/Brand\";v=\"24\"",
+        sec_ch_ua_platform: "\"macOS\"",
+        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        accept_language: "en-US,en;q=0.9,fr;q=0.8",
+    },
+    // Safari 17.5 macOS
+    BrowserProfile {
+        user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+        sec_ch_ua: "\"Safari\";v=\"17.5\", \"AppleWebKit\";v=\"605.1.15\"",
+        sec_ch_ua_platform: "\"macOS\"",
+        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        accept_language: "en-US,en;q=0.9",
+    },
+    // Firefox 127 Windows
+    BrowserProfile {
+        user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0",
+        sec_ch_ua: "\"Firefox\";v=\"127\", \"Gecko\";v=\"127\"",
+        sec_ch_ua_platform: "\"Windows\"",
+        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        accept_language: "en-US,en;q=0.9",
+    },
+    // Chrome 125 Linux
+    BrowserProfile {
+        user_agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        sec_ch_ua: "\"Google Chrome\";v=\"125\", \"Chromium\";v=\"125\", \"Not.A/Brand\";v=\"24\"",
+        sec_ch_ua_platform: "\"Linux\"",
+        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        accept_language: "en-US,en;q=0.9",
+    },
+    // Chrome 124 Windows
+    BrowserProfile {
+        user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        sec_ch_ua: "\"Google Chrome\";v=\"124\", \"Chromium\";v=\"124\", \"Not.A/Brand\";v=\"24\"",
+        sec_ch_ua_platform: "\"Windows\"",
+        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        accept_language: "en-GB,en;q=0.9,en-US;q=0.8",
+    },
+    // Chrome 126 macOS
+    BrowserProfile {
+        user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        sec_ch_ua: "\"Google Chrome\";v=\"126\", \"Chromium\";v=\"126\", \"Not.A/Brand\";v=\"24\"",
+        sec_ch_ua_platform: "\"macOS\"",
+        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        accept_language: "en-US,en;q=0.9,de;q=0.8",
+    },
+    // Firefox 127 macOS
+    BrowserProfile {
+        user_agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:127.0) Gecko/20100101 Firefox/127.0",
+        sec_ch_ua: "\"Firefox\";v=\"127\", \"Gecko\";v=\"127\"",
+        sec_ch_ua_platform: "\"macOS\"",
+        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        accept_language: "en-US,en;q=0.9",
+    },
 ];
+
+fn next_profile() -> &'static BrowserProfile {
+    let i = PROFILE_NEXT.fetch_add(1, Ordering::Relaxed) % BROWSER_PROFILES.len();
+    &BROWSER_PROFILES[i]
+}
 
 /// Global web request rate limit in milliseconds (0 = disabled).
 static WEB_RATE_LIMIT_MS: AtomicU64 = AtomicU64::new(1500);
 
 /// Timestamp of the last web request (any web_search or fetch_url).
 static LAST_WEB_REQUEST: Mutex<Option<std::time::Instant>> = Mutex::new(None);
-
-fn next_user_agent() -> &'static str {
-    let i = UA_NEXT.fetch_add(1, Ordering::Relaxed) % USER_AGENTS.len();
-    USER_AGENTS[i]
-}
-
-fn current_accept() -> &'static str {
-    let i = (UA_NEXT.load(Ordering::Relaxed) / USER_AGENTS.len()) % 3;
-    match i {
-        0 => "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        1 => "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        _ => "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    }
-}
-
-fn current_accept_language() -> &'static str {
-    let i = (UA_NEXT.load(Ordering::Relaxed) / USER_AGENTS.len()) % 3;
-    match i {
-        0 => "en-US,en;q=0.9",
-        1 => "en-US,en;q=0.9,fr;q=0.8",
-        _ => "en-GB,en;q=0.9,en-US;q=0.8",
-    }
-}
 
 /// Set the minimum delay (ms) enforced between web requests. 0 disables.
 pub fn set_web_rate_limit_ms(ms: u64) {
@@ -1429,6 +1483,9 @@ pub fn native_get(url: &str, timeout_secs: u64, max_bytes: usize) -> Result<Vec<
         "provider::native_get: {} timeout={} max_bytes={}",
         url, timeout_secs, max_bytes
     );
+
+    // If we already have a cached TLS connection for this host, reuse it.
+    // Otherwise create a fresh TCP connection.
     let stream = TcpStream::connect(&addr).map_err(|e| format!("connect: {}", e))?;
     stream
         .set_read_timeout(Some(Duration::from_secs(timeout_secs)))
@@ -1471,27 +1528,34 @@ pub fn native_get(url: &str, timeout_secs: u64, max_bytes: usize) -> Result<Vec<
         Ok(())
     }
 
+    // Build a coherent browser-fingerprint header set from the rotating profile.
+    let profile = next_profile();
     let cookie_line = cookie_header(&host);
     let cookie_str = cookie_line.as_deref().unwrap_or("");
-    let ua = next_user_agent();
-    let accept = current_accept();
-    let accept_lang = current_accept_language();
 
     let request = format!(
         "GET {path} HTTP/1.1\r\n\
          Host: {host}\r\n\
          User-Agent: {ua}\r\n\
          Accept: {accept}\r\n\
-         Accept-Language: {accept_lang}\r\n\
+         Accept-Language: {lang}\r\n\
          Accept-Encoding: identity\r\n\
          Upgrade-Insecure-Requests: 1\r\n\
+         Sec-Ch-Ua: {sec_ua}\r\n\
+         Sec-Ch-Ua-Mobile: ?0\r\n\
+         Sec-Ch-Ua-Platform: {sec_plat}\r\n\
          Sec-Fetch-Dest: document\r\n\
          Sec-Fetch-Mode: navigate\r\n\
          Sec-Fetch-Site: none\r\n\
          Sec-Fetch-User: ?1\r\n\
          {cookie_str}\
-         Connection: close\r\n\
-         \r\n"
+         Connection: keep-alive\r\n\
+         \r\n",
+        ua = profile.user_agent,
+        accept = profile.accept,
+        lang = profile.accept_language,
+        sec_ua = profile.sec_ch_ua,
+        sec_plat = profile.sec_ch_ua_platform,
     );
 
     if use_tls {
@@ -1540,7 +1604,6 @@ pub fn native_get(url: &str, timeout_secs: u64, max_bytes: usize) -> Result<Vec<
             raw.to_vec()
         }
     } else {
-        // No headers found — assume entire response is the body
         buffer.to_vec()
     };
 

@@ -541,7 +541,7 @@ impl Session {
     /// Includes content, tool_calls, and reasoning_content. Use `actual_tokens_used` 
     /// for the authoritative count reported by the API.
     pub fn token_count(&self) -> usize {
-        self.messages.iter().map(|m| crate::helpers::estimate_message_tokens(m)).sum()
+        self.messages.iter().map(crate::helpers::estimate_message_tokens).sum()
     }
 
     pub fn record_actual_usage(&mut self, prompt: usize, _completion: usize) {
@@ -822,6 +822,32 @@ impl TodoList {
     }
 }
 
+// -- Rate-limited disk writer for message persistence -------------------------
+
+/// A simple rate-limited batcher for appending messages to JSONL files.
+/// Messages are queued and flushed to disk at most once per `rate_limit_ms`.
+/// During `flush_all` (shutdown), all pending messages are written immediately.
+#[derive(Clone, Debug)]
+pub struct PendingWrites {
+    pub pending: Vec<(String, ChatMessage)>,
+    pub last_write: std::time::Instant,
+}
+
+impl PendingWrites {
+    pub fn new() -> Self {
+        Self {
+            pending: Vec::new(),
+            last_write: std::time::Instant::now(),
+        }
+    }
+}
+
+impl Default for PendingWrites {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // -- Root AppState -------------------------------------------------------------
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -929,6 +955,18 @@ pub struct AppState {
     /// Prevents IP bans from aggressive requests.
     #[serde(default = "crate::helpers::default_web_rate_limit_ms")]
     pub web_rate_limit_ms: u64,
+
+    /// Minimum delay (ms) between disk writes (message persistence).
+    /// Rate-limits how often the JSONL message file is flushed to disk,
+    /// preventing fast API responses from hammering disk I/O.
+    #[serde(default = "crate::helpers::default_disk_write_rate_ms")]
+    pub disk_write_rate_ms: u64,
+
+    /// Pending disk writes for rate-limited message persistence.
+    /// Messages are queued here and flushed to JSONL at most once per
+    /// `disk_write_rate_ms` interval.
+    #[serde(skip)]
+    pub pending_writes: PendingWrites,
 }
 
 use std::collections::{HashMap, HashSet};
@@ -979,6 +1017,8 @@ impl Default for AppState {
             ui_display_window: crate::helpers::default_ui_display_window(),
             disk_read_delay_ms: crate::helpers::default_disk_read_delay_ms(),
             web_rate_limit_ms: crate::helpers::default_web_rate_limit_ms(),
+            disk_write_rate_ms: crate::helpers::default_disk_write_rate_ms(),
+            pending_writes: PendingWrites::new(),
         }
     }
 }
@@ -1094,6 +1134,33 @@ impl AppState {
         sess.label = format!("S{}", id);
         self.active_session_id = Some(sess.id.clone());
         self.sessions.push(sess);
+    }
+
+    /// Flush pending message writes to disk, respecting the rate limit.
+    /// When `force` is true, writes all pending messages regardless of the rate limit.
+    pub fn flush_pending_writes(&mut self, force: bool) {
+        use std::collections::HashMap;
+        if self.pending_writes.pending.is_empty() {
+            return;
+        }
+        let rate = self.disk_write_rate_ms;
+        if !force && rate > 0
+            && (self.pending_writes.last_write.elapsed().as_millis() as u64) < rate
+        {
+            return;
+        }
+        let pending = std::mem::take(&mut self.pending_writes.pending);
+        let mut grouped: HashMap<String, Vec<ChatMessage>> = HashMap::new();
+        for (sid, msg) in pending {
+            grouped.entry(sid).or_default().push(msg);
+        }
+        for (sid, msgs) in &grouped {
+            let Some(sess) = self.sessions.iter().find(|s| s.id == *sid) else { continue; };
+            let Some(pid) = sess.project_id.as_ref() else { continue; };
+            let Some(proj) = self.projects.iter().find(|p| &p.id == pid) else { continue; };
+            let _ = crate::session_storage::append_messages_to_jsonl(proj, sess, msgs);
+        }
+        self.pending_writes.last_write = std::time::Instant::now();
     }
 }
 

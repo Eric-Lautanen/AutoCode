@@ -194,10 +194,10 @@ pub fn estimate_full_request_tokens(
     let json_str = serde_json::to_string(&body).unwrap_or_default();
     
     // Try tiktoken first for accuracy
-    if let Some(model_name) = model {
-        if let Some(count) = crate::tokenizer::offline_token_count(model_name, &json_str) {
-            return count;
-        }
+    if let Some(model_name) = model
+        && let Some(count) = crate::tokenizer::offline_token_count(model_name, &json_str)
+    {
+        return count;
     }
     
     // Fallback to heuristic with adjusted char/token ratio for JSON
@@ -314,12 +314,7 @@ pub fn truncate_middle(text: &str, max_bytes: usize) -> String {
 const READ_BLOCKED_SENTINEL: &str = "_path_traversal_blocked_";
 const WRITE_BLOCKED_SENTINEL: &str = "_write_path_traversal_blocked_";
 
-pub fn is_blocked_path(path: &std::path::Path) -> bool {
-    path.file_name()
-        .and_then(|n| n.to_str())
-        .is_some_and(|n| n == READ_BLOCKED_SENTINEL || n == WRITE_BLOCKED_SENTINEL)
-}
-
+#[must_use]
 pub fn blocked_error(raw_path: &str) -> String {
     format!(
         "{{\"error\":{},\"suggestion\":{}}}",
@@ -377,6 +372,7 @@ fn cache_insert(
     cache.insert(key, val);
 }
 
+#[must_use]
 pub fn resolve_path_cached(
     raw: &str,
     project_root: &str,
@@ -392,6 +388,7 @@ pub fn resolve_path_cached(
     p
 }
 
+#[must_use]
 pub fn resolve_path_write_cached(
     raw: &str,
     project_root: &str,
@@ -407,7 +404,15 @@ pub fn resolve_path_write_cached(
     p
 }
 
-/// Check whether a resolved path escapes the project root.
+/// Check whether a path is blocked by traversal detection.
+/// Returns true if the path contains `..` segments that would escape the project root.
+#[must_use]
+pub fn is_blocked_path(path: &std::path::Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n == READ_BLOCKED_SENTINEL || n == WRITE_BLOCKED_SENTINEL)
+}
+
 /// Returns true if the path is safely within the project root (or is an
 /// absolute path that the model explicitly requested — those are allowed
 /// for reads but not for writes).
@@ -590,6 +595,9 @@ pub fn default_disk_read_delay_ms() -> u64 {
 }
 pub fn default_web_rate_limit_ms() -> u64 {
     1500
+}
+pub fn default_disk_write_rate_ms() -> u64 {
+    300
 }
 
 // -- Simple regex-like pattern matcher -----------------------------------------
@@ -989,24 +997,6 @@ fn session_provider_config(state: &AppState) -> (usize, usize) {
         .map(|p| p.handoff_percent.min(100) as usize)
         .unwrap_or(80);
     (max, handoff_pct)
-}
-
-/// Get the token count for the active session, preferring actual > estimated_full > heuristic.
-/// This includes tool definitions overhead for pre-flight/auto-handoff checks.
-#[allow(dead_code)]
-fn session_token_usage(state: &AppState) -> usize {
-    state
-        .active_session()
-        .map(|s| {
-            if s.actual_tokens_used > 0 {
-                s.actual_tokens_used
-            } else if s.estimated_full_tokens > 0 {
-                s.estimated_full_tokens
-            } else {
-                s.token_count()
-            }
-        })
-        .unwrap_or(0)
 }
 
 /// Get the token count for user-facing display: messages only (no tool definitions).

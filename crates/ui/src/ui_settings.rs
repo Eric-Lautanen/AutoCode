@@ -851,6 +851,17 @@ fn show_session_settings(ui: &mut egui::Ui, state: &mut AppState) {
                         ui.label(RichText::new("ms").size(10.5).color(Palette::TEXT_MUTED));
                     });
                     ui.end_row();
+
+                    ui.label(helpers::field_label("Disk Write Rate"));
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::DragValue::new(&mut state.disk_write_rate_ms)
+                                .speed(10.0)
+                                .range(0..=5000),
+                        );
+                        ui.label(RichText::new("ms").size(10.5).color(Palette::TEXT_MUTED));
+                    });
+                    ui.end_row();
                 });
 
             ui.add_space(6.0);
@@ -859,7 +870,9 @@ fn show_session_settings(ui: &mut egui::Ui, state: &mut AppState) {
                     "Messages in RAM: controls how many are held in memory and displayed. \
                      Full history is saved to disk and reloaded for API requests. \
                      Completion Delay: minimum pause (ms) between consecutive API calls \
-                     to pace rapid tool-use loops.",
+                     to pace rapid tool-use loops. \
+                     Disk Write Rate: minimum interval (ms) between message writes to disk. \
+                     0 = write every message immediately.",
                 )
                 .size(10.0)
                 .color(Palette::TEXT_MUTED),

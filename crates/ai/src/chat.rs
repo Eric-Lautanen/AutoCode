@@ -134,6 +134,9 @@ fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: Chat
             msg.role,
             msg.token_count
         );
+        // Queue a disk write so the JSONL is always the source of truth.
+        // The rate-limited writer flushes at most once per disk_write_rate_ms.
+        state.pending_writes.pending.push((sid.to_string(), msg.clone()));
         sess.messages.push(msg);
     }
 }
@@ -812,11 +815,6 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
 }
 
 // -- Per-frame update ----------------------------------------------------------
-
-#[allow(dead_code)]
-pub fn update(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
-    update_runtime(state, runtime)
-}
 
 fn update_runtime(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
     let mut repaint = false;

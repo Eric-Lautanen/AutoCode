@@ -204,7 +204,11 @@ impl AutocodeApp {
                 .iter()
                 .find(|p| Some(&p.id) == sess.project_id.as_ref())
             {
-                let _ = autocode_core::session_storage::save_session(proj, sess);
+                // Auto-save only persists metadata — the JSONL message file is
+                // the source of truth, written to by the rate-limited disk writer.
+                // This prevents auto-save from overwriting the message file with
+                // a RAM-trimmed subset.
+                let _ = autocode_core::session_storage::save_session_meta(proj, sess);
             }
         }
     }
@@ -228,6 +232,9 @@ impl eframe::App for AutocodeApp {
                 ctx.request_repaint_after(std::time::Duration::from_millis(50));
             }
         }
+
+        // Flush any pending message writes to disk (rate-limited).
+        self.state.flush_pending_writes(false);
 
         if self.sysinfo_rx.is_none()
             && ctx.data_mut(|d| {
@@ -411,6 +418,8 @@ impl eframe::App for AutocodeApp {
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        // Flush all pending writes so auto-save captures the latest metadata.
+        self.state.flush_pending_writes(true);
         {
             // Sync current session state into the active session before saving.
             let prov_label = self.state.active_provider.clone();
@@ -445,6 +454,9 @@ impl eframe::App for AutocodeApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // Flush all pending message writes to disk before shutdown.
+        self.state.flush_pending_writes(true);
+
         for runtime in self.runtimes.values_mut() {
             runtime.drain();
         }

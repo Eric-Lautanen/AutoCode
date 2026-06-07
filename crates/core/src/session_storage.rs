@@ -167,6 +167,40 @@ fn read_jsonl_messages(path: &Path) -> Vec<ChatMessage> {
         .collect()
 }
 
+/// Append messages to the session's JSONL file (fast path).
+/// Unlike `save_session` (which rewrites the whole file), this appends
+/// directly so it's safe to call frequently.
+pub fn append_messages_to_jsonl(
+    project: &Project,
+    session: &Session,
+    messages: &[ChatMessage],
+) -> std::io::Result<()> {
+    use std::io::Write;
+    let dir = project_sessions_dir(project);
+    if !dir.exists() {
+        fsutil::create_dir_all(&dir)?;
+    }
+    let path = find_messages_file(&dir, session)
+        .unwrap_or_else(|| dir.join(session.messages_filename()));
+    let path = fsutil::extended_path(&path);
+
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?;
+
+    for msg in messages {
+        let line = serde_json::to_string(msg)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        writeln!(file, "{}", line)?;
+    }
+    file.sync_all()?;
+    Ok(())
+}
+
+/// Save the full session (metadata + messages) to disk.
+/// This rewrites the entire JSONL file — prefer `append_messages_to_jsonl`
+/// for normal message persistence to avoid data races with the rate-limited writer.
 pub fn save_session(project: &Project, session: &Session) -> std::io::Result<()> {
     crate::debug_log!(
         "session_save: session={} msgs={} ids=[{}..{}] next_id={}",
@@ -230,6 +264,33 @@ pub fn save_session(project: &Project, session: &Session) -> std::io::Result<()>
     atomic_write_jsonl(&msg_path, &session.messages)
 }
 
+/// Save only session metadata (no messages) to disk.
+/// The JSONL message file is never touched — it's the source of truth managed
+/// by the rate-limited writer. Call this from auto-save to avoid overwriting
+/// the message file with a RAM-trimmed subset.
+pub fn save_session_meta(project: &Project, session: &Session) -> std::io::Result<()> {
+    let dir = project_sessions_dir(project);
+    if !dir.exists() {
+        fsutil::create_dir_all(&dir)?;
+    }
+    let meta = SessionMeta {
+        id: session.id.clone(),
+        label: session.label.clone(),
+        next_message_id: session.next_message_id,
+        provider_label: session.provider_label.clone(),
+        model: session.model.clone(),
+        todo_list: session.todo_list.clone(),
+        show_todo: session.show_todo,
+        todo_user_dismissed: session.todo_user_dismissed,
+        handoff_enabled: session.handoff_enabled,
+        show_explorer: session.show_explorer,
+        settings_open: session.settings_open,
+        actual_tokens_used: session.actual_tokens_used,
+    };
+    let meta_path = dir.join(session.filename());
+    atomic_write_json(&meta_path, &meta)
+}
+
 /// Load session metadata and messages from disk.
 /// Returns `true` if the metadata file was found (messages may be empty).
 pub fn load_session(project: &Project, session: &mut Session) -> bool {
@@ -276,6 +337,10 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
                 };
                 session.estimated_messages_tokens =
                     helpers::estimate_full_request_tokens(&filtered, None, model);
+                // estimated_full_tokens will be set on the next API request
+                // (prepare_request_messages_for_session includes tool definitions).
+                // This is a cosmetic ~500-token difference that resolves after
+                // the first completion.
                 session.estimated_full_tokens = session.estimated_messages_tokens;
             }
             Err(e) => {
