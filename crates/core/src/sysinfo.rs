@@ -30,17 +30,23 @@ pub fn grep_note_from(_info: &SysInfo) -> &'static str {
 }
 
 pub fn shell_tools_note_from(info: &SysInfo) -> String {
+    let platform = if cfg!(target_os = "windows") {
+        "Windows — use cmd/PowerShell syntax, NOT Unix commands (no head, tail, less etc.)"
+    } else {
+        "Unix"
+    };
     let available: Vec<&str> = info
         .tool_probes
         .iter()
         .filter(|p| p.available && p.name != "rg" && p.name != "grep" && p.name != "findstr")
         .map(|p| p.name.as_str())
         .collect();
-    if available.is_empty() {
+    let tool_part = if available.is_empty() {
         "No common dev tools detected on PATH.".to_string()
     } else {
         format!("Available CLI tools: {}", available.join(", "))
-    }
+    };
+    format!("Platform: {}. {}", platform, tool_part)
 }
 
 /// Seed the live cache from persisted state (called at startup).
