@@ -731,26 +731,31 @@ fn show_session_tabs(
                                         if close.on_hover_text("Close session").clicked() {
                                             autocode_ai::chat::abort_for_session(runtimes, &id);
                                             panel_state.scroll_offsets.remove(&id);
-                                            if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == id) {
-                                                sess.closed = true;
-                                                if let Some(pid) = sess.project_id.as_ref()
-                                                    && let Some(proj) = state.projects.iter().find(|p| &p.id == pid)
-                                                {
-                                                    // Save only metadata on close — the JSONL is the source
-                                                    // of truth and is already up to date via the rate-limited
-                                                    // writer. Calling save_session here would rewrite the JSONL
-                                                    // with only the RAM-resident window, wiping full history.
-                                                    let _ = autocode_core::session_storage::save_session_meta(proj, sess);
+                                            let was_used = state.sessions.iter()
+                                                .find(|s| s.id == id)
+                                                .is_some_and(|s| s.messages.iter().any(|m| m.role == Role::User));
+                                            if was_used {
+                                                // Session was used — mark closed so it can be reopened.
+                                                if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == id) {
+                                                    sess.closed = true;
+                                                    if let Some(pid) = sess.project_id.as_ref()
+                                                        && let Some(proj) = state.projects.iter().find(|p| &p.id == pid)
+                                                    {
+                                                        let _ = autocode_core::session_storage::save_session_meta(proj, sess);
+                                                    }
+                                                    sess.messages.clear();
                                                 }
-                                                sess.messages.clear();
-                                            }
-                                            if state.active_session_id.as_deref() == Some(&id) {
-                                                state.active_session_id = state
-                                                    .sessions
-                                                    .iter()
-                                                    .rev()
-                                                    .find(|s| s.id != id && !s.closed)
-                                                    .map(|s| s.id.clone());
+                                                if state.active_session_id.as_deref() == Some(&id) {
+                                                    state.active_session_id = state
+                                                        .sessions
+                                                        .iter()
+                                                        .rev()
+                                                        .find(|s| s.id != id && !s.closed)
+                                                        .map(|s| s.id.clone());
+                                                }
+                                            } else {
+                                                // Never used — delete entirely.
+                                                autocode_ai::session::delete_session(state, &id);
                                             }
                                             runtimes.remove(&id);
                                         }

@@ -170,7 +170,7 @@ pub fn delete_session(state: &mut AppState, id: &str) {
 
     state.sessions.retain(|s| s.id != id);
     if state.active_session_id.as_deref() == Some(id) {
-        state.active_session_id = state.sessions.last().map(|s| s.id.clone());
+        state.active_session_id = None;
     }
     state.expanded_dirs.retain(|d| !d.starts_with(id));
 }
