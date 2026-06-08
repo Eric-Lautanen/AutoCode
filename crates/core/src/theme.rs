@@ -41,9 +41,42 @@ impl Palette {
     // Semantic.
     pub const SUCCESS: Color32 = Color32::from_rgb(80, 180, 120);
     pub const WARNING: Color32 = Color32::from_rgb(210, 160, 60);
-    pub const TAB_ACCENT: Color32 = Color32::from_rgb(220, 140, 50);
     pub const ERROR: Color32 = Color32::from_rgb(210, 80, 80);
     pub const PURPLE: Color32 = Color32::from_rgb(160, 120, 220);
+}
+
+/// Generate a deterministic accent color for a project, derived from its ID.
+/// The result is theme-appropriate (moderately saturated, works on dark backgrounds).
+pub fn project_accent(project_id: &str) -> Color32 {
+    let hash: u64 = {
+        let mut h = 5381u64;
+        for b in project_id.bytes() {
+            h = h.wrapping_mul(33).wrapping_add(b as u64);
+        }
+        h
+    };
+    let hue = (hash % 360) as f32;
+    hsv_to_rgb(hue, 0.55, 0.72)
+}
+
+/// Convert HSV (hue 0–360, saturation/value 0–1) to an sRGB Color32.
+fn hsv_to_rgb(h: f32, s: f32, v: f32) -> Color32 {
+    let c = v * s;
+    let hp = h / 60.0;
+    let x = c * (1.0 - ((hp % 2.0) - 1.0).abs());
+    let (r, g, b) = match hp as i32 {
+        0 | 6 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = v - c;
+    let ri = ((r + m) * 255.0).round() as u8;
+    let gi = ((g + m) * 255.0).round() as u8;
+    let bi = ((b + m) * 255.0).round() as u8;
+    Color32::from_rgb(ri, gi, bi)
 }
 
 // -- apply() -- call once from AutocodeApp::new() -------------------------------
@@ -84,6 +117,11 @@ pub fn apply(ctx: &Context) {
 
     // Interact size -- minimum widget height (prevents squished buttons).
     style.spacing.interact_size.y = 24.0;
+
+    // Tooltip timing -- show immediately on hover.
+    style.interaction.show_tooltips_only_when_still = false;
+    style.interaction.tooltip_delay = 0.0;
+    style.interaction.tooltip_grace_time = 0.0;
 
     let mut v = Visuals::dark();
 

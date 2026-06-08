@@ -15,7 +15,7 @@ use crate::helpers;
 use autocode_ai::chat::{self, ChatRuntime};
 use autocode_core::{
     state::{AppState, ChatMessage, DesignSettings, Role, ToolMeta},
-    theme::{Palette, ROUND_LG, ROUND_MD, ROUND_SM},
+    theme::{project_accent, Palette, ROUND_LG, ROUND_MD, ROUND_SM},
 };
 
 thread_local! {
@@ -640,11 +640,11 @@ fn show_session_tabs(
                 ui.add_space(6.0);
                 ui.spacing_mut().item_spacing.x = 2.0;
 
-                let sessions: Vec<(String, String)> = state
+                let sessions: Vec<(String, String, Option<String>)> = state
                     .sessions
                     .iter()
                     .filter(|s| !s.closed)
-                    .map(|s| (s.id.clone(), s.label.clone()))
+                    .map(|s| (s.id.clone(), s.label.clone(), s.project_id.clone()))
                     .collect();
 
                 // Prune stale scroll offsets before rendering tabs
@@ -656,7 +656,15 @@ fn show_session_tabs(
                         .retain(|id, _| valid_ids.contains(id));
                 }
 
-                for (id, label) in sessions {
+                let tab_accent = state
+                    .active_session_id
+                    .as_deref()
+                    .and_then(|sid| state.sessions.iter().find(|s| s.id == *sid))
+                    .and_then(|s| s.project_id.as_deref())
+                    .map(project_accent)
+                    .unwrap_or(Palette::ACCENT);
+
+                for (id, label, project_id) in sessions {
                     ui.push_id(("session_tab", &id), |ui| {
                         let active = state.active_session_id.as_deref() == Some(&id);
                         // Check if this session has a running stream
@@ -680,7 +688,7 @@ fn show_session_tabs(
                             .stroke(Stroke::new(
                                 1.0,
                                 if active {
-                                    Palette::TAB_ACCENT
+                                    tab_accent
                                 } else {
                                     Color32::TRANSPARENT
                                 },
@@ -697,7 +705,7 @@ fn show_session_tabs(
                                     ui.spacing_mut().item_spacing.x = 2.0;
                                     // Activity indicator before the label
                                     if has_activity {
-                                        let ind_color = if active { Palette::TAB_ACCENT } else { theme().text_muted };
+                                        let ind_color = if active { tab_accent } else { theme().text_muted };
                                         ui.label(
                                             RichText::new(activity_char.to_string())
                                                 .size(11.5)
@@ -705,17 +713,23 @@ fn show_session_tabs(
                                                 .monospace(),
                                         );
                                     }
+                                    let project_name = project_id
+                                        .as_deref()
+                                        .and_then(|pid| state.projects.iter().find(|p| p.id == pid))
+                                        .map(|p| p.name.as_str())
+                                        .unwrap_or("No project");
                                     let tab_resp = ui.add(
                                         egui::Button::new(RichText::new(&label).size(11.5).color(
                                             if active {
-                                                Palette::TAB_ACCENT
+                                                tab_accent
                                             } else {
                                                 theme().text_muted
                                             },
                                         ))
                                         .fill(Color32::TRANSPARENT)
                                         .stroke(egui::Stroke::NONE),
-                                    );
+                                    )
+                                    .on_hover_text(project_name);
                                     if tab_resp.clicked() {
                                         state.active_session_id = Some(id.clone());
                                     }

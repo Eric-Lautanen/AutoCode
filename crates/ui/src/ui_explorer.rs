@@ -568,7 +568,8 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
                         let font_id = FontId::monospace(13.0);
                         let char_width = ui.fonts_mut(|f| f.glyph_width(&font_id, 'W'));
                         let max_line_len = buffer.lines().map(|l| l.chars().count()).max().unwrap_or(0);
-                        let max_content_width = gutter_w + 4.0 + max_line_len as f32 * char_width;
+                        let right_pad = 48.0;
+                        let max_content_width = gutter_w + 4.0 + max_line_len as f32 * char_width + right_pad;
                         ScrollArea::both()
                             .id_salt("file_viewer_scroll")
                             .auto_shrink([false; 2])
@@ -576,7 +577,8 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
                                 ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
                                 ui.set_min_width(max_content_width);
                                 let row_h = ui.fonts_mut(|f| f.row_height(&font_id));
-                                let total_h = line_count as f32 * row_h;
+                                let bottom_pad = 2.0 * row_h;
+                                let total_h = line_count as f32 * row_h + bottom_pad;
 
                                 // Paint gutter background and separator
                                 let painter = ui.painter();
@@ -624,6 +626,8 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
                                         if resp.changed() { changed = true; }
                                     });
                                 }
+                                // Bottom padding so vertical scrollbar doesn't cover last line.
+                                ui.add_space(bottom_pad);
                                 if changed {
                                     *buffer = lines.join("\n");
                                 }
