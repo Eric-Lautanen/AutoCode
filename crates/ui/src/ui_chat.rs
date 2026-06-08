@@ -738,8 +738,9 @@ fn show_session_tabs(
                                         .and_then(|pid| state.projects.iter().find(|p| p.id == pid))
                                         .map(|p| p.name.as_str())
                                         .unwrap_or("No project");
+                                    let truncated: String = label.chars().take(25).collect();
                                     let tab_resp = ui.add(
-                                        egui::Button::new(RichText::new(&label).size(11.5).color(
+                                        egui::Button::new(RichText::new(truncated).size(11.5).color(
                                             if active {
                                                 tab_accent
                                             } else {
@@ -749,7 +750,7 @@ fn show_session_tabs(
                                         .fill(Color32::TRANSPARENT)
                                         .stroke(egui::Stroke::NONE),
                                     )
-                                    .on_hover_text(project_name);
+                                    .on_hover_text(format!("{} — {}", &label, project_name));
                                     if tab_resp.clicked() {
                                         state.active_session_id = Some(id.clone());
                                     }

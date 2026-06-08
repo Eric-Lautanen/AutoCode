@@ -374,7 +374,6 @@ impl ChatRuntime {
         self.assistant_tool_calls_json = None;
         self.provider_error = None;
         self.retry_count = 0;
-        self.active_session_id = None;
         self.status = "Ready".to_string();
         self.request_start = None;
         self.last_delta_time = None;
@@ -2007,11 +2006,9 @@ fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
         runtime.handoff_trigger_sent = false;
         return;
     }
-    // Stop any active stream before injecting the trigger prompt.
-    runtime.drain();
-
     // First, send the trigger prompt to give the model a chance to clean up.
     if !runtime.handoff_trigger_sent {
+        runtime.drain();
         runtime.handoff_trigger_sent = true;
         let msg = ChatMessage::new(
             autocode_core::state::Role::User,
@@ -2022,7 +2019,12 @@ fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
         return;
     }
     // Token usage still exceeds threshold and trigger prompt was already sent
-    // but the model did not call handoff — force it now.
+    // but the model did not call handoff — force it now. Wait for the model's
+    // response to the trigger prompt before forcing.
+    if runtime.stream_rx.is_some() {
+        return;
+    }
+    runtime.drain();
     handle_handoff(state, runtime);
 }
 
