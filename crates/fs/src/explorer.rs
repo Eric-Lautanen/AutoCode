@@ -91,22 +91,23 @@ pub fn find_project_root(dir: &Path) -> Option<PathBuf> {
 /// List the immediate children of `dir`, sorted: dirs first, then files.
 /// Entries matching the nearest .gitignore are excluded.
 pub fn list_dir(dir: &Path) -> Vec<FsEntry> {
-    list_dir_impl(dir, true)
+    list_dir_impl(dir, true, true)
 }
 
-/// Like `list_dir` but does NOT apply .gitignore filtering — intended for
-/// the file explorer UI where users expect to see every file on disk.
+/// Like `list_dir` but does NOT apply any filtering (.gitignore or hidden
+/// files) — intended for the file explorer UI where users expect to see
+/// every file on disk.
 pub fn list_dir_all(dir: &Path) -> Vec<FsEntry> {
-    list_dir_impl(dir, false)
+    list_dir_impl(dir, false, false)
 }
 
-fn list_dir_impl(dir: &Path, filter_gitignore: bool) -> Vec<FsEntry> {
+fn list_dir_impl(dir: &Path, filter_gitignore: bool, filter_hidden: bool) -> Vec<FsEntry> {
     let Ok(entries) = fsutil::read_dir(dir) else {
         return Vec::new();
     };
 
     // Load gitignore from project root if available.
-    let root = find_project_root(dir);
+    let root = if filter_gitignore { find_project_root(dir) } else { None };
     let gitignore = root
         .as_deref()
         .map(|r| Gitignore::load(&r.join(".gitignore")));
@@ -122,8 +123,8 @@ fn list_dir_impl(dir: &Path, filter_gitignore: bool) -> Vec<FsEntry> {
             .unwrap_or("")
             .to_string();
 
-        // Skip hidden files/dirs (dot-prefixed).
-        if name.starts_with('.') {
+        // Skip hidden files/dirs (dot-prefixed) when requested.
+        if filter_hidden && name.starts_with('.') {
             continue;
         }
 
