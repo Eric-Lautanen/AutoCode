@@ -204,11 +204,12 @@ impl AutocodeApp {
                 .iter()
                 .find(|p| Some(&p.id) == sess.project_id.as_ref())
             {
-                // Auto-save only persists metadata — the JSONL message file is
-                // the source of truth, written to by the rate-limited disk writer.
-                // This prevents auto-save from overwriting the message file with
-                // a RAM-trimmed subset.
-                let _ = autocode_core::session_storage::save_session_meta(proj, sess);
+                // Only write metadata if the session files still exist on disk.
+                // Disk is the source of truth — if the user deleted the session
+                // manually we must not recreate it.
+                if autocode_core::session_storage::session_exists(proj, sess) {
+                    let _ = autocode_core::session_storage::save_session_meta(proj, sess);
+                }
             }
         }
     }
@@ -235,6 +236,19 @@ impl eframe::App for AutocodeApp {
 
         // Flush any pending message writes to disk (rate-limited).
         self.state.flush_pending_writes(false);
+
+        // Periodically check for sessions deleted from disk while the app is
+        // running. Disk is the source of truth — purge anything missing.
+        {
+            let now = autocode_core::helpers::unix_now();
+            let last = ctx.data_mut(|d| {
+                *d.get_temp_mut_or_insert_with(egui::Id::new("last_stale_purge"), || 0u64)
+            });
+            if now.saturating_sub(last) >= 30 {
+                ctx.data_mut(|d| d.insert_temp(egui::Id::new("last_stale_purge"), now));
+                Self::purge_stale_stubs(&mut self.state);
+            }
+        }
 
         if self.sysinfo_rx.is_none()
             && ctx.data_mut(|d| {

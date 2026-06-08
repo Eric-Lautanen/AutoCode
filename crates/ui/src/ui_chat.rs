@@ -143,8 +143,6 @@ fn theme() -> ThemeColors {
 pub struct ChatPanelState {
     pub input: String,
     pub scroll_to_bottom: bool,
-    pub needs_focus: bool,
-    focus_attempts: u8,
     prev_session_id: Option<String>,
     scroll_offsets: std::collections::HashMap<String, f32>,
     scroll_area_id: Option<egui::Id>,
@@ -166,8 +164,6 @@ impl Default for ChatPanelState {
         Self {
             input: String::new(),
             scroll_to_bottom: true,
-            needs_focus: false,
-            focus_attempts: 0,
             prev_session_id: None,
             scroll_offsets: std::collections::HashMap::new(),
             scroll_area_id: None,
@@ -494,7 +490,14 @@ fn save_old_session(
             .iter()
             .find(|p| Some(&p.id) == old_sess.project_id.as_ref())
         {
-            let _ = autocode_core::session_storage::save_session(old_proj, old_sess);
+            // Closed sessions already had metadata saved and messages cleared
+            // in the close handler — save_session would rewrite the JSONL with
+            // an empty message set, wiping history.
+            if old_sess.closed {
+                let _ = autocode_core::session_storage::save_session_meta(old_proj, old_sess);
+            } else {
+                let _ = autocode_core::session_storage::save_session(old_proj, old_sess);
+            }
         }
         if !runtimes.contains_key(old_id) {
             old_sess.messages.clear();
@@ -726,8 +729,11 @@ fn show_session_tabs(
                                                 if let Some(pid) = sess.project_id.as_ref()
                                                     && let Some(proj) = state.projects.iter().find(|p| &p.id == pid)
                                                 {
-                                                    // Save messages to disk BEFORE clearing RAM.
-                                                    let _ = autocode_core::session_storage::save_session(proj, sess);
+                                                    // Save only metadata on close — the JSONL is the source
+                                                    // of truth and is already up to date via the rate-limited
+                                                    // writer. Calling save_session here would rewrite the JSONL
+                                                    // with only the RAM-resident window, wiping full history.
+                                                    let _ = autocode_core::session_storage::save_session_meta(proj, sess);
                                                 }
                                                 sess.messages.clear();
                                             }
@@ -2139,27 +2145,11 @@ fn show_input_row(
                         && !ui.input(|i| i.modifiers.ctrl);
                     let send_shortcut = enter_pressed && send_enabled && !busy;
 
-                    // Focus management:
-                    // 1) User-initiated clicks ALWAYS get focus (even with popups open).
-                    // 2) Programmatic reclaim only on startup or after a popup closes.
-                    let ctx = ui.ctx().clone();
-                    let input_id = egui::Id::new(format!("chat_input_{}", sid));
-
-                    // Deferred focus: wait a few frames so the widget tree settles.
+                    // Focus management: only focus the input when the user clicks it.
                     if resp.clicked() {
-                        ctx.memory_mut(|mem| mem.request_focus(input_id));
-                        panel_state.needs_focus = false;
-                        panel_state.focus_attempts = 0;
-                    }
-                    if panel_state.needs_focus && !ctx.text_edit_focused() {
-                        if panel_state.focus_attempts >= 10 {
-                            ctx.memory_mut(|mem| mem.request_focus(input_id));
-                            panel_state.needs_focus = false;
-                            panel_state.focus_attempts = 0;
-                        } else {
-                            panel_state.focus_attempts += 1;
-                            ctx.request_repaint();
-                        }
+                        ui.ctx().memory_mut(|mem| {
+                            mem.request_focus(egui::Id::new(format!("chat_input_{}", sid)))
+                        });
                     }
 
                     // Thinking mode toggle + reasoning effort between input and action buttons.
