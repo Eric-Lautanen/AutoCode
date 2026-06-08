@@ -3146,7 +3146,10 @@ fn sanitize_session_name(raw: &str) -> Option<String> {
         .chars()
         .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == ' ')
         .collect();
-    if s.trim().is_empty() { None } else { Some(s) }
+    let s = s.trim();
+    if s.is_empty() { return None; }
+    let s: String = s.chars().take(80).collect();
+    Some(s)
 }
 
 
