@@ -1313,7 +1313,19 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) else {
                     continue;
                 };
-                if sess.session_named { continue; }
+                if sess.session_named {
+                    let label = sess.label.clone();
+                    let _ = sess;
+                    let content = format!("Session already named '{}'. No change.", label);
+                    let mut msg = ChatMessage::new(Role::Tool, content);
+                    msg.tool_call_id = Some(tc.id.clone());
+                    msg.tool_meta = Some(ToolMeta {
+                        tool_name: "name_session".into(),
+                        ..Default::default()
+                    });
+                    push_to_session(state, runtime.active_session_id.as_deref(), msg);
+                    continue;
+                }
 
                 if let Some(name) = name_arg
                     && let Some(safe) = sanitize_session_name(name)
