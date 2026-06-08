@@ -761,6 +761,7 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
         if estimated + max_output > max_context {
             let room = max_context.saturating_sub(estimated);
             if room < 1000 && state.handoff_enabled {
+                runtime.drain();
                 handle_handoff(state, runtime);
                 return;
             }
@@ -1969,10 +1970,6 @@ fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     if !state.handoff_enabled || runtime.handoff_in_progress {
         return;
     }
-    // Only trigger when idle (no streams, tools, or shells running).
-    if runtime.stream_rx.is_some() || runtime.tool_rx.is_some() || runtime.live_shell_rx.is_some() {
-        return;
-    }
     let Some(sid) = runtime.active_session_id.as_ref() else {
         return;
     };
@@ -2010,6 +2007,9 @@ fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
         runtime.handoff_trigger_sent = false;
         return;
     }
+    // Stop any active stream before injecting the trigger prompt.
+    runtime.drain();
+
     // First, send the trigger prompt to give the model a chance to clean up.
     if !runtime.handoff_trigger_sent {
         runtime.handoff_trigger_sent = true;
