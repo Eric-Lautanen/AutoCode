@@ -441,8 +441,8 @@ fn context_usage_info_for_session(state: &AppState, session_id: &str) -> (usize,
         .map(|s| {
             if s.actual_tokens_used > 0 {
                 s.actual_tokens_used
-            } else if s.estimated_messages_tokens > 0 {
-                s.estimated_messages_tokens
+            } else if s.estimated_full_tokens > 0 {
+                s.estimated_full_tokens
             } else {
                 s.token_count()
             }

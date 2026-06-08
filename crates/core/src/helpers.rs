@@ -1019,8 +1019,8 @@ fn session_messages_usage(state: &AppState) -> usize {
         .map(|s| {
             if s.actual_tokens_used > 0 {
                 s.actual_tokens_used
-            } else if s.estimated_messages_tokens > 0 {
-                s.estimated_messages_tokens
+            } else if s.estimated_full_tokens > 0 {
+                s.estimated_full_tokens
             } else {
                 s.token_count()
             }
@@ -1030,7 +1030,8 @@ fn session_messages_usage(state: &AppState) -> usize {
 
 /// Percentage of context window used (0.0 - 1.0),
 /// based on the session's actual provider, not the UI-selected one.
-/// Shows messages-only estimate for user-facing display consistency.
+/// Uses estimated_full_tokens (messages + tool definitions) to match
+/// the pre-flight check in start_completion.
 pub fn budget_fraction(state: &AppState) -> f32 {
     let (max, _) = session_provider_config(state);
     let used = session_messages_usage(state);
@@ -1046,8 +1047,8 @@ pub fn usage_display(state: &AppState) -> String {
     let (used, label) = if let Some(s) = sess {
         if s.actual_tokens_used > 0 {
             (s.actual_tokens_used, "actual")
-        } else if s.estimated_messages_tokens > 0 {
-            (s.estimated_messages_tokens, "est")
+        } else if s.estimated_full_tokens > 0 {
+            (s.estimated_full_tokens, "est")
         } else {
             (s.token_count(), "est")
         }
