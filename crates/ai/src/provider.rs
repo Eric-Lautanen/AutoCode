@@ -658,7 +658,7 @@ fn parse_url(
 fn connect_tcp(host: &str, port: u16, timeout_secs: u64) -> std::io::Result<TcpStream> {
     use std::net::ToSocketAddrs;
     let timeout = std::time::Duration::from_secs(timeout_secs);
-    let start = std::time::Instant::now();
+    let _start = std::time::Instant::now();
     let addrs = match (host, port).to_socket_addrs() {
         Ok(a) => a,
         Err(e) => {
@@ -720,7 +720,7 @@ fn send_http(
     tx: Sender<ProviderEvent>,
     timeouts: &TimeoutConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let t0 = std::time::Instant::now();
+    let _t0 = std::time::Instant::now();
     debug_log!(
         "provider::send_http: host={} port={} stream={} body_len={}",
         conn.host,
@@ -733,7 +733,7 @@ fn send_http(
     apply_timeouts(&stream_conn, stream, timeouts)?;
 
     let request = build_http_request(conn.host, conn.path, api_key, body);
-    let t1 = std::time::Instant::now();
+    let _t1 = std::time::Instant::now();
     stream_conn.write_all(request.as_bytes())?;
     stream_conn.flush()?;
     debug_log!("provider::send_http write_all took {:?}", t1.elapsed());
@@ -751,7 +751,7 @@ fn send_https(
     tx: Sender<ProviderEvent>,
     timeouts: &TimeoutConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let t0 = std::time::Instant::now();
+    let _t0 = std::time::Instant::now();
     debug_log!(
         "provider::send_https: host={} port={} stream={} body_len={}",
         conn.host,
@@ -769,12 +769,12 @@ fn send_https(
         .map_err(|_| "invalid DNS name")?;
     let server_name = ServerName::DnsName(dns_name);
     let client = rustls::ClientConnection::new(config, server_name)?;
-    let t1 = std::time::Instant::now();
+    let _t1 = std::time::Instant::now();
     let mut tls_stream = rustls::StreamOwned::new(client, stream);
     debug_log!("provider::send_https tls_handshake took {:?}", t1.elapsed());
 
     let request = build_http_request(conn.host, conn.path, api_key, body);
-    let t2 = std::time::Instant::now();
+    let _t2 = std::time::Instant::now();
     tls_stream.write_all(request.as_bytes())?;
     tls_stream.flush()?;
     debug_log!("provider::send_https write_all took {:?}", t2.elapsed());
@@ -835,8 +835,6 @@ fn process_http_response<R: BufRead>(
     let mut status_text = String::new();
     let mut retry_after_secs: Option<u64> = None;
     let mut is_chunked = false;
-    let mut header_count = 0u32;
-
     for line in reader.by_ref().lines().map_while(Result::ok) {
         if line.starts_with("HTTP/") {
             let mut parts = line.splitn(3, ' ');
@@ -856,7 +854,6 @@ fn process_http_response<R: BufRead>(
         if lower.contains("transfer-encoding:") && lower.contains("chunked") {
             is_chunked = true;
         }
-        header_count += 1;
         if line.trim().is_empty() {
             break;
         }
@@ -950,7 +947,7 @@ fn parse_sse_stream_from_reader<R: BufRead>(
     reader: R,
     tx: &Sender<ProviderEvent>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let sse_start = std::time::Instant::now();
+    let _sse_start = std::time::Instant::now();
     let mut lines = reader.lines();
     let mut tool_acc: std::collections::HashMap<usize, (String, String, String)> =
         std::collections::HashMap::new();
@@ -1301,7 +1298,7 @@ pub fn native_post(
     timeout_secs: u64,
     extra_headers: &[(&str, &str)],
 ) -> Result<String, String> {
-    let t0 = std::time::Instant::now();
+    let _t0 = std::time::Instant::now();
     let (host, path, port, use_tls) = parse_url(url).map_err(|e| e.to_string())?;
     debug_log!(
         "provider::native_post: {} body_len={} timeout={}",
@@ -1427,7 +1424,7 @@ pub fn count_input_tokens(
     model: &str,
     timeout_secs: u64,
 ) -> Result<usize, String> {
-    let t0 = std::time::Instant::now();
+    let _t0 = std::time::Instant::now();
     let url = provider
         .counting_endpoint_url()
         .ok_or_else(|| "no counting API for this provider".to_string())?;
@@ -1494,7 +1491,7 @@ pub fn native_get(url: &str, timeout_secs: u64, max_bytes: usize) -> Result<Vec<
     // Rate limit: enforce minimum delay between web requests.
     enforce_web_rate_limit();
 
-    let t0 = std::time::Instant::now();
+    let _t0 = std::time::Instant::now();
     let (host, path, port, use_tls) = parse_url(url).map_err(|e| e.to_string())?;
     let addr = format!("{}:{}", host, port);
     debug_log!(

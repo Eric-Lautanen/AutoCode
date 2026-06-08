@@ -75,9 +75,7 @@ pub fn log_fmt(args: std::fmt::Arguments<'_>) {
 
 #[macro_export]
 macro_rules! debug_log {
-    ($($arg:tt)*) => {
-        $crate::debug::log_fmt(format_args!($($arg)*))
-    };
+    ($($arg:tt)*) => {};
 }
 
 /// Called at app startup to mark log boundary.

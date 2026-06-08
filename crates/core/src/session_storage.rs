@@ -333,11 +333,11 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
                 // the first completion.
                 session.estimated_full_tokens = session.estimated_messages_tokens;
             }
-            Err(e) => {
+            Err(_e) => {
                 crate::debug_log!("session_storage: corrupt JSON for {}: {}", session.id, e);
             }
         },
-        Err(e) => {
+        Err(_e) => {
             crate::debug_log!("session_storage: read error for {}: {}", session.id, e);
         }
     }
@@ -405,7 +405,7 @@ pub fn load_messages_before(
     }
     let start = end.saturating_sub(count);
     let loaded = full[start..end].to_vec();
-    let loaded_ids: Vec<u64> = loaded.iter().map(|m| m.id).collect();
+    let _loaded_ids: Vec<u64> = loaded.iter().map(|m| m.id).collect();
     crate::debug_log!(
         "load_before: session={} before_id={} disk_total={} \
          loaded={} ids=[{}..{}]",

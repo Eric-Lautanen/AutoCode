@@ -164,10 +164,10 @@ fn trim_session_ram(state: &mut AppState, session_id: &str) {
     }
     let keep = window;
     let drop_count = len - keep;
-    let first_dropped_id = state.sessions[idx].messages[0].id;
-    let last_dropped_id = state.sessions[idx].messages[drop_count - 1].id;
-    let first_kept_id = state.sessions[idx].messages[drop_count].id;
-    let last_kept_id = state.sessions[idx]
+    let _first_dropped_id = state.sessions[idx].messages[0].id;
+    let _last_dropped_id = state.sessions[idx].messages[drop_count - 1].id;
+    let _first_kept_id = state.sessions[idx].messages[drop_count].id;
+    let _last_kept_id = state.sessions[idx]
         .messages
         .last()
         .map(|m| m.id)
@@ -175,7 +175,7 @@ fn trim_session_ram(state: &mut AppState, session_id: &str) {
     let sess = &mut state.sessions[idx];
     let _ = sess.messages.split_off(len - keep);
     sess.messages.shrink_to(0);
-    let new_next_id = sess.next_message_id;
+    let _new_next_id = sess.next_message_id;
     debug_log!(
         "ram_evict: session={} window={} dropped={} (ids {}..{}) kept={} (ids {}..{}) next_id={}",
         session_id,
@@ -551,6 +551,13 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
         debug_log!("chat: start_completion skipped — stream already active");
         return;
     }
+    // Clear stale error messages — they should only show during the backoff
+    // period, not when a retry actually fires.
+    if let Some(sid) = runtime.active_session_id.as_deref() {
+        if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
+            sess.messages.retain(|m| m.role != Role::Error);
+        }
+    }
     // Sync web rate limit from state so provider uses the latest value.
     crate::provider::set_web_rate_limit_ms(state.web_rate_limit_ms);
     // Rate limit: enforce minimum delay between completion starts.
@@ -680,7 +687,7 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
 
     // Pre-flight context check: estimate if this request fits within the
     // model's context window before sending. Prevents opaque API errors.
-    let estimated = {
+    let _estimated = {
         let tools_json = tool_definitions();
         let msgs: Vec<serde_json::Value> = messages.iter().map(|m| {
             let mut obj = serde_json::json!({
@@ -713,7 +720,7 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
                         debug_log!("chat: pre-flight API count={}", count);
                         break 'block count;
                     }
-                    Err(e) => {
+                    Err(_e) => {
                         debug_log!("chat: pre-flight API count failed ({})", e);
                     }
                 }
@@ -943,8 +950,8 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 prompt_tokens,
                 completion_tokens,
             }) => {
-                let resp_preview: String = runtime.pending_response.chars().take(200).collect();
-                let reason_len = runtime.reasoning_buf.len();
+                let _resp_preview: String = runtime.pending_response.chars().take(200).collect();
+                let _reason_len = runtime.reasoning_buf.len();
                 debug_log!(
                     "chat: stream Done: prompt={} comp={} reason_len={} resp_preview={:?}",
                     prompt_tokens,
@@ -1488,7 +1495,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 ];
                 // Non-shell tools run in this batch; use a shorter timeout for
                 // pure file operations vs web/network tools that may take longer.
-                let per_tool_timeout = if calls_clone
+                let _per_tool_timeout = if calls_clone
                     .iter()
                     .all(|tc| fast_tools.contains(&tc.name.as_str()))
                 {
