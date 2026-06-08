@@ -2,7 +2,7 @@
 // Uses egui CollapsingHeader for directory nodes (native open/close triangles),
 // selectable labels for files, and a floating code-viewer window.
 
-use egui::{Color32, Frame, Key, Margin, RichText, ScrollArea, Stroke, TextEdit, TextureHandle};
+use egui::{Color32, FontId, Frame, Key, Margin, RichText, ScrollArea, Stroke, TextEdit, TextureHandle};
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -116,7 +116,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, panel: &mut ExplorerPanelSt
                     );
                     ui.add_space(4.0);
 
-                    ScrollArea::vertical()
+                    ScrollArea::both()
                         .id_salt("explorer_scroll")
                         .auto_shrink([false; 2])
                         .show(ui, |ui| {
@@ -562,18 +562,71 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
                 match &panel.file_content {
                     Some(Ok(_)) => {
                         let buffer = panel.file_edit_buffer.as_mut().unwrap();
+                        let line_count = buffer.lines().count().max(1);
+                        let digits = line_count.ilog10() as usize + 1;
+                        let gutter_w = 12.0 + digits as f32 * 8.0;
+                        let font_id = FontId::monospace(13.0);
+                        let char_width = ui.fonts_mut(|f| f.glyph_width(&font_id, 'W'));
+                        let max_line_len = buffer.lines().map(|l| l.chars().count()).max().unwrap_or(0);
+                        let max_content_width = gutter_w + 4.0 + max_line_len as f32 * char_width;
                         ScrollArea::both()
                             .id_salt("file_viewer_scroll")
                             .auto_shrink([false; 2])
                             .show(ui, |ui| {
-                                ui.add_sized(
-                                    ui.available_size(),
-                                    egui::TextEdit::multiline(buffer)
-                                        .id(egui::Id::new(("file_viewer_text", file_path)))
-                                        .font(egui::TextStyle::Monospace)
-                                        .desired_width(f32::INFINITY)
-                                        .text_color(Palette::TEXT_CODE),
+                                ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+                                ui.set_min_width(max_content_width);
+                                let row_h = ui.fonts_mut(|f| f.row_height(&font_id));
+                                let total_h = line_count as f32 * row_h;
+
+                                // Paint gutter background and separator
+                                let painter = ui.painter();
+                                painter.rect_filled(
+                                    egui::Rect::from_min_max(
+                                        egui::pos2(0.0, 0.0),
+                                        egui::pos2(gutter_w, total_h),
+                                    ),
+                                    egui::CornerRadius::ZERO,
+                                    Palette::BG_SURFACE,
                                 );
+                                painter.line_segment(
+                                    [egui::pos2(gutter_w, 0.0), egui::pos2(gutter_w, total_h)],
+                                    Stroke::new(1.0, Palette::BORDER),
+                                );
+
+                                let mut lines: Vec<String> = buffer.lines().map(|l| l.to_string()).collect();
+                                if lines.is_empty() { lines.push(String::new()); }
+                                let mut changed = false;
+                                for (i, line_buf) in lines.iter_mut().enumerate() {
+                                    ui.horizontal(|ui| {
+                                        ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+
+                                        let (num_rect, _) = ui.allocate_exact_size(
+                                            egui::vec2(gutter_w, row_h),
+                                            egui::Sense::hover(),
+                                        );
+                                        ui.put(
+                                            num_rect,
+                                            egui::Label::new(
+                                                RichText::new(format!("{:>width$}", i + 1, width = digits))
+                                                    .font(font_id.clone())
+                                                    .color(Palette::TEXT_MUTED),
+                                            ),
+                                        );
+
+                                        ui.add_space(4.0);
+                                        let resp = ui.add(
+                                            TextEdit::singleline(line_buf)
+                                                .font(font_id.clone())
+                                                .text_color(Palette::TEXT_CODE)
+                                                .frame(egui::Frame::NONE)
+                                                .desired_width(f32::INFINITY),
+                                        );
+                                        if resp.changed() { changed = true; }
+                                    });
+                                }
+                                if changed {
+                                    *buffer = lines.join("\n");
+                                }
                             });
                     }
                     Some(Err(e)) => {
