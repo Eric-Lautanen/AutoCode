@@ -883,6 +883,9 @@ pub struct AppState {
     #[serde(default = "crate::helpers::default_handoff_prompt_string")]
     pub handoff_prompt: String,
 
+    #[serde(default = "crate::helpers::default_handoff_trigger_prompt_string")]
+    pub handoff_trigger_prompt: String,
+
     #[serde(default = "crate::helpers::default_handoff_enabled")]
     pub handoff_enabled: bool,
 
@@ -1009,6 +1012,7 @@ impl Default for AppState {
             active_session_id: None,
             system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
             handoff_prompt: DEFAULT_HANDOFF_PROMPT.to_string(),
+            handoff_trigger_prompt: DEFAULT_HANDOFF_TRIGGER_PROMPT.to_string(),
             handoff_enabled: false,
             shell_tasks: Vec::new(),
             show_explorer: true,
@@ -1206,3 +1210,13 @@ RULES
 pub const DEFAULT_HANDOFF_PROMPT: &str = "\
 Read RESUME.md in the project root for previous session progress and task list. \
 If not found, review git log and open files to determine prior work, then continue.";
+
+pub const DEFAULT_HANDOFF_TRIGGER_PROMPT: &str = "\
+⚠️ CONTEXT WARNING: The context window is near its limit.
+
+This conversation must end now. Immediately:
+1. STOP all ongoing work.
+2. Update RESUME.md with your complete progress and current task status.
+3. Call the `handoff` tool with an appropriate reason.
+
+Do NOT continue working or write any more code. Use the handoff tool now.";

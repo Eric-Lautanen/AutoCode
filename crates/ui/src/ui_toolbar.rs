@@ -128,20 +128,10 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
 
                 helpers::toolbar_separator(ui);
 
-                // -- Provider / model pill -----------------------------
-                let active_model = state
-                    .active_provider()
-                    .map(|p| p.model.chars().take(28).collect::<String>())
-                    .unwrap_or_default();
-                let prov_display = if active_model.is_empty() {
-                    state.active_provider.clone()
-                } else {
-                    format!("{} -- {}", state.active_provider, active_model)
-                };
-
+                // -- Provider picker ------------------------------------
                 egui::ComboBox::from_id_salt("provider_picker")
                     .selected_text(
-                        RichText::new(&prov_display)
+                        RichText::new(&state.active_provider)
                             .size(11.0)
                             .color(Palette::TEXT_MUTED),
                     )
@@ -168,6 +158,52 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                                     if let Some(sess) = state.active_session_mut() {
                                         sess.provider_label = key;
                                         sess.model = model;
+                                    }
+                                }
+                            });
+                        }
+                    });
+
+                // -- Model picker --------------------------------------
+                let current_model = state
+                    .active_provider()
+                    .map(|p| p.model.clone())
+                    .unwrap_or_default();
+
+                egui::ComboBox::from_id_salt("model_picker")
+                    .selected_text(
+                        RichText::new(&current_model)
+                            .size(11.0)
+                            .color(Palette::TEXT_MUTED),
+                    )
+                    .show_ui(ui, |ui| {
+                        let manifest_models: Vec<String> = state
+                            .active_provider()
+                            .and_then(|p| autocode_core::state::provider_manifest(&p.kind))
+                            .map(|m| {
+                                let mut keys: Vec<String> = m.models.keys().cloned().collect();
+                                keys.sort();
+                                keys
+                            })
+                            .unwrap_or_default();
+
+                        let mut all_models = manifest_models;
+                        if !current_model.is_empty() && !all_models.contains(&current_model) {
+                            all_models.insert(0, current_model.clone());
+                        }
+
+                        for model_id in &all_models {
+                            ui.push_id(("model_sel", model_id.clone()), |ui| {
+                                let sel = current_model == *model_id;
+                                if ui.selectable_label(sel, model_id).clicked() {
+                                    if let Some(prov) =
+                                        state.providers.get_mut(&state.active_provider)
+                                    {
+                                        prov.model.clone_from(model_id);
+                                        prov.fill_from_manifest();
+                                    }
+                                    if let Some(sess) = state.active_session_mut() {
+                                        sess.model.clone_from(model_id);
                                     }
                                 }
                             });

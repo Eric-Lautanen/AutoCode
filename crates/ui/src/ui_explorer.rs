@@ -24,6 +24,8 @@ pub struct ExplorerPanelState {
     renaming: Option<String>,
     /// Current text in the rename input (persisted across frames).
     rename_buffer: String,
+    /// Editable buffer for the file viewer text content.
+    file_edit_buffer: Option<String>,
 }
 
 // -- Panel entry point ---------------------------------------------------------
@@ -128,6 +130,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, panel: &mut ExplorerPanelSt
                                 image_texture: &mut panel.image_texture,
                                 renaming: &mut panel.renaming,
                                 rename_buffer: &mut panel.rename_buffer,
+                                file_edit_buffer: &mut panel.file_edit_buffer,
                             };
                             show_tree(ui, root, &mut tree_state);
                         });
@@ -148,6 +151,7 @@ struct TreeState<'a> {
     image_texture: &'a mut Option<(String, TextureHandle)>,
     renaming: &'a mut Option<String>,
     rename_buffer: &'a mut String,
+    file_edit_buffer: &'a mut Option<String>,
 }
 
 fn show_tree(ui: &mut egui::Ui, dir: &std::path::Path, state: &mut TreeState<'_>) {
@@ -335,8 +339,9 @@ fn show_tree(ui: &mut egui::Ui, dir: &std::path::Path, state: &mut TreeState<'_>
                         if is_image {
                             *state.file_content = None;
                         } else {
-                            *state.file_content =
-                                Some(autocode_fs::explorer::read_file(&entry.path));
+                            let result = autocode_fs::explorer::read_file(&entry.path);
+                            *state.file_edit_buffer = result.as_ref().ok().cloned();
+                            *state.file_content = Some(result);
                         }
                         *state.show_viewer = true;
                     }
@@ -413,9 +418,8 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
         .open(&mut open)
         .title_bar(false)
         .resizable(true)
-        .default_size([720.0, 400.0])
+        .default_size([960.0, 600.0])
         .min_size([320.0, 200.0])
-        .max_size([f32::INFINITY, 400.0])
         .default_pos([200.0, 120.0])
         .frame(
             Frame::NONE
@@ -431,6 +435,13 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or(file_path);
+
+            let is_modified = match &panel.file_content {
+                Some(Ok(original)) => {
+                    panel.file_edit_buffer.as_deref() != Some(original.as_str())
+                }
+                _ => false,
+            };
 
             Frame::NONE
                 .fill(Palette::BG_SURFACE)
@@ -466,6 +477,28 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
                                 ui.data_mut(|d| {
                                     d.insert_temp(egui::Id::new("file_viewer_close"), true);
                                 });
+                            }
+                            if is_modified
+                                && ui
+                                    .add(
+                                        egui::Button::new(
+                                            RichText::new("Save").size(11.0).color(Palette::ACCENT),
+                                        )
+                                        .fill(Color32::TRANSPARENT)
+                                        .stroke(Stroke::NONE)
+                                        .min_size(egui::Vec2::new(36.0, 20.0)),
+                                    )
+                                    .on_hover_text("Save changes")
+                                    .clicked()
+                            {
+                                if let Some(path) = &panel.selected_file {
+                                    if let Some(buffer) = &panel.file_edit_buffer {
+                                        if std::fs::write(path, buffer).is_ok() {
+                                            panel.file_content =
+                                                Some(Ok(buffer.clone()));
+                                        }
+                                    }
+                                }
                             }
                             if ui
                                 .add(
@@ -527,19 +560,18 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
                 }
             } else {
                 match &panel.file_content {
-                    Some(Ok(content)) => {
-                        let mut text = content.clone();
+                    Some(Ok(_)) => {
+                        let buffer = panel.file_edit_buffer.as_mut().unwrap();
                         ScrollArea::both()
                             .id_salt("file_viewer_scroll")
                             .auto_shrink([false; 2])
                             .show(ui, |ui| {
                                 ui.add_sized(
                                     ui.available_size(),
-                                    egui::TextEdit::multiline(&mut text)
+                                    egui::TextEdit::multiline(buffer)
                                         .id(egui::Id::new(("file_viewer_text", file_path)))
                                         .font(egui::TextStyle::Monospace)
                                         .desired_width(f32::INFINITY)
-                                        .interactive(false)
                                         .text_color(Palette::TEXT_CODE),
                                 );
                             });
@@ -573,6 +605,7 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
         panel.selected_file = None;
         panel.file_content = None;
         panel.image_texture = None;
+        panel.file_edit_buffer = None;
         // Clear the open flag so the chat input can reclaim focus.
         ctx.data_mut(|d| {
             d.insert_temp(egui::Id::new("file_viewer_open"), false);

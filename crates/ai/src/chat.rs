@@ -320,6 +320,9 @@ pub struct ChatRuntime {
     pub next_completion_allowed: Option<std::time::Instant>,
     /// Guard to prevent re-entrant handoff handling.
     pub handoff_in_progress: bool,
+    /// Set when the handoff trigger prompt has been sent to the model
+    /// to prevent re-sending on subsequent frames.
+    pub handoff_trigger_sent: bool,
     /// Orphaned tool-call retry counter to prevent infinite loops.
     pub orphaned_retry_count: u8,
 }
@@ -355,6 +358,7 @@ impl Default for ChatRuntime {
             retry_after: None,
             next_completion_allowed: None,
             handoff_in_progress: false,
+            handoff_trigger_sent: false,
             orphaned_retry_count: 0,
         }
     }
@@ -396,6 +400,7 @@ impl ChatRuntime {
         self.stream_drop_retries = 0;
         self.continuation_chain = 0;
         self.handoff_in_progress = false;
+        self.handoff_trigger_sent = false;
         self.retry_after = None;
 
         // Force deallocation of large buffers
@@ -1966,6 +1971,7 @@ fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
         debug_log!("chat: handoff already in progress, skipping re-entrant call");
         return;
     }
+    runtime.handoff_trigger_sent = false;
 
     // Push error results for any pending tools so they aren't silently lost.
     let sid_for_errors = runtime.active_session_id.clone();
@@ -2100,12 +2106,30 @@ fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
         .unwrap_or(80);
     let threshold = (max * handoff_pct) / 100;
     if used < threshold {
+        runtime.handoff_trigger_sent = false;
         return;
     }
-    // Token usage exceeds threshold — auto-trigger handoff.
-    // handle_handoff will generate RESUME.md from the session if the model forgot.
+    // First, send the trigger prompt to give the model a chance to clean up.
+    if !runtime.handoff_trigger_sent {
+        debug_log!(
+            "chat: sending handoff trigger prompt ({} used / {} threshold, {}%)",
+            used,
+            threshold,
+            handoff_pct
+        );
+        runtime.handoff_trigger_sent = true;
+        let msg = ChatMessage::new(
+            autocode_core::state::Role::User,
+            state.handoff_trigger_prompt.clone(),
+        );
+        push_runtime(state, runtime, msg);
+        start_completion(state, runtime);
+        return;
+    }
+    // Token usage still exceeds threshold and trigger prompt was already sent
+    // but the model did not call handoff — force it now.
     debug_log!(
-        "chat: auto-handoff triggered ({} used / {} threshold, {}%)",
+        "chat: auto-handoff forced ({} used / {} threshold, {}%)",
         used,
         threshold,
         handoff_pct
