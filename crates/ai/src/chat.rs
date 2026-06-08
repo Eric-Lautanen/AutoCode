@@ -419,7 +419,7 @@ fn project_root_for_session(state: &AppState, session_id: &str) -> String {
         .unwrap_or_default()
 }
 
-fn context_usage_info_for_session(state: &AppState, session_id: &str) -> (usize, usize, usize) {
+fn context_usage_info_for_session(state: &AppState, session_id: &str) -> (usize, usize, usize, usize) {
     let max = state
         .sessions
         .iter()
@@ -449,7 +449,24 @@ fn context_usage_info_for_session(state: &AppState, session_id: &str) -> (usize,
         })
         .unwrap_or(0);
     let pct = (used * 100).checked_div(max).unwrap_or(0);
-    (used, max, pct.min(100))
+    let max_output = state
+        .sessions
+        .iter()
+        .find(|s| s.id == session_id)
+        .and_then(|s| {
+            let label = if !s.provider_label.is_empty() {
+                &s.provider_label
+            } else {
+                &state.active_provider
+            };
+            state.providers.get(label)
+        })
+        .and_then(|p| {
+            let defs = autocode_core::state::model_or_safe(&p.kind, &p.model);
+            Some(defs.max_output_tokens as usize)
+        })
+        .unwrap_or(4096);
+    (used, max, pct.min(100), max_output)
 }
 
 pub fn abort_for_session(runtimes: &mut HashMap<String, ChatRuntime>, session_id: &str) {
@@ -1436,6 +1453,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                                 allow_escape,
                                 ctx_info.0,
                                 ctx_info.1,
+                                ctx_info.3,
                                 session_named,
                             )
                         }));
@@ -2343,6 +2361,7 @@ fn execute_tool_with_cache(
     allow_escape: bool,
     ctx_used: usize,
     ctx_max: usize,
+    max_output: usize,
     session_named: bool,
 ) -> String {
     let args: serde_json::Value =
@@ -2943,13 +2962,14 @@ fn execute_tool_with_cache(
                 ""
             };
             format!(
-                "Task list updated: \"{}\" -- {}/{} complete | Context: {}/{} tokens ({}%){}",
+                "Task list updated: \"{}\" -- {}/{} complete | Context: {}/{} tokens ({}%) | Max output: {}{}",
                 title,
                 done,
                 total,
                 ctx_used,
                 ctx_max,
                 (ctx_used * 100 / ctx_max.max(1)).min(100),
+                max_output,
                 name_hint,
             )
         }
