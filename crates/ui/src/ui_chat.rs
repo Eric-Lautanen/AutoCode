@@ -364,7 +364,7 @@ pub fn show(
                             },
                         ); // end push_id("chat_messages", ...)
                     } else {
-                        empty_state(ui);
+                        empty_state(ui, state);
                     }
 
                     if is_live_session {
@@ -745,17 +745,13 @@ fn show_session_tabs(
                                                     }
                                                     sess.messages.clear();
                                                 }
-                                                if state.active_session_id.as_deref() == Some(&id) {
-                                                    state.active_session_id = state
-                                                        .sessions
-                                                        .iter()
-                                                        .rev()
-                                                        .find(|s| s.id != id && !s.closed)
-                                                        .map(|s| s.id.clone());
-                                                }
                                             } else {
                                                 // Never used — delete entirely.
                                                 autocode_ai::session::delete_session(state, &id);
+                                            }
+                                            // Show welcome screen — never auto-switch to another tab.
+                                            if state.active_session_id.as_deref() == Some(&id) {
+                                                state.active_session_id = None;
                                             }
                                             runtimes.remove(&id);
                                         }
@@ -770,10 +766,18 @@ fn show_session_tabs(
 
 // -- Empty state ---------------------------------------------------------------
 
-fn empty_state(ui: &mut egui::Ui) {
+fn empty_state(ui: &mut egui::Ui, state: &AppState) {
+    let has_sessions = state.active_project_id.as_ref().is_some_and(|pid| {
+        state.sessions.iter().any(|s| s.project_id.as_deref() == Some(pid))
+    });
+    let msg = if has_sessions {
+        "Select a session from the dropdown above or type a message to start a new one."
+    } else {
+        "No messages yet -- type a task below and press Send (Enter)."
+    };
     ui.centered_and_justified(|ui| {
         ui.label(
-            RichText::new("No messages yet -- type a task below and press Send (Enter).")
+            RichText::new(msg)
                 .color(theme().text_muted)
                 .size(13.0),
         );
