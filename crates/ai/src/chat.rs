@@ -665,7 +665,7 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
     // DeepSeek through Go proxy always does reasoning — can't disable it.
     // Must use the higher token budget so content isn't starved.
     let force_thinking = matches!(thinking_api, autocode_core::state::ThinkingApi::DeepSeek);
-    let max_tokens = if thinking || force_thinking {
+    let mut max_tokens = if thinking || force_thinking {
         defs.max_output_tokens_thinking
             .unwrap_or(defs.max_output_tokens * 2)
     } else {
@@ -750,14 +750,21 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
             );
             count
         };
+        // Store the estimate back on the session so the toolbar meter,
+        // handoff threshold, and pre-flight all use the same number.
+        if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == session_id) {
+            sess.estimated_full_tokens = estimated;
+        }
         let max_context = provider.max_context_tokens as usize;
         let max_output = max_tokens as usize;
 
         if estimated + max_output > max_context {
-            if state.handoff_enabled {
+            let room = max_context.saturating_sub(estimated);
+            if room < 256 && state.handoff_enabled {
                 handle_handoff(state, runtime);
                 return;
-            } else {
+            }
+            if room < 256 {
                 runtime.status = "Context window would be exceeded.".into();
                 push_error(
                     state,
@@ -771,6 +778,9 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
                 );
                 return;
             }
+            // Clamp max_tokens to what fits — better to get a short response
+            // than to block the request entirely.
+            max_tokens = room as u32;
         }
         estimated
     };
