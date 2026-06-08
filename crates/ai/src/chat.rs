@@ -136,9 +136,10 @@ fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: Chat
             msg.role,
             msg.token_count
         );
-        // Queue a disk write so the JSONL is always the source of truth.
-        // The rate-limited writer flushes at most once per disk_write_rate_ms.
-        state.pending_writes.pending.push((sid.to_string(), msg.clone()));
+        // Error messages are display-only — never persist to disk.
+        if msg.role != Role::Error {
+            state.pending_writes.pending.push((sid.to_string(), msg.clone()));
+        }
         sess.messages.push(msg);
     }
 }
@@ -1340,17 +1341,13 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     }
                     push_runtime(state, runtime, msg);
                     auto_execute(state, runtime, &response);
-                    if !response.is_empty() {
-                        auto_name_session(state, &response);
-                    }
                     auto_continue(state, runtime, &response);
                     return true;
                 }
             }
 
-            // Step 4: rebuild tool_calls JSON from the filtered set, then
-            // push the assistant message. We only push after filtering so
-            // that orphaned/invalid tool calls don't pollute the conversation.
+            // Step 4: rebuild tool_calls JSON from the full set (including
+            // name_session — filtering is done only in the UI).
             let filtered_json = serde_json::Value::Array(
                 tool_calls
                     .iter()
@@ -1404,8 +1401,6 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
             }
 
             // Apply name_session synchronously on the main thread.
-            // If the session already has a meaningful label (not the default S{hash}),
-            // reject with a message to avoid infinite loops.
             for tc in &name_session_calls {
                 let args: serde_json::Value =
                     serde_json::from_str(&tc.arguments).unwrap_or_default();
@@ -1416,31 +1411,13 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) else {
                     continue;
                 };
-
-                if sess.session_named {
-                    let content = format!(
-                        "Session already named as '{}', ignoring duplicate name_session call.",
-                        sess.label
-                    );
-                    let mut msg = ChatMessage::new(Role::Tool, content);
-                    msg.tool_call_id = Some(tc.id.clone());
-                    msg.tool_meta = Some(ToolMeta {
-                        tool_name: "name_session".into(),
-                        is_error: true,
-                        ..Default::default()
-                    });
-                    push_to_session(state, runtime.active_session_id.as_deref(), msg);
-                    continue;
-                }
+                if sess.session_named { continue; }
 
                 if let Some(name) = name_arg
                     && let Some(safe) = sanitize_session_name(name)
                 {
                     sess.label = safe.clone();
                     sess.session_named = true;
-                    // Persist the new label to the session file on disk.
-                    // Only write metadata — messages are handled by the
-                    // rate-limited append writer to avoid duplicates.
                     if let Some(proj) = state
                         .projects
                         .iter()
@@ -1458,11 +1435,6 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     });
                     push_to_session(state, runtime.active_session_id.as_deref(), msg);
                 }
-            }
-
-            // Auto-name from assistant text when model forgets name_session.
-            if name_session_calls.is_empty() && !assistant_text.is_empty() {
-                auto_name_session(state, &assistant_text);
             }
 
             // If there are no remaining tool calls after name_session,
@@ -1530,6 +1502,12 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     per_tool_timeout.as_secs()
                 );
                 let ctx_info = context_usage_info_for_session(state, session_id);
+                let session_named = state
+                    .sessions
+                    .iter()
+                    .find(|s| s.id == session_id)
+                    .map(|s| s.session_named)
+                    .unwrap_or(true);
                 std::thread::spawn(move || {
                     let mut results = Vec::with_capacity(calls_clone.len());
                     for tc in &calls_clone {
@@ -1543,6 +1521,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                                 allow_escape,
                                 ctx_info.0,
                                 ctx_info.1,
+                                session_named,
                             )
                         }));
                         let result = match result {
@@ -2459,6 +2438,7 @@ fn execute_tool_with_cache(
     allow_escape: bool,
     ctx_used: usize,
     ctx_max: usize,
+    session_named: bool,
 ) -> String {
     let args: serde_json::Value =
         serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
@@ -2988,14 +2968,20 @@ fn execute_tool_with_cache(
                 .filter(|i| i.status == TodoStatus::Completed)
                 .count();
             let total = items.len();
+            let name_hint = if !session_named {
+                " | Session: call name_session."
+            } else {
+                ""
+            };
             format!(
-                "Task list updated: \"{}\" -- {}/{} complete | Context: {}/{} tokens ({}%)",
+                "Task list updated: \"{}\" -- {}/{} complete | Context: {}/{} tokens ({}%){}",
                 title,
                 done,
                 total,
                 ctx_used,
                 ctx_max,
                 (ctx_used * 100 / ctx_max.max(1)).min(100),
+                name_hint,
             )
         }
 
@@ -3518,44 +3504,4 @@ fn sanitize_session_name(raw: &str) -> Option<String> {
     Some(s)
 }
 
-/// Auto-name the session from the model's response text when the model
-/// forgets to call `name_session`. Extracts a short label from the first
-/// non-empty line of text (stripping markdown), then persists silently.
-fn auto_name_session(state: &mut AppState, text: &str) {
-    let name = text
-        .lines()
-        .find(|l| {
-            let t = l.trim();
-            !t.is_empty()
-                && !t.starts_with('#')
-                && !t.starts_with('*')
-                && !t.starts_with('-')
-                && !t.starts_with('`')
-                && !t.starts_with('|')
-        })
-        .map(|l| {
-            let t = l.trim().trim_start_matches(['#', '*', '-']);
-            t.trim()
-        })
-        .filter(|n| !n.is_empty())
-        .and_then(sanitize_session_name);
 
-    let Some(name) = name else { return };
-
-    if let Some(ref sid) = state.active_session_id
-        && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == *sid)
-        && !sess.session_named
-    {
-        sess.label = name;
-        sess.session_named = true;
-        if let Some(proj) = state
-            .projects
-            .iter()
-            .find(|p| Some(&p.id) == sess.project_id.as_ref())
-        {
-            // Only write metadata — messages are handled by the
-            // rate-limited append writer to avoid duplicates.
-            let _ = autocode_core::session_storage::save_session_meta(proj, sess);
-        }
-    }
-}

@@ -913,6 +913,8 @@ pub struct AppState {
     #[serde(default)]
     pub settings_open: bool,
 
+
+
     #[serde(default)]
     pub sysinfo: crate::sysinfo::SysInfo,
 
@@ -1117,7 +1119,95 @@ impl AppState {
         state
     }
 
-    pub fn save(&self, storage: &mut dyn eframe::Storage) {
+    /// Remove projects/sessions whose disk data was deleted by the user.
+    /// Should be called before persisting app.ron so stale entries don't
+    /// get re-serialized.
+    pub fn prune_disk_state(&mut self) {
+        use std::collections::HashSet;
+
+        let proj_dir = crate::fsutil::exe_dir()
+            .join("AutoCode_data")
+            .join("projects");
+
+        // 1. Remove projects whose directory is gone, along with their sessions.
+        self.projects.retain(|p| {
+            let dir = proj_dir.join(&p.data_dir_name);
+            if !dir.exists() {
+                self.sessions.retain(|s| s.project_id.as_ref() != Some(&p.id));
+                false
+            } else {
+                true
+            }
+        });
+
+        // 2. Remove sessions whose project no longer exists.
+        let valid_pids: HashSet<String> = self.projects.iter().map(|p| p.id.clone()).collect();
+        self.sessions.retain(|s| {
+            s.project_id
+                .as_ref()
+                .is_none_or(|pid| valid_pids.contains(pid))
+        });
+
+        // 3. Remove sessions whose files are gone from disk.
+        let stale: Vec<String> = self
+            .sessions
+            .iter()
+            .filter(|s| {
+                s.project_id.as_ref().and_then(|pid| {
+                    self.projects.iter().find(|p| &p.id == pid).map(|proj| {
+                        let dir = crate::session_storage::project_sessions_dir(proj);
+                        let candidate = dir.join(s.filename());
+                        if candidate.exists() {
+                            return false;
+                        }
+                        let prefix = format!("{}_", s.id);
+                        if let Ok(entries) = std::fs::read_dir(&dir) {
+                            !entries.flatten().any(|e| {
+                                let name = e.file_name().to_string_lossy().to_string();
+                                name.starts_with(&prefix)
+                                    && (name.ends_with(".json") || name.ends_with(".jsonl"))
+                            })
+                        } else {
+                            true
+                        }
+                    })
+                }).unwrap_or(true)
+            })
+            .map(|s| s.id.clone())
+            .collect();
+        if !stale.is_empty() {
+            self.sessions.retain(|s| !stale.contains(&s.id));
+            crate::debug_log!(
+                "state: pruned {} stale session stub(s) from app.ron",
+                stale.len()
+            );
+        }
+
+        // 4. Clean up orphaned session-level state.
+        if self.sessions.is_empty() {
+            self.active_session_id = None;
+            self.todo_list.clear();
+            self.show_todo = false;
+            self.todo_user_dismissed = false;
+            self.handoff_enabled = false;
+            self.settings_open = false;
+        } else if self.active_session_id.is_some()
+            && !self
+                .sessions
+                .iter()
+                .any(|s| Some(&s.id) == self.active_session_id.as_ref())
+        {
+            self.active_session_id = None;
+        }
+
+        // 6. Ensure project directories still exist.
+        for p in &self.projects {
+            let _ = crate::session_storage::ensure_project_dirs(p);
+        }
+    }
+
+    pub fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        self.prune_disk_state();
         eframe::set_value(storage, "app_state", self);
     }
 

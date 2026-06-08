@@ -243,7 +243,15 @@ pub fn show(
                 count,
             );
             if !older.is_empty() {
+                let older: Vec<_> = older
+                    .into_iter()
+                    .filter(|m| {
+                        m.role != Role::Error
+                            && !m.tool_meta.as_ref().is_some_and(|t| t.tool_name == "name_session")
+                    })
+                    .collect();
                 let added = older.len();
+                if added == 0 { return; }
                 panel_state.loaded_min_id = older.first().map(|m| m.id).unwrap_or(0);
                 let mut new_buf = older;
                 new_buf.extend_from_slice(&panel_state.display_buffer);
@@ -267,7 +275,9 @@ pub fn show(
         let current_count = sess.messages.len();
         if current_count > panel_state.prev_message_count {
             for msg in &sess.messages[panel_state.prev_message_count..current_count] {
-                if msg.role != Role::Error {
+                if msg.role != Role::Error
+                    && !msg.tool_meta.as_ref().is_some_and(|m| m.tool_name == "name_session")
+                {
                     panel_state.display_buffer.push(msg.clone());
                 }
             }
@@ -281,7 +291,10 @@ pub fn show(
             // message was pushed to the session *before* the trim, so it
             // would otherwise be silently dropped from the visible chat.
             panel_state.display_buffer = sess.messages.iter()
-                .filter(|m| m.role != Role::Error)
+                .filter(|m| {
+                    m.role != Role::Error
+                        && !m.tool_meta.as_ref().is_some_and(|t| t.tool_name == "name_session")
+                })
                 .cloned()
                 .collect();
             panel_state.loaded_min_id = panel_state.display_buffer

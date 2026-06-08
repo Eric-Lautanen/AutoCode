@@ -293,6 +293,8 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
             Ok(meta) => {
                 session.label = meta.label;
                 session.messages = read_jsonl_messages_from_dir(&dir, session);
+                // Strip display-only Error messages that leaked to disk.
+                session.messages.retain(|m| m.role != Role::Error);
                 session.next_message_id = if meta.next_message_id > 0 {
                     meta.next_message_id
                 } else {

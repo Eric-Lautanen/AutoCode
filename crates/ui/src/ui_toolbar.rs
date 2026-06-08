@@ -107,10 +107,11 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                                     if ui.selectable_label(selected, slabel).clicked()
                                         && !selected
                                     {
-                                        if let Some(sess) =
-                                            state.sessions.iter_mut().find(|s| s.id == *sid)
-                                        {
+                                        // Move to end so reopened tabs appear after all open tabs.
+                                        if let Some(idx) = state.sessions.iter().position(|s| s.id == *sid) {
+                                            let mut sess = state.sessions.remove(idx);
                                             sess.closed = false;
+                                            state.sessions.push(sess);
                                         }
                                         state.active_session_id = Some(sid.clone());
                                     }

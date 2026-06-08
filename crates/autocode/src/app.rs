@@ -39,9 +39,7 @@ impl AutocodeApp {
         };
         theme::apply(&cc.egui_ctx);
 
-        Self::load_and_prune_projects(&mut state);
-        Self::prune_orphan_sessions(&mut state);
-        Self::purge_stale_stubs(&mut state);
+        state.prune_disk_state();
         Self::restore_active_session(&mut state);
 
         let sysinfo_rx = if autocode_core::sysinfo::seed_from_persisted(&state.sysinfo) {
@@ -63,91 +61,7 @@ impl AutocodeApp {
         }
     }
 
-    fn load_and_prune_projects(state: &mut AppState) {
-        let proj_dir = autocode_core::fsutil::exe_dir()
-            .join("AutoCode_data")
-            .join("projects");
-        state.projects.retain(|p| {
-            let dir = proj_dir.join(&p.data_dir_name);
-            if !dir.exists() {
-                state
-                    .sessions
-                    .retain(|s| s.project_id.as_ref() != Some(&p.id));
-                false
-            } else {
-                true
-            }
-        });
-    }
 
-    fn prune_orphan_sessions(state: &mut AppState) {
-        let valid_ids: std::collections::HashSet<String> =
-            state.projects.iter().map(|p| p.id.clone()).collect();
-        state.sessions.retain(|s| {
-            s.project_id
-                .as_ref()
-                .is_none_or(|pid| valid_ids.contains(pid))
-        });
-        if state.sessions.is_empty() {
-            state.active_session_id = None;
-            state.todo_list.clear();
-            state.show_todo = false;
-            state.todo_user_dismissed = false;
-            state.handoff_enabled = false;
-            state.settings_open = false;
-        } else if state.active_session_id.is_some()
-            && !state
-                .sessions
-                .iter()
-                .any(|s| Some(&s.id) == state.active_session_id.as_ref())
-        {
-            state.active_session_id = None;
-        }
-        for p in &state.projects {
-            let _ = autocode_core::session_storage::ensure_project_dirs(p);
-        }
-    }
-
-    fn purge_stale_stubs(state: &mut AppState) {
-        let sessions_to_remove: Vec<String> = state
-            .sessions
-            .iter()
-            .filter(|s| {
-                s.project_id
-                    .as_ref()
-                    .and_then(|pid| {
-                        state.projects.iter().find(|p| &p.id == pid).map(|proj| {
-                            let dir = autocode_core::session_storage::project_sessions_dir(proj);
-                            let candidate = dir.join(s.filename());
-                            if candidate.exists() {
-                                return false;
-                            }
-                            let prefix = format!("{}_", s.id);
-                            if let Ok(entries) = std::fs::read_dir(&dir) {
-                                !entries.flatten().any(|e| {
-                                    let name = e.file_name().to_string_lossy().to_string();
-                                    name.starts_with(&prefix)
-                                        && (name.ends_with(".json") || name.ends_with(".jsonl"))
-                                })
-                            } else {
-                                true
-                            }
-                        })
-                    })
-                    .unwrap_or(true)
-            })
-            .map(|s| s.id.clone())
-            .collect();
-        for sid in &sessions_to_remove {
-            state.sessions.retain(|s| s.id != *sid);
-        }
-        if !sessions_to_remove.is_empty() {
-            autocode_core::debug_log!(
-                "app: purged {} stale session stub(s) from ron",
-                sessions_to_remove.len()
-            );
-        }
-    }
 
     fn restore_active_session(state: &mut AppState) {
         if let Some(ref sid) = state.active_session_id
@@ -246,7 +160,7 @@ impl eframe::App for AutocodeApp {
             });
             if now.saturating_sub(last) >= 30 {
                 ctx.data_mut(|d| d.insert_temp(egui::Id::new("last_stale_purge"), now));
-                Self::purge_stale_stubs(&mut self.state);
+                self.state.prune_disk_state();
             }
         }
 
