@@ -8,6 +8,7 @@ use egui::{CentralPanel, Frame, Panel};
 
 use autocode_ai::{
     chat::{self, ChatRuntime},
+    provider,
     session,
 };
 use autocode_core::{state::AppState, theme};
@@ -72,6 +73,9 @@ impl AutocodeApp {
                 .find(|p| Some(&p.id) == sess.project_id.as_ref())
         {
             autocode_core::session_storage::load_session(proj, sess);
+            // Recompute estimate with actual tool definitions so the toolbar
+            // meter matches the pre-flight check from the start.
+            autocode_core::helpers::update_full_estimate(sess, &provider::tool_definitions());
             // Evict excess messages from RAM — full history is on disk.
             // The UI will page in older messages on demand via load_messages_before.
             let window = state.ui_display_window;

@@ -380,7 +380,7 @@ pub enum ProviderEvent {
 
 // -- Tool definitions (sent to the API) ---------------------------------------
 
-pub(crate) fn tool_definitions() -> serde_json::Value {
+pub fn tool_definitions() -> serde_json::Value {
     let grep_note = autocode_core::sysinfo::grep_note();
     let grep_desc = if grep_note.is_empty() {
         "Search code. Returns file:line matches. Literal by default; use ^prefix or suffix$ for regex. Glob filter, .gitignore respect.".to_string()

@@ -13,6 +13,7 @@ use egui::{
 
 use crate::helpers;
 use autocode_ai::chat::{self, ChatRuntime};
+use autocode_ai::provider;
 use autocode_core::{
     state::{AppState, ChatMessage, DesignSettings, Role, ToolMeta},
     theme::{project_accent, Palette, ROUND_LG, ROUND_MD, ROUND_SM},
@@ -537,6 +538,10 @@ fn load_new_session(state: &mut AppState, panel_state: &mut ChatPanelState) -> O
                 let found = autocode_core::session_storage::load_session(new_proj, new_sess);
                 if !found {
                     purge_on_missing = Some(new_id.clone());
+                } else {
+                    // Recompute estimate with actual tool definitions so the
+                    // toolbar meter matches the pre-flight check from the start.
+                    autocode_core::helpers::update_full_estimate(new_sess, &provider::tool_definitions());
                 }
                 // Evict excess messages from RAM now that they're loaded from disk.
                 // Full history remains on disk for on-demand loading.

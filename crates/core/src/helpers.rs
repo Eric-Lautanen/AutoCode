@@ -1,6 +1,8 @@
 // helpers.rs -- Shared helpers: ID/time, token estimation, string utils,
 // path resolution, serde helpers, default values, regex pattern matcher.
 
+
+
 use serde::Deserialize;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -1098,6 +1100,26 @@ pub fn unique_data_dir_name(projects: &[Project], desired: &str) -> String {
         n += 1;
     }
     candidate
+}
+
+/// Recompute estimated_full_tokens on a session using the actual tool
+/// definitions JSON. Must be called after loading messages from disk so
+/// the toolbar meter and pre-flight check agree from the start.
+pub fn update_full_estimate(session: &mut crate::state::Session, tools_json: &serde_json::Value) {
+    use crate::state::Role;
+    let filtered: Vec<ChatMessage> = session
+        .messages
+        .iter()
+        .filter(|m| m.role != Role::Error)
+        .cloned()
+        .collect();
+    let model = if session.model.is_empty() {
+        None
+    } else {
+        Some(session.model.as_str())
+    };
+    session.estimated_full_tokens = estimate_full_request_tokens(&filtered, Some(tools_json), model);
+    session.estimated_messages_tokens = estimate_full_request_tokens(&filtered, None, model);
 }
 
 /// Format a panic payload into a human-readable string.
