@@ -1201,6 +1201,8 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                         tc.name = "handoff".into();
                     } else if args.get("name").is_some() {
                         tc.name = "name_session".into();
+                    } else if args.get("start_line").is_some() {
+                        tc.name = "patch_lines".into();
                     }
                     if !tc.name.is_empty() {
                         }
@@ -1384,6 +1386,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     "read_files",
                     "write_file",
                     "patch_file",
+                    "patch_lines",
                     "delete_file",
                     "rename_file",
                     "create_dir",
@@ -2158,6 +2161,16 @@ fn build_tool_meta(tc: &ToolCall, result: &str, duration_ms: u64) -> ToolMeta {
                 ..Default::default()
             }
         }
+        "patch_lines" => {
+            let path = args["path"].as_str().unwrap_or("").to_string();
+            ToolMeta {
+                tool_name: "patch_lines".into(),
+                file_path: Some(path),
+                is_error,
+                duration_ms: Some(duration_ms),
+                ..Default::default()
+            }
+        }
         "run_shell" => {
             let exit_code = result
                 .lines()
@@ -2724,6 +2737,83 @@ fn execute_tool_with_cache(
                         nearby,
                     )
                 }
+            }
+        }
+
+        "patch_lines" => {
+            let raw_path = match args["path"].as_str() {
+                Some(p) => p,
+                None => return "Error: missing 'path' argument".to_string(),
+            };
+            let start_line = args["start_line"].as_u64().unwrap_or(0) as usize;
+            let end_line = args["end_line"].as_u64().unwrap_or(0) as usize;
+            let new_text = args["new_text"].as_str().unwrap_or("");
+
+            let path = core_helpers::resolve_path_write_cached(
+                raw_path,
+                project_root,
+                path_cache,
+                allow_escape,
+            );
+            if core_helpers::is_blocked_path(&path) {
+                return core_helpers::blocked_error(raw_path);
+            }
+            let content = match fsutil::read_to_string(&path) {
+                Ok(c) => c,
+                Err(e) => {
+                    return helpers::tool_error(
+                        &format!("Error reading {}: {}", path.display(), e),
+                        "Verify the path exists with list_dir before patching",
+                    );
+                }
+            };
+
+            let lines: Vec<&str> = content.lines().collect();
+            let total = lines.len();
+            if start_line < 1 || start_line > total {
+                return format!(
+                    "Error: start_line {} out of range (file has {} lines)",
+                    start_line, total,
+                );
+            }
+            if end_line < start_line || end_line > total {
+                return format!(
+                    "Error: end_line {} out of range (file has {} lines)",
+                    end_line, total,
+                );
+            }
+
+            let ends_with_nl = content.ends_with('\n');
+            let mut result = String::with_capacity(content.len() + new_text.len());
+            for line in lines[..start_line - 1].iter() {
+                result.push_str(line);
+                result.push('\n');
+            }
+            result.push_str(new_text);
+            if !new_text.ends_with('\n') {
+                result.push('\n');
+            }
+            for line in lines[end_line..].iter() {
+                result.push_str(line);
+                result.push('\n');
+            }
+            if !ends_with_nl && result.ends_with('\n') {
+                result.pop();
+            }
+
+            match fsutil::write(&path, &result) {
+                Ok(_) => format!(
+                    "Patched {} lines {}-{} ({} -> {} bytes)",
+                    path.display(),
+                    start_line,
+                    end_line,
+                    content.len(),
+                    result.len(),
+                ),
+                Err(e) => helpers::tool_error(
+                    &format!("Error writing {}: {}", path.display(), e),
+                    "Check that the path is writable",
+                ),
             }
         }
 
