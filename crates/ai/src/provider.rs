@@ -1567,7 +1567,7 @@ pub fn native_get(url: &str, timeout_secs: u64, max_bytes: usize) -> Result<Vec<
          Sec-Fetch-Site: none\r\n\
          Sec-Fetch-User: ?1\r\n\
          {cookie_str}\
-         Connection: keep-alive\r\n\
+         Connection: close\r\n\
          \r\n",
         ua = profile.user_agent,
         accept = profile.accept,

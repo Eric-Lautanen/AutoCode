@@ -1,5 +1,6 @@
 # AutoCode — Workspace structure
 
+
 **Mission — A lightweight, egui-based AI coding assistant.**
 - Minimize RAM usage and binary size
 - Keep codebase clean, organized, maintainable
