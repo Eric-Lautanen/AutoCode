@@ -91,6 +91,16 @@ pub fn find_project_root(dir: &Path) -> Option<PathBuf> {
 /// List the immediate children of `dir`, sorted: dirs first, then files.
 /// Entries matching the nearest .gitignore are excluded.
 pub fn list_dir(dir: &Path) -> Vec<FsEntry> {
+    list_dir_impl(dir, true)
+}
+
+/// Like `list_dir` but does NOT apply .gitignore filtering — intended for
+/// the file explorer UI where users expect to see every file on disk.
+pub fn list_dir_all(dir: &Path) -> Vec<FsEntry> {
+    list_dir_impl(dir, false)
+}
+
+fn list_dir_impl(dir: &Path, filter_gitignore: bool) -> Vec<FsEntry> {
     let Ok(entries) = fsutil::read_dir(dir) else {
         return Vec::new();
     };
@@ -120,7 +130,9 @@ pub fn list_dir(dir: &Path) -> Vec<FsEntry> {
         let is_dir = fsutil::is_dir(&path);
 
         // Check gitignore rules.
-        if let (Some(root), Some(gi)) = (root.as_deref(), gitignore.as_ref()) {
+        if filter_gitignore
+            && let (Some(root), Some(gi)) = (root.as_deref(), gitignore.as_ref())
+        {
             let rel = path
                 .strip_prefix(root)
                 .ok()

@@ -160,7 +160,7 @@ struct TreeState<'a> {
 }
 
 fn show_tree(ui: &mut egui::Ui, dir: &std::path::Path, state: &mut TreeState<'_>) {
-    let entries = autocode_fs::explorer::list_dir(dir);
+    let entries = autocode_fs::explorer::list_dir_all(dir);
 
     ui.spacing_mut().indent = 12.0;
 
