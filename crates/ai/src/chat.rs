@@ -1318,14 +1318,9 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 {
                     sess.label = safe.clone();
                     sess.session_named = true;
-                    if let Some(proj) = state
-                        .projects
-                        .iter()
-                        .find(|p| Some(&p.id) == sess.project_id.as_ref())
-                    {
-                        let _ = autocode_core::session_storage::save_session_meta(proj, sess);
-                    }
-                    // Push a confirmation result so the AI knows it succeeded.
+                    let meta_pid = sess.project_id.clone();
+                    let meta_sid = sess.id.clone();
+                    let _ = sess;
                     let content = format!("Session named as '{}'.", safe);
                     let mut msg = ChatMessage::new(Role::Tool, content);
                     msg.tool_call_id = Some(tc.id.clone());
@@ -1334,6 +1329,16 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                         ..Default::default()
                     });
                     push_to_session(state, runtime.active_session_id.as_deref(), msg);
+                    // Save metadata after the push so next_message_id is up to date.
+                    if let Some(pid) = meta_pid
+                        && let Some(proj) = state
+                            .projects
+                            .iter()
+                            .find(|p| p.id == pid)
+                        && let Some(s) = state.sessions.iter().find(|s| s.id == meta_sid)
+                    {
+                        let _ = autocode_core::session_storage::save_session_meta(proj, s);
+                    }
                 }
             }
 

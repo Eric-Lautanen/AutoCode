@@ -226,11 +226,30 @@ pub fn save_session(project: &Project, session: &Session) -> std::io::Result<()>
 /// The JSONL message file is never touched — it's the source of truth managed
 /// by the rate-limited writer. Call this from auto-save to avoid overwriting
 /// the message file with a RAM-trimmed subset.
+/// Removes stale metadata files with the same ID but a different label
+/// (e.g. after name_session renames the session).
 pub fn save_session_meta(project: &Project, session: &Session) -> std::io::Result<()> {
     let dir = project_sessions_dir(project);
     if !dir.exists() {
         fsutil::create_dir_all(&dir)?;
     }
+
+    // Remove stale metadata files for this session (different label, same id).
+    // Never touches .jsonl — the append-only message file is the source of truth.
+    let prefix = format!("{}_", session.id);
+    if let Ok(entries) = fsutil::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with(&prefix)
+                && name_str.ends_with(".json")
+                && name_str != session.filename()
+            {
+                let _ = fsutil::remove_file(&entry.path());
+            }
+        }
+    }
+
     let meta = SessionMeta {
         id: session.id.clone(),
         label: session.label.clone(),
