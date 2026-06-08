@@ -226,26 +226,33 @@ pub fn save_session(project: &Project, session: &Session) -> std::io::Result<()>
 /// The JSONL message file is never touched — it's the source of truth managed
 /// by the rate-limited writer. Call this from auto-save to avoid overwriting
 /// the message file with a RAM-trimmed subset.
-/// Removes stale metadata files with the same ID but a different label
-/// (e.g. after name_session renames the session).
+/// Renames the JSONL message file and removes stale metadata files
+/// when the session label changes (e.g. after name_session).
 pub fn save_session_meta(project: &Project, session: &Session) -> std::io::Result<()> {
     let dir = project_sessions_dir(project);
     if !dir.exists() {
         fsutil::create_dir_all(&dir)?;
     }
 
-    // Remove stale metadata files for this session (different label, same id).
-    // Never touches .jsonl — the append-only message file is the source of truth.
+    // Rename JSONL and remove stale metadata when session label changes.
+    // The JSONL content is never rewritten — just the filename is updated.
     let prefix = format!("{}_", session.id);
     if let Ok(entries) = fsutil::read_dir(&dir) {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name_str = name.to_string_lossy();
-            if name_str.starts_with(&prefix)
-                && name_str.ends_with(".json")
-                && name_str != session.filename()
-            {
+            if !name_str.starts_with(&prefix) {
+                continue;
+            }
+            if name_str.ends_with(".json") && name_str != session.filename() {
                 let _ = fsutil::remove_file(&entry.path());
+            } else if name_str.ends_with(".jsonl") && name_str != session.messages_filename() {
+                let new_path = dir.join(session.messages_filename());
+                // Only rename if the destination doesn't exist — the file
+                // may already have been renamed by a prior call.
+                if !new_path.exists() {
+                    let _ = fsutil::rename(&entry.path(), &new_path);
+                }
             }
         }
     }
