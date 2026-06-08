@@ -136,14 +136,6 @@ pub fn prepare_request_messages_for_session(
         }
     }
 
-    autocode_core::debug_log!(
-        "api_prep: session={} disk_msgs={} ids=[{}..{}]",
-        session_id,
-        full_messages.len(),
-        full_messages.first().map(|m| m.id).unwrap_or(0),
-        full_messages.last().map(|m| m.id).unwrap_or(0),
-    );
-
     full_messages
         .iter()
         .filter(|m| m.role != Role::Error)

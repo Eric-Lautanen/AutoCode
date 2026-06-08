@@ -8,7 +8,6 @@
 //! persistence (atomic JSON + JSONL), a dark-theme color palette, and
 //! debug logging.
 
-pub mod debug;
 pub mod extract;
 pub mod fsutil;
 pub mod helpers;

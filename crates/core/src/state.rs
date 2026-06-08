@@ -1177,11 +1177,7 @@ impl AppState {
             .collect();
         if !stale.is_empty() {
             self.sessions.retain(|s| !stale.contains(&s.id));
-            crate::debug_log!(
-                "state: pruned {} stale session stub(s) from app.ron",
-                stale.len()
-            );
-        }
+            }
 
         // 4. Clean up orphaned session-level state.
         if self.sessions.is_empty() {

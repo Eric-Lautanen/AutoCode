@@ -2,7 +2,6 @@
 // Uses only std::net + manual HTTP/HTTPS via a thin blocking wrapper.
 // To avoid a heavy async runtime we spawn threads and use channels.
 
-use autocode_core::debug_log;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -158,7 +157,6 @@ fn cookie_header(host: &str) -> Option<String> {
     };
     let map = jar.as_ref()?;
     let cookie = map.get(host)?;
-    debug_log!("provider: sending cookie for {}: {}", host, cookie);
     Some(format!("Cookie: {}\r\n", cookie))
 }
 
@@ -440,12 +438,10 @@ impl ProviderClient {
     pub fn complete(provider: ApiProvider, request: CompletionRequest) -> Receiver<ProviderEvent> {
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            debug_log!("provider: outer-thread start");
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 run_request_once(provider, request, tx);
             }));
-            debug_log!("provider: outer-thread exit");
-        });
+            });
         rx
     }
 }
@@ -453,26 +449,22 @@ impl ProviderClient {
 // -- Request wrapper (single-shot, retry is handled by chat.rs outer layer) ------
 
 fn run_request_once(provider: ApiProvider, request: CompletionRequest, tx: Sender<ProviderEvent>) {
-    debug_log!("provider: run_request_once start");
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         run_request(provider, request, tx.clone())
     }));
     match result {
         Ok(Err(e)) => {
-            debug_log!("provider: run_request_once error: {}", e);
             let _ = tx.send(ProviderEvent::Error(e.to_string()));
         }
         Err(panic_info) => {
             let msg = format!(
                 "Internal error (panic): {}",
-                autocode_core::debug::panic_msg(&panic_info)
+                autocode_core::helpers::panic_msg(&panic_info)
             );
-            debug_log!("provider: run_request_once PANIC: {}", msg);
             let _ = tx.send(ProviderEvent::Error(msg));
         }
         _ => {
-            debug_log!("provider: run_request_once ok");
-        }
+            }
     }
 }
 
@@ -489,13 +481,6 @@ fn run_request(
     req: CompletionRequest,
     tx: Sender<ProviderEvent>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    debug_log!(
-        "provider::run_request: url={} model={} thinking={} api={:?}",
-        provider.base_url,
-        req.model,
-        req.thinking_mode,
-        req.thinking_api
-    );
     let body = build_request_body(&req, provider.kind.supports_cache_control())?;
     let url = format!(
         "{}/chat/completions",
@@ -662,7 +647,6 @@ fn connect_tcp(host: &str, port: u16, timeout_secs: u64) -> std::io::Result<TcpS
     let addrs = match (host, port).to_socket_addrs() {
         Ok(a) => a,
         Err(e) => {
-            debug_log!("provider::connect_tcp DNS FAIL: {}:{} — {}", host, port, e);
             return Err(e);
         }
     };
@@ -670,17 +654,9 @@ fn connect_tcp(host: &str, port: u16, timeout_secs: u64) -> std::io::Result<TcpS
     for addr in addrs {
         match TcpStream::connect_timeout(&addr, timeout) {
             Ok(s) => {
-                debug_log!(
-                    "provider::connect_tcp OK: {}:{} -> {} (took {:?})",
-                    host, port, addr, start.elapsed()
-                );
                 return Ok(s);
             }
             Err(e) => {
-                debug_log!(
-                    "provider::connect_tcp RETRY: {}:{} -> {} failed: {}",
-                    host, port, addr, e
-                );
                 if e.kind() == std::io::ErrorKind::TimedOut {
                     return Err(e);
                 }
@@ -721,23 +697,13 @@ fn send_http(
     timeouts: &TimeoutConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let _t0 = std::time::Instant::now();
-    debug_log!(
-        "provider::send_http: host={} port={} stream={} body_len={}",
-        conn.host,
-        conn.port,
-        stream,
-        body.len()
-    );
     let mut stream_conn = connect_tcp(conn.host, conn.port, timeouts.request)?;
-    debug_log!("provider::send_http tcp_connect took {:?}", t0.elapsed());
     apply_timeouts(&stream_conn, stream, timeouts)?;
 
     let request = build_http_request(conn.host, conn.path, api_key, body);
     let _t1 = std::time::Instant::now();
     stream_conn.write_all(request.as_bytes())?;
     stream_conn.flush()?;
-    debug_log!("provider::send_http write_all took {:?}", t1.elapsed());
-
     let mut reader = BufReader::with_capacity(8192, stream_conn);
     process_http_response(&mut reader, stream, model, tx)
 }
@@ -752,16 +718,7 @@ fn send_https(
     timeouts: &TimeoutConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let _t0 = std::time::Instant::now();
-    debug_log!(
-        "provider::send_https: host={} port={} stream={} body_len={}",
-        conn.host,
-        conn.port,
-        is_stream,
-        body.len()
-    );
-
     let stream = connect_tcp(conn.host, conn.port, timeouts.request)?;
-    debug_log!("provider::send_https tcp_connect took {:?}", t0.elapsed());
     apply_timeouts(&stream, is_stream, timeouts)?;
 
     let config = tls_config();
@@ -771,14 +728,10 @@ fn send_https(
     let client = rustls::ClientConnection::new(config, server_name)?;
     let _t1 = std::time::Instant::now();
     let mut tls_stream = rustls::StreamOwned::new(client, stream);
-    debug_log!("provider::send_https tls_handshake took {:?}", t1.elapsed());
-
     let request = build_http_request(conn.host, conn.path, api_key, body);
     let _t2 = std::time::Instant::now();
     tls_stream.write_all(request.as_bytes())?;
     tls_stream.flush()?;
-    debug_log!("provider::send_https write_all took {:?}", t2.elapsed());
-
     let mut reader = BufReader::with_capacity(16384, tls_stream);
     process_http_response(&mut reader, is_stream, model, tx)
 }
@@ -858,11 +811,6 @@ fn process_http_response<R: BufRead>(
             break;
         }
     }
-
-    debug_log!(
-        "provider::process_http_response: {} {} chunked={} stream={} headers={}",
-        status_code, status_text, is_chunked, stream, header_count
-    );
 
     if status_code >= 400 {
         let mut raw_body = Vec::new();
@@ -970,17 +918,8 @@ fn parse_sse_stream_from_reader<R: BufRead>(
         };
         line_count += 1;
         if line_count <= 10 {
-            debug_log!(
-                "provider::sse raw_line[{}]: {:?}",
-                line_count,
-                &line[..line.len().min(120)]
-            );
-        }
+            }
         if last_log.elapsed().as_secs() >= 30 {
-            debug_log!(
-                "provider::sse heartbeat: lines={} content={} reason={} elapsed={:?}",
-                line_count, content_count, reasoning_count, sse_start.elapsed()
-            );
             last_log = std::time::Instant::now();
         }
         if line.starts_with(':') {
@@ -992,11 +931,7 @@ fn parse_sse_stream_from_reader<R: BufRead>(
             continue;
         }
         if !saw_data_line {
-            debug_log!(
-                "provider::sse FIRST_DATA at line={} elapsed={:?}",
-                line_count, sse_start.elapsed()
-            );
-        }
+            }
         saw_data_line = true;
         let data = line["data: ".len()..].trim();
         if data == "[DONE]" {
@@ -1017,12 +952,7 @@ fn parse_sse_stream_from_reader<R: BufRead>(
         let delta = &v["choices"][0]["delta"];
         if let Some(text) = delta["content"].as_str().filter(|s| !s.is_empty()) {
             if content_count < 3 {
-                debug_log!(
-                    "provider::sse content_chunk[{}]: {:?}",
-                    content_count,
-                    &text[..text.len().min(80)]
-                );
-            }
+                }
             content_count += 1;
             if tx.send(ProviderEvent::Delta(text.to_string())).is_err() {
                 return Err("channel closed".into());
@@ -1033,12 +963,7 @@ fn parse_sse_stream_from_reader<R: BufRead>(
             .filter(|s| !s.is_empty())
         {
             if reasoning_count < 3 {
-                debug_log!(
-                    "provider::sse reason_chunk[{}]: {:?}",
-                    reasoning_count,
-                    &reasoning[..reasoning.len().min(80)]
-                );
-            }
+                }
             reasoning_count += 1;
             if tx
                 .send(ProviderEvent::Reasoning(reasoning.to_string()))
@@ -1126,11 +1051,6 @@ fn parse_sse_stream_from_reader<R: BufRead>(
         }
     }
 
-    debug_log!(
-        "provider::sse loop done: lines={} content={} reason={} finish={} error={} elapsed={:?}",
-        line_count, content_count, reasoning_count, saw_finish, had_error, sse_start.elapsed()
-    );
-
     if !saw_data_line && !raw_buf.trim().is_empty() {
         let api_msg = serde_json::from_str::<serde_json::Value>(raw_buf.trim())
             .ok()
@@ -1161,14 +1081,6 @@ fn parse_sse_stream_from_reader<R: BufRead>(
     }
 
     if !had_error {
-        debug_log!(
-            "provider::sse summary: lines={} content_chunks={} reason_chunks={} prompt_tokens={} comp_tokens={}",
-            line_count,
-            content_count,
-            reasoning_count,
-            prompt_tokens,
-            completion_tokens
-        );
         let _ = tx.send(ProviderEvent::Done {
             prompt_tokens,
             completion_tokens,
@@ -1181,7 +1093,6 @@ fn parse_sse_stream_from_reader<R: BufRead>(
 
 pub fn fetch_models(provider: &ApiProvider) -> Vec<String> {
     let url = format!("{}/models", provider.base_url.trim_end_matches('/'));
-    debug_log!("provider::fetch_models: {}", url);
     let (host, path, port, use_tls) = match parse_url(&url) {
         Ok(p) => p,
         Err(_) => return Vec::new(),
@@ -1300,10 +1211,6 @@ pub fn native_post(
 ) -> Result<String, String> {
     let _t0 = std::time::Instant::now();
     let (host, path, port, use_tls) = parse_url(url).map_err(|e| e.to_string())?;
-    debug_log!(
-        "provider::native_post: {} body_len={} timeout={}",
-        url, body.len(), timeout_secs
-    );
     let stream = connect_tcp(&host, port, timeout_secs).map_err(|e| e.to_string())?;
     stream
         .set_read_timeout(Some(Duration::from_secs(timeout_secs)))
@@ -1395,16 +1302,10 @@ pub fn native_post(
     })();
 
     read_result.map_err(|e| {
-        debug_log!("provider::native_post FAIL after {:?}: {}", t0.elapsed(), e);
         e
     })?;
 
     let body_bytes = http_response_body(&buffer);
-    debug_log!(
-        "provider::native_post OK after {:?}: body_bytes={}",
-        t0.elapsed(),
-        body_bytes.len()
-    );
     Ok(String::from_utf8_lossy(&body_bytes).to_string())
 }
 
@@ -1428,11 +1329,6 @@ pub fn count_input_tokens(
     let url = provider
         .counting_endpoint_url()
         .ok_or_else(|| "no counting API for this provider".to_string())?;
-    debug_log!(
-        "provider::count_input_tokens: url={} model={} json_len={} timeout={}",
-        url, model, request_json.len(), timeout_secs
-    );
-
     // Parse and transform the body for the provider's counting endpoint
     let mut base: serde_json::Value =
         serde_json::from_str(request_json).map_err(|e| format!("json parse: {}", e))?;
@@ -1456,12 +1352,6 @@ pub fn count_input_tokens(
 
     let response = native_post(&url, provider.api_key.as_str(), &body_str, timeout_secs, &extra_refs)?;
 
-    debug_log!(
-        "provider::count_input_tokens response after {:?}: len={}",
-        t0.elapsed(),
-        response.len()
-    );
-
     let v: serde_json::Value =
         serde_json::from_str(&response).map_err(|e| format!("json parse response: {}", e))?;
 
@@ -1475,11 +1365,9 @@ pub fn count_input_tokens(
         .or_else(|| v["total_tokens"].as_u64())
         .or_else(|| v["usage"]["total_tokens"].as_u64())
         .map(|n| {
-            debug_log!("provider::count_input_tokens result: {} (took {:?})", n, t0.elapsed());
             n as usize
         })
         .ok_or_else(|| {
-            debug_log!("provider::count_input_tokens no count field in response after {:?}", t0.elapsed());
             format!("no token count in response: {}", response.trim())
         })
 }
@@ -1494,11 +1382,6 @@ pub fn native_get(url: &str, timeout_secs: u64, max_bytes: usize) -> Result<Vec<
     let _t0 = std::time::Instant::now();
     let (host, path, port, use_tls) = parse_url(url).map_err(|e| e.to_string())?;
     let addr = format!("{}:{}", host, port);
-    debug_log!(
-        "provider::native_get: {} timeout={} max_bytes={}",
-        url, timeout_secs, max_bytes
-    );
-
     // If we already have a cached TLS connection for this host, reuse it.
     // Otherwise create a fresh TCP connection.
     let stream = TcpStream::connect(&addr).map_err(|e| format!("connect: {}", e))?;
@@ -1624,10 +1507,6 @@ pub fn native_get(url: &str, timeout_secs: u64, max_bytes: usize) -> Result<Vec<
 
     // Cap body to max_bytes
     let end = body.len().min(max_bytes);
-    debug_log!(
-        "provider::native_get OK after {:?}: body_len={} capped={}",
-        t0.elapsed(), body.len(), end
-    );
     Ok(body[..end].to_vec())
 }
 

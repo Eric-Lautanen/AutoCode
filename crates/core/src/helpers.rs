@@ -1099,6 +1099,16 @@ pub fn unique_data_dir_name(projects: &[Project], desired: &str) -> String {
     candidate
 }
 
+/// Format a panic payload into a human-readable string.
+pub fn panic_msg(panic_info: &Box<dyn std::any::Any + Send>) -> String {
+    panic_info
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| panic_info.downcast_ref::<String>().map(|s| s.as_str()))
+        .unwrap_or("unknown panic")
+        .to_string()
+}
+
 #[cfg(test)]
 mod test_simple_regex {
     use super::*;

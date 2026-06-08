@@ -2,7 +2,6 @@
 // Runs commands in background threads and returns output via channels.
 // No permission prompting -- fully autonomous per design spec.
 
-use autocode_core::debug_log;
 
 use std::{
     io::{BufRead, BufReader},
@@ -34,12 +33,10 @@ pub fn run_command_in_dir(command: &str, cwd: Option<&str>) -> (ShellTask, Recei
     let cwd = cwd.map(|s| s.to_string());
 
     std::thread::spawn(move || {
-        debug_log!("shell: thread start");
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             run_command_inner(&cmd_str, cwd.as_deref(), &tx, &pid_tx);
         }));
-        debug_log!("shell: thread exit");
-    });
+        });
 
     // Receive the child PID once the os process is spawned.
     let pid = pid_rx.recv_timeout(std::time::Duration::from_secs(5)).ok();

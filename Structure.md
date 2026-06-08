@@ -9,15 +9,14 @@
 Cargo.toml (25) — workspace root, 5 crate members (autocode/core/ai/fs/ui), resolver = "2", release LTO/strip, panic=unwind
 
 ## crates/autocode/ — binary entry (482 lines)
-main.rs (48) — debug init, rustls crypto install, eframe::run_native (1400×900, Glow/Wgpu auto-select)
+main.rs (47) — rustls crypto install, eframe::run_native (1400×900, Glow/Wgpu auto-select)
 app.rs (433) — AutocodeApp (eframe::App): AppState + ChatRuntime map, panel wiring, frame update, save, exit cleanup
 helpers.rs (1) — reserved
 
-## crates/core/ — state, utilities, tokenizer (4,807 lines)
-state.rs (1319) — AppState, Project, ApiProvider, Session (max 50), ChatMessage (reasoning_content, tool_calls), SecretString, TodoItem, DesignSettings, embedded provider/model manifest, DEFAULT_SYSTEM_PROMPT, handoff prompts, prune_disk_state, flush_pending_writes (rate-limited)
-helpers.rs (1400) — ID gen, token estimation (heuristic + tiktoken with model-family fallbacks), path resolution + traversal guard, tiny regex engine, serde defaults, budget/usage display; extensive test suite (regex + token estimation)
+## crates/core/ — state, utilities, tokenizer (4,711 lines)
+state.rs (1319) — AppState, Project, ApiProvider, Session (max 50), ChatMessage (reasoning_content, tool_calls), SecretString, TodoItem, DesignSettings, embedded provider/manifest, DEFAULT_SYSTEM_PROMPT, handoff prompts, prune_disk_state, flush_pending_writes (rate-limited)
+helpers.rs (1402) — ID gen, token estimation (heuristic + tiktoken with model-family fallbacks), path resolution + traversal guard, tiny regex engine, serde defaults, budget/usage display, panic_msg; extensive test suite (regex + token estimation)
 fsutil.rs (138) — exe_dir, `\\?\` extended paths, atomic read/write/metadata/read_dir/create_dir_all/remove_file|dir/rename/is_dir/display_path, write_cmd_script, TEMP_FILES tracking
-debug.rs (94) — file logging to `%TEMP%\autocode_debug.log`, `debug_log!` macro, panic_msg
 theme.rs (218) — dark Visuals+Style, Palette (20 colors), ROUND_SM/MD/LG
 extract.rs (327) — HTML scraping (scraper), DuckDuckGo result + GitHub content extraction, search cache
 sysinfo.rs (742) — OS/CPU/GPU/RAM/tool detection; Win32 FFI; Unix /proc/sysctl/lspci; `has_opengl`
@@ -43,4 +42,4 @@ ui_explorer.rs (913) — recursive tree (shows all files including hidden), file
 helpers.rs (454) — `format_time`, tool result summary/body extraction, markdown inline formatting, LayoutJob builder, screen pixel sampling
 ui_todo.rs (290) — floating task list, progress bar, priority dots, auto-close on completion
 
-**Total: 18,648 lines of Rust source across 29 files (excluding `target/`, debug logs, and binary assets).**
+**Total: 18,554 lines of Rust source across 28 files (excluding `target/` and binary assets).**

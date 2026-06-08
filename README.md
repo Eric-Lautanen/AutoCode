@@ -39,13 +39,12 @@ Cargo.toml                               # workspace root, resolver = "2"
 │   ├── autocode/          — binary entry (482 lines)
 │   │   ├── main.rs         (48)   # entry point, rustls init, eframe::run_native
 │   │   └── app.rs         (433)   # AutocodeApp (eframe::App), frame loop, state wiring
-│   ├── core/               — core types, utilities, infrastructure (4,807 lines)
+│   ├── core/               — core types, utilities, infrastructure (4,711 lines)
 │   │   ├── state.rs      (1319)  # AppState, Project, Session, ChatMessage, ApiProvider,
 │   │   │                           SecretString, DesignSettings, TodoItem, embedded manifest
-│   │   ├── helpers.rs    (1400)  # ID gen, token estimation (heuristic + tiktoken + regex),
-│   │   │                           path resolution + traversal guard, tiny regex engine
+│   │   ├── helpers.rs    (1402)  # ID gen, token estimation (heuristic + tiktoken + regex),
+│   │   │                           path resolution + traversal guard, tiny regex engine, panic_msg
 │   │   ├── fsutil.rs      (138)   # exe_dir, \\?\ extended paths, atomic read/write, TEMP_FILES
-│   │   ├── debug.rs       (94)    # file logging with rotation, debug_log! macro
 │   │   ├── theme.rs      (218)   # dark Visuals+Style, Palette (20 colors), font/corner config
 │   │   ├── extract.rs     (327)   # HTML scraping (scraper), DuckDuckGo results, search cache
 │   │   ├── sysinfo.rs     (742)   # OS/CPU/GPU/RAM/shell/tool detection, has_opengl
@@ -77,7 +76,7 @@ Cargo.toml                               # workspace root, resolver = "2"
 │                                 screen pixel sampling (Windows FFI)
 ```
 
-**Total: ~18,600 lines of Rust/Cargo/config/doc source across 29 source files.**
+**Total: ~18,550 lines of Rust/Cargo/config/doc source across 28 source files.**
 
 ### Key Architecture Decisions
 
@@ -92,7 +91,7 @@ Cargo.toml                               # workspace root, resolver = "2"
 
 ### Data Flow
 
-1. **Startup** — `main.rs` initializes debug logging, installs rustls crypto, loads persisted state from `app.ron`, launches native window (1400×900)
+1. **Startup** — `main.rs` installs rustls crypto, loads persisted state from `app.ron`, launches native window (1400×900)
 2. **User input** — message typed in chat panel; toolbar provides project/session/provider selection
 3. **Chat orchestration** — `chat.rs::send_message()` loads history from disk, prepares request with optional prompt caching, builds API POST with tool definitions, parses SSE stream, dispatches tool calls to handler functions
 4. **Tool execution** — 17 tool handlers execute autonomously (filesystem, shell, search, web, task tracking, session management)
