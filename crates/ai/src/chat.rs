@@ -760,7 +760,7 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
 
         if estimated + max_output > max_context {
             let room = max_context.saturating_sub(estimated);
-            if room < 256 && state.handoff_enabled {
+            if room < 1000 && state.handoff_enabled {
                 handle_handoff(state, runtime);
                 return;
             }
