@@ -516,14 +516,9 @@ fn save_old_session(
             .iter()
             .find(|p| Some(&p.id) == old_sess.project_id.as_ref())
         {
-            // Closed sessions already had metadata saved and messages cleared
-            // in the close handler — save_session would rewrite the JSONL with
-            // an empty message set, wiping history.
-            if old_sess.closed {
-                let _ = autocode_core::session_storage::save_session_meta(old_proj, old_sess);
-            } else {
-                let _ = autocode_core::session_storage::save_session(old_proj, old_sess);
-            }
+            // Only save metadata — the append-only JSONL is the source of truth
+            // and must never be rewritten from RAM.
+            let _ = autocode_core::session_storage::save_session_meta(old_proj, old_sess);
         }
         if !runtimes.contains_key(old_id) {
             old_sess.messages.clear();

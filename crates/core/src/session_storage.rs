@@ -124,22 +124,6 @@ fn atomic_write_json(path: &Path, value: &impl serde::Serialize) -> std::io::Res
     atomic_write(path, &json)
 }
 
-fn atomic_write_jsonl(path: &Path, messages: &[ChatMessage]) -> std::io::Result<()> {
-    let mut buf = Vec::with_capacity(messages.len() * 512);
-    for msg in messages {
-        writeln!(
-            buf,
-            "{}",
-            serde_json::to_string(msg)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?
-        )?;
-    }
-    let content = String::from_utf8(buf).map_err(|e| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, e)
-    })?;
-    atomic_write(path, &content)
-}
-
 fn read_jsonl_messages(path: &Path) -> Vec<ChatMessage> {
     let Ok(content) = fsutil::read_to_string(path) else {
         return Vec::new();
@@ -151,9 +135,8 @@ fn read_jsonl_messages(path: &Path) -> Vec<ChatMessage> {
         .collect()
 }
 
-/// Append messages to the session's JSONL file (fast path).
-/// Unlike `save_session` (which rewrites the whole file), this appends
-/// directly so it's safe to call frequently.
+/// Append messages to the session's JSONL file (fast path, append-only).
+/// The JSONL is the source of truth — never rewritten from RAM.
 pub fn append_messages_to_jsonl(
     project: &Project,
     session: &Session,
@@ -182,9 +165,8 @@ pub fn append_messages_to_jsonl(
     Ok(())
 }
 
-/// Save the full session (metadata + messages) to disk.
-/// This rewrites the entire JSONL file — prefer `append_messages_to_jsonl`
-/// for normal message persistence to avoid data races with the rate-limited writer.
+/// Save session metadata + clean up stale files (e.g. after a rename).
+/// Does NOT touch the append-only messages JSONL — never rewrites from RAM.
 pub fn save_session(project: &Project, session: &Session) -> std::io::Result<()> {
     let dir = project_sessions_dir(project);
     if !dir.exists() {
@@ -218,6 +200,9 @@ pub fn save_session(project: &Project, session: &Session) -> std::io::Result<()>
         let _ = fsutil::remove_file(&id_only_jsonl);
     }
 
+    // Only save metadata — the messages JSONL is append-only and never
+    // rewritten from RAM to avoid losing messages that were trimmed or
+    // not yet flushed. The append-only JSONL is the source of truth.
     let meta = SessionMeta {
         id: session.id.clone(),
         label: session.label.clone(),
@@ -234,11 +219,7 @@ pub fn save_session(project: &Project, session: &Session) -> std::io::Result<()>
         actual_tokens_used: session.actual_tokens_used,
     };
     let meta_path = dir.join(session.filename());
-    atomic_write_json(&meta_path, &meta)?;
-
-    // Write messages JSONL.
-    let msg_path = dir.join(session.messages_filename());
-    atomic_write_jsonl(&msg_path, &session.messages)
+    atomic_write_json(&meta_path, &meta)
 }
 
 /// Save only session metadata (no messages) to disk.
