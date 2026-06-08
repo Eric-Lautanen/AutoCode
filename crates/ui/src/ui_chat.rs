@@ -277,7 +277,17 @@ pub fn show(
             }
         } else if current_count < panel_state.prev_message_count {
             // Session was trimmed (RAM eviction in start_completion).
-            // Reset tracking so future new messages are detected.
+            // Rebuild display_buffer from sess.messages — the new user
+            // message was pushed to the session *before* the trim, so it
+            // would otherwise be silently dropped from the visible chat.
+            panel_state.display_buffer = sess.messages.iter()
+                .filter(|m| m.role != Role::Error)
+                .cloned()
+                .collect();
+            panel_state.loaded_min_id = panel_state.display_buffer
+                .first()
+                .map(|m| m.id)
+                .unwrap_or(0);
             panel_state.prev_message_count = current_count;
         }
     }
