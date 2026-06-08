@@ -247,7 +247,6 @@ pub fn show(
                     .into_iter()
                     .filter(|m| {
                         m.role != Role::Error
-                            && !m.tool_meta.as_ref().is_some_and(|t| t.tool_name == "name_session")
                     })
                     .collect();
                 let added = older.len();
@@ -276,7 +275,6 @@ pub fn show(
         if current_count > panel_state.prev_message_count {
             for msg in &sess.messages[panel_state.prev_message_count..current_count] {
                 if msg.role != Role::Error
-                    && !msg.tool_meta.as_ref().is_some_and(|m| m.tool_name == "name_session")
                 {
                     panel_state.display_buffer.push(msg.clone());
                 }
@@ -293,7 +291,6 @@ pub fn show(
             panel_state.display_buffer = sess.messages.iter()
                 .filter(|m| {
                     m.role != Role::Error
-                        && !m.tool_meta.as_ref().is_some_and(|t| t.tool_name == "name_session")
                 })
                 .cloned()
                 .collect();
@@ -547,7 +544,7 @@ fn load_new_session(state: &mut AppState, panel_state: &mut ChatPanelState) -> O
                 let total = new_sess.messages.len();
                 if total > window * 2 {
                     let keep = window;
-                    let _ = new_sess.messages.split_off(total - keep);
+                    new_sess.messages = new_sess.messages.split_off(total - keep);
                     new_sess.messages.shrink_to(0);
                 }
             }

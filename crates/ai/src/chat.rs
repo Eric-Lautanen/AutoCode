@@ -166,7 +166,7 @@ fn trim_session_ram(state: &mut AppState, session_id: &str) {
         .map(|m| m.id)
         .unwrap_or(0);
     let sess = &mut state.sessions[idx];
-    let _ = sess.messages.split_off(len - keep);
+    sess.messages = sess.messages.split_off(len - keep);
     sess.messages.shrink_to(0);
     let _new_next_id = sess.next_message_id;
     }

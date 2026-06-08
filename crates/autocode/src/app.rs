@@ -78,7 +78,7 @@ impl AutocodeApp {
             let total = sess.messages.len();
             if total > window * 2 {
                 let keep = window;
-                let _ = sess.messages.split_off(total - keep);
+                sess.messages = sess.messages.split_off(total - keep);
                 sess.messages.shrink_to(0);
             }
             state.todo_list = sess.todo_list.clone();
