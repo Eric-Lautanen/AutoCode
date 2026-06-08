@@ -101,7 +101,7 @@ impl AutocodeApp {
                 .iter()
                 .any(|s| Some(&s.id) == state.active_session_id.as_ref())
         {
-            state.active_session_id = state.sessions.last().map(|s| s.id.clone());
+            state.active_session_id = None;
         }
         for p in &state.projects {
             let _ = autocode_core::session_storage::ensure_project_dirs(p);

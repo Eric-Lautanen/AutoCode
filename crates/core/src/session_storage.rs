@@ -65,28 +65,10 @@ pub fn ensure_project_dirs(project: &Project) -> std::io::Result<()> {
 }
 
 pub fn switch_to_project(state: &mut AppState, project_id: &str) {
-    if let Some(sess) = state
-        .sessions
-        .iter()
-        .rfind(|s| s.project_id.as_deref() == Some(project_id))
-    {
-        state.active_session_id = Some(sess.id.clone());
-        state.active_project_id = Some(project_id.to_string());
-        return;
-    }
-
-    let has_real_content = state.active_session_id.is_some()
-        && state
-            .active_session()
-            .is_some_and(|s| s.messages.iter().any(|m| m.role != Role::System));
-    if !has_real_content {
-        if let Some(sess) = state.active_session_mut() {
-            sess.project_id = Some(project_id.to_string());
-        }
-    } else {
-        state.new_session_for_project(Some(project_id.to_string()));
-    }
+    // Show welcome screen — never auto-activate a session on project switch.
+    // The user picks a session from the dropdown or clicks "+ Session".
     state.active_project_id = Some(project_id.to_string());
+    state.active_session_id = None;
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]

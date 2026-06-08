@@ -81,44 +81,42 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                         })
                         .map(|s| (s.id.clone(), s.label.clone()))
                         .collect();
-                    if !sessions_here.is_empty() {
-                        let active_label = state
-                            .active_session()
-                            .map(|s| s.label.clone())
-                            .unwrap_or_else(|| "Select Session".into());
-                        egui::ComboBox::from_id_salt("session_picker")
-                            .selected_text(
-                                RichText::new(&active_label)
-                                    .size(11.0)
-                                    .color(Palette::TEXT_MUTED),
-                            )
-                            .show_ui(ui, |ui| {
-                                let has_active = state.active_session_id.is_some();
-                                if ui
-                                    .selectable_label(!has_active, "Select Session")
-                                    .clicked()
-                                    && has_active
-                                {
-                                    state.active_session_id = None;
-                                }
-                                for (sid, slabel) in &sessions_here {
-                                    ui.push_id(("sess_sel", sid), |ui| {
-                                        let selected =
-                                            state.active_session_id.as_deref() == Some(sid);
-                                        if ui.selectable_label(selected, slabel).clicked()
-                                            && !selected
+                    let active_label = state
+                        .active_session()
+                        .map(|s| s.label.clone())
+                        .unwrap_or_else(|| "Select Session".into());
+                    egui::ComboBox::from_id_salt("session_picker")
+                        .selected_text(
+                            RichText::new(&active_label)
+                                .size(11.0)
+                                .color(Palette::TEXT_MUTED),
+                        )
+                        .show_ui(ui, |ui| {
+                            let has_active = state.active_session_id.is_some();
+                            if ui
+                                .selectable_label(!has_active, "Select Session")
+                                .clicked()
+                                && has_active
+                            {
+                                state.active_session_id = None;
+                            }
+                            for (sid, slabel) in &sessions_here {
+                                ui.push_id(("sess_sel", sid), |ui| {
+                                    let selected =
+                                        state.active_session_id.as_deref() == Some(sid);
+                                    if ui.selectable_label(selected, slabel).clicked()
+                                        && !selected
+                                    {
+                                        if let Some(sess) =
+                                            state.sessions.iter_mut().find(|s| s.id == *sid)
                                         {
-                                            if let Some(sess) =
-                                                state.sessions.iter_mut().find(|s| s.id == *sid)
-                                            {
-                                                sess.closed = false;
-                                            }
-                                            state.active_session_id = Some(sid.clone());
+                                            sess.closed = false;
                                         }
-                                    });
-                                }
-                            });
-                    }
+                                        state.active_session_id = Some(sid.clone());
+                                    }
+                                });
+                            }
+                        });
                     // New session button next to the session picker.
                     if lit_btn(ui, "+ Session", false).clicked() {
                         state.new_session_for_project(Some(pid.clone()));

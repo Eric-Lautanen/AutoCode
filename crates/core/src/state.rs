@@ -1159,6 +1159,13 @@ impl AppState {
         let mut sess = Session::new(project_id, prov_label, model);
         sess.id = id.clone();
         sess.label = format!("S{}", id);
+        // Persist metadata immediately so the session survives app restarts.
+        // The JSONL message file is created later by flush_pending_writes.
+        if let Some(ref pid) = sess.project_id {
+            if let Some(proj) = self.projects.iter().find(|p| &p.id == pid) {
+                let _ = crate::session_storage::save_session_meta(proj, &sess);
+            }
+        }
         self.active_session_id = Some(sess.id.clone());
         self.sessions.push(sess);
     }

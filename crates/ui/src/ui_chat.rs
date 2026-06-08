@@ -266,8 +266,11 @@ pub fn show(
     if let Some(sess) = state.active_session() {
         let current_count = sess.messages.len();
         if current_count > panel_state.prev_message_count {
-            let new_msgs = &sess.messages[panel_state.prev_message_count..current_count];
-            panel_state.display_buffer.extend_from_slice(new_msgs);
+            for msg in &sess.messages[panel_state.prev_message_count..current_count] {
+                if msg.role != Role::Error {
+                    panel_state.display_buffer.push(msg.clone());
+                }
+            }
             panel_state.prev_message_count = current_count;
             if !panel_state.user_scrolled_up {
                 panel_state.scroll_to_bottom = true;
@@ -534,7 +537,11 @@ fn load_new_session(state: &mut AppState, panel_state: &mut ChatPanelState) -> O
                 let window = state.ui_display_window;
                 let total = new_sess.messages.len();
                 let start = total.saturating_sub(window);
-                panel_state.display_buffer = new_sess.messages[start..].to_vec();
+                panel_state.display_buffer = new_sess.messages[start..]
+                    .iter()
+                    .filter(|m| m.role != Role::Error)
+                    .cloned()
+                    .collect::<Vec<_>>();
                 panel_state.loaded_min_id = panel_state
                     .display_buffer
                     .first()
@@ -580,7 +587,7 @@ fn handle_purge_on_missing(
     if let Some(sid) = purge_on_missing {
         state.sessions.retain(|s| s.id != sid);
         if state.active_session_id.as_deref() == Some(&sid) {
-            state.active_session_id = state.sessions.last().map(|s| s.id.clone());
+            state.active_session_id = None;
         }
         panel_state.display_buffer.clear();
         panel_state.loaded_min_id = 0;

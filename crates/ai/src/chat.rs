@@ -194,6 +194,17 @@ fn push_runtime(state: &mut AppState, runtime: &ChatRuntime, msg: ChatMessage) {
     push_to_session(state, runtime.active_session_id.as_deref(), msg);
 }
 
+/// Push an error to a runtime's session, replacing any existing error messages
+/// so they don't stack up across retries.
+fn push_error(state: &mut AppState, runtime: &ChatRuntime, content: String) {
+    if let Some(sid) = runtime.active_session_id.as_deref() {
+        if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
+            sess.messages.retain(|m| m.role != Role::Error);
+        }
+    }
+    push_runtime(state, runtime, ChatMessage::new(Role::Error, content));
+}
+
 fn push_tool_results_to_state(state: &mut AppState, runtime: &ChatRuntime, results: &[ToolResult]) {
     let sess_id = runtime.active_session_id.as_deref();
     for tr in results {
@@ -563,13 +574,10 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
         Some(id) => id,
         None => {
             runtime.status = "No active session.".into();
-            push_runtime(
+            push_error(
                 state,
                 runtime,
-                ChatMessage::new(
-                    Role::Error,
-                    "No active session. Create or select a session first.".to_string(),
-                ),
+                "No active session. Create or select a session first.".to_string(),
             );
             return;
         }
@@ -601,28 +609,22 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
                     Some(p) if p.enabled && !p.api_key.is_empty() => (label, p.clone()),
                     Some(_) => {
                         runtime.status = "API key not set.".into();
-                        push_runtime(
+                        push_error(
                             state,
                             runtime,
-                            ChatMessage::new(
-                                Role::Error,
-                                format!(
-                                    "API key not set for provider \"{label}\". Go to Settings → Providers to configure it."
-                                ),
+                            format!(
+                                "API key not set for provider \"{label}\". Go to Settings → Providers to configure it."
                             ),
                         );
                         return;
                     }
                     None => {
                         runtime.status = "No provider configured.".into();
-                        push_runtime(
+                        push_error(
                             state,
                             runtime,
-                            ChatMessage::new(
-                                Role::Error,
-                                format!(
-                                    "Provider \"{label}\" not found. Go to Settings → Providers to configure it."
-                                ),
+                            format!(
+                                "Provider \"{label}\" not found. Go to Settings → Providers to configure it."
                             ),
                         );
                         return;
@@ -762,17 +764,14 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
                 return;
             } else {
                 runtime.status = "Context window would be exceeded.".into();
-                push_runtime(
+                push_error(
                     state,
                     runtime,
-                    ChatMessage::new(
-                        Role::Error,
-                        format!(
-                            "This request would exceed the model's context window \
-                             (estimated {} + {} output > {} max). \
-                             Enable auto-handoff in Settings or reduce conversation length.",
-                            estimated, max_output, max_context
-                        ),
+                    format!(
+                        "This request would exceed the model's context window \
+                         (estimated {} + {} output > {} max). \
+                         Enable auto-handoff in Settings or reduce conversation length.",
+                        estimated, max_output, max_context
                     ),
                 );
                 return;
@@ -1135,16 +1134,13 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                         runtime.orphaned_retry_count
                     );
                     runtime.status = format!("Provider error: {}", shorten_err(&err_msg));
-                    push_runtime(
+                    push_error(
                         state,
                         runtime,
-                        ChatMessage::new(
-                            Role::Error,
-                            format!(
-                                "Orphaned tool calls persist after {} retries — giving up.\n\nError: {}",
-                                runtime.orphaned_retry_count - 1,
-                                err_msg,
-                            ),
+                        format!(
+                            "Orphaned tool calls persist after {} retries — giving up.\n\nError: {}",
+                            runtime.orphaned_retry_count - 1,
+                            err_msg,
                         ),
                     );
                     runtime.orphaned_retry_count = 0;
@@ -1210,13 +1206,10 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     );
                     runtime.orphaned_retry_count = 0;
                     runtime.status = format!("Provider error: {}", shorten_err(&err_msg));
-                    push_runtime(
+                    push_error(
                         state,
                         runtime,
-                        ChatMessage::new(
-                            Role::Error,
-                            format!("Provider error: {}", err_msg),
-                        ),
+                        format!("Provider error: {}", err_msg),
                     );
                     return true;
                 }
@@ -1237,17 +1230,14 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     "chat: transient error, retry {} in {}s: {}",
                     runtime.retry_count, backoff_secs, err_msg
                 );
-                push_runtime(
+                push_error(
                     state,
                     runtime,
-                    ChatMessage::new(
-                        Role::Error,
-                        format!(
-                            "Provider error (retry {}): {} — retrying in {}s",
-                            runtime.retry_count,
-                            shorten_err(&err_msg),
-                            backoff_secs,
-                        ),
+                    format!(
+                        "Provider error (retry {}): {} — retrying in {}s",
+                        runtime.retry_count,
+                        shorten_err(&err_msg),
+                        backoff_secs,
                     ),
                 );
             } else {
@@ -1256,10 +1246,10 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 runtime.retry_count = 0;
                 runtime.partial_response_backup.clear();
                 runtime.stream_drop_retries = 0;
-                push_runtime(
+                push_error(
                     state,
                     runtime,
-                    ChatMessage::new(Role::Error, format!("Provider error: {}", err_msg)),
+                    format!("Provider error: {}", err_msg),
                 );
             }
             return true;
@@ -1626,15 +1616,12 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     runtime.retry_count = 0;
                     runtime.partial_response_backup.clear();
                     runtime.stream_drop_retries = 0;
-                    push_runtime(
+                    push_error(
                         state,
                         runtime,
-                        ChatMessage::new(
-                            Role::Error,
-                            format!(
-                                "Provider returned empty response (gave up after {} retries).",
-                                max_retries
-                            ),
+                        format!(
+                            "Provider returned empty response (gave up after {} retries).",
+                            max_retries
                         ),
                     );
                 }
