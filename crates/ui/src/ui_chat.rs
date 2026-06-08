@@ -823,16 +823,6 @@ fn show_bubble(
     suppress_ts: bool,
     sid: &str,
 ) {
-    // Skip hidden tool results.
-    if msg.role == Role::Tool
-        && msg
-            .tool_meta
-            .as_ref()
-            .is_some_and(|m| m.tool_name == "name_session")
-    {
-        return;
-    }
-
     // Every widget inside a bubble — including nested ScrollAreas — gets a
     // unique parent ID derived from this message's timestamp + index.
     // This prevents scroll state from leaking between messages.
