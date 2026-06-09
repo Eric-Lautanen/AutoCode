@@ -51,6 +51,7 @@ fn is_transient_error(msg: &str) -> bool {
         "502",                // Bad gateway
         "503",                // Service unavailable
         "504",                // Gateway timeout
+        "520",                // Cloudflare origin error (transient)
         "timed out",          // Connection/request timeout
         "timeout",            // Timeout
         "no response",        // No initial response from provider
