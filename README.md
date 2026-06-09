@@ -1,5 +1,7 @@
 # AutoCode
 
+> **Status:** Near release and fully functional, but development is on hold for now.
+
 **AutoCode** is an autonomous AI coding agent — a native desktop application written in **Rust** that connects to large language models (LLMs) and gives them full access to your filesystem and shell, enabling them to independently perform software engineering tasks.
 
 Write code, run commands, edit files, search your codebase, and iterate — all through a chat interface where the AI operates as your autonomous agent. Not a harness or scaffold — a single self-contained binary.
