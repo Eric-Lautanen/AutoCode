@@ -1,8 +1,4 @@
 fn main() {
     #[cfg(target_os = "windows")]
-    {
-        embed_resource::compile("resources/app.rc", embed_resource::NONE)
-            .manifest_required()
-            .unwrap();
-    }
+    embed_resource::compile("resources/app.rc", embed_resource::NONE);
 }
