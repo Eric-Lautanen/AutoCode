@@ -1,7 +1,7 @@
 // autocode - Autonomous AI Coding Assistant
 // Modular egui/eframe 0.34 app for fully automated coding tasks.
 
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 mod app;
 mod helpers;
