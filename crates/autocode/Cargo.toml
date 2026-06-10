@@ -12,7 +12,7 @@ autocode-core = { path = "../core" }
 autocode-ai = { path = "../ai" }
 autocode-ui = { path = "../ui" }
 autocode-fs = { path = "../fs" }
-eframe = { version = "0.34", default-features = false, features = ["persistence", "glow", "wgpu"] }
+eframe = { version = "0.34", default-features = false, features = ["persistence", "glow", "wgpu", "x11", "wayland"] }
 rfd = "0.17.2"
 egui = "0.34"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
