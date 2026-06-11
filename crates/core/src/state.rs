@@ -33,6 +33,10 @@ pub struct ProviderManifest {
     /// If empty, defaults to `{base_url}/models`.
     #[serde(default)]
     pub models_endpoint: Option<String>,
+    /// Optional chat completions endpoint (e.g. "https://api.example.com/v1/chat/completions").
+    /// If empty, defaults to `{base_url}/chat/completions`.
+    #[serde(default)]
+    pub chat_endpoint: Option<String>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -381,6 +385,16 @@ impl ApiProvider {
     /// Whether this provider has a supported API-based token counting endpoint.
     pub fn has_counting_api(&self) -> bool {
         self.counting_endpoint_url().is_some()
+    }
+
+    /// Returns the chat completions endpoint URL from the provider manifest,
+    /// or falls back to `{base_url}/chat/completions`.
+    pub fn chat_endpoint_url(&self) -> String {
+        let base = self.base_url.trim_end_matches('/');
+        provider_manifest(&self.kind)
+            .and_then(|m| m.chat_endpoint.as_deref())
+            .map(|template| template.replace("{base_url}", base))
+            .unwrap_or_else(|| format!("{}/chat/completions", base))
     }
 
     /// Populate provider-spec fields from the providers.json manifest

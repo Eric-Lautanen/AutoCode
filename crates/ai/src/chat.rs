@@ -25,17 +25,16 @@ use autocode_fs::shell::{self, ShellEvent};
 fn is_transient_error(msg: &str) -> bool {
     // Permanent errors - never retry these
     let permanent_patterns = [
-        "content_filter",    // Provider content policy violation
-        "authentication",    // API key issues
-        "invalid_api_key",   // Bad API key
-        "invalid x-api-key", // Bad API key (NVIDIA)
-        "quota",             // Account quota exceeded (not rate limit)
-        "billing",           // Billing issues
-        "model_not_found",   // Invalid model name
-        "context_length",    // Request too large for model
-        "max_context",       // Context window exceeded
-        "too many tokens",   // Token limit exceeded
-        "Invalid model",     // Model doesn't exist
+        "content_filter",  // Provider content policy violation
+        "authentication",  // API key issues
+        "invalid_api_key", // Bad API key
+        "quota",           // Account quota exceeded (not rate limit)
+        "billing",         // Billing issues
+        "model_not_found", // Invalid model name
+        "context_length",  // Request too large for model
+        "max_context",     // Context window exceeded
+        "too many tokens", // Token limit exceeded
+        "Invalid model",   // Model doesn't exist
     ];
     let msg_lower = msg.to_lowercase();
     for pattern in &permanent_patterns {

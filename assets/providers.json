@@ -3,10 +3,13 @@
     "openrouter": {
       "label": "OpenRouter",
       "base_url": "https://openrouter.ai/api/v1",
+      "chat_endpoint": "{base_url}/chat/completions",
+      "models_endpoint": "{base_url}/models",
       "supports_cache_control": true,
       "supports_parallel_tool_calls": true,
       "default_model": "deepseek/deepseek-v4-flash",
       "counting_endpoint": "{base_url}/tokenize",
+      "auth_type": "Bearer",
       "models": {
         "anthropic/claude-opus-4.8": { "context_window": 1000000, "max_output_tokens": 64000, "max_output_tokens_thinking": 32000, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": true },
         "anthropic/claude-opus-4.7": { "context_window": 1000000, "max_output_tokens": 64000, "max_output_tokens_thinking": 32000, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": true },
@@ -42,6 +45,8 @@
     "nvidia-nim": {
       "label": "NVIDIA NIM",
       "base_url": "https://integrate.api.nvidia.com/v1",
+      "chat_endpoint": "{base_url}/chat/completions",
+      "models_endpoint": "{base_url}/models",
       "supports_cache_control": false,
       "supports_parallel_tool_calls": false,
       "default_model": "z-ai/glm-5.1",
@@ -62,6 +67,8 @@
     "openai-compatible": {
       "label": "OpenAI-Compatible",
       "base_url": "https://api.openai.com/v1",
+      "chat_endpoint": "{base_url}/chat/completions",
+      "models_endpoint": "{base_url}/models",
       "supports_cache_control": true,
       "supports_parallel_tool_calls": true,
       "default_model": "gpt-5.5",
@@ -83,6 +90,8 @@
     "opencode-go": {
       "label": "OpenCode Go",
       "base_url": "https://opencode.ai/zen/go/v1",
+      "chat_endpoint": "{base_url}/chat/completions",
+      "models_endpoint": "{base_url}/models",
       "supports_cache_control": false,
       "supports_parallel_tool_calls": true,
       "default_model": "glm-5.1",

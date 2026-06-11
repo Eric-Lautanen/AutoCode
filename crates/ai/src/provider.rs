@@ -539,10 +539,7 @@ fn run_request(
     tx: Sender<ProviderEvent>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let body = build_request_body(&req, provider.kind.supports_cache_control())?;
-    let url = format!(
-        "{}/chat/completions",
-        provider.base_url.trim_end_matches('/')
-    );
+    let url = provider.chat_endpoint_url();
 
     let (host, path, port, use_tls) = parse_url(&url)?;
 
@@ -1151,12 +1148,8 @@ fn parse_sse_stream_from_reader<R: BufRead>(
 // -- Model list fetcher --------------------------------------------------------
 
 pub fn fetch_models(provider: &ApiProvider) -> Vec<String> {
-    let url = if !provider.models_list_url.is_empty() {
-        provider.models_list_url.clone()
-    } else {
-        format!("{}/models", provider.base_url.trim_end_matches('/'))
-    };
-    let (host, path, port, use_tls) = match parse_url(&url) {
+    let url = &provider.models_list_url;
+    let (host, path, port, use_tls) = match parse_url(url) {
         Ok(p) => p,
         Err(_) => return Vec::new(),
     };
