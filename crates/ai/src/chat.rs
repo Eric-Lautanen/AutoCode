@@ -2098,14 +2098,7 @@ fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
         start_completion(state, runtime);
         return;
     }
-    // Token usage still exceeds threshold and trigger prompt was already sent
-    // but the model did not call handoff — force it now. Wait for the model's
-    // response to the trigger prompt before forcing.
-    if runtime.stream_rx.is_some() {
-        return;
-    }
-    runtime.drain();
-    handle_handoff(state, runtime);
+    // Trigger already sent — the model has the warning, it's up to it now.
 }
 
 /// Generate a RESUME.md summary from the session's last messages.
