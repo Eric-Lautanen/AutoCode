@@ -1,7 +1,7 @@
 // helpers.rs -- AI-crate helpers: fuzzy matching, line-number stripping,
 // tool-error formatting, incomplete-task detection, todo parsing.
 
-use autocode_core::state::{TodoItem, TodoStatus};
+use autocode_core::state::{AppState, TodoItem, TodoStatus};
 
 // -- Tool error formatting -----------------------------------------------------
 
@@ -895,4 +895,41 @@ pub fn parse_todo_from_tool_args(args: &serde_json::Value) -> Option<(String, Ve
         })
         .collect();
     Some((title, items))
+}
+
+/// Build a PROJECT CONTEXT string (name, root path, top-level entries).
+/// Returns empty string if no active project.
+pub fn project_context_string(state: &AppState) -> String {
+    let proj = match state.active_project() {
+        Some(p) => p,
+        None => return String::new(),
+    };
+    let mut ctx = format!(
+        "\nPROJECT CONTEXT\nName: {}\nRoot: {}\n",
+        proj.name, proj.root_path
+    );
+    if let Ok(entries) = std::fs::read_dir(&proj.root_path) {
+        let mut items: Vec<String> = entries
+            .filter_map(|e| {
+                let e = e.ok()?;
+                let name = e.file_name().to_string_lossy().to_string();
+                if name.starts_with('.') || name == "node_modules" || name == "target" {
+                    return None;
+                }
+                let suffix = if e.file_type().ok().map_or(false, |t| t.is_dir()) {
+                    "/"
+                } else {
+                    ""
+                };
+                Some(format!("  {}{}", name, suffix))
+            })
+            .collect();
+        items.sort();
+        for item in items {
+            ctx.push_str(&item);
+            ctx.push('\n');
+        }
+    }
+    ctx.truncate(ctx.trim_end().len());
+    ctx
 }

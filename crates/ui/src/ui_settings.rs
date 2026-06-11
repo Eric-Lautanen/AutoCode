@@ -547,6 +547,28 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                 format!("{} tokens", p.max_output_tokens_thinking),
                             );
                             ui.end_row();
+
+                            // Requests per hour rate limit.
+                            ui.label(helpers::field_label("Rate Limit"));
+                            ui.horizontal(|ui| {
+                                let mut val = p.requests_per_hour.unwrap_or(0) as i32;
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(&mut val)
+                                            .speed(100)
+                                            .range(0..=1000000),
+                                    )
+                                    .changed()
+                                {
+                                    p.requests_per_hour = if val <= 0 { None } else { Some(val as u32) };
+                                }
+                                ui.label(
+                                    RichText::new("req/hr (0 = unlimited)")
+                                        .size(10.5)
+                                        .color(Palette::TEXT_MUTED),
+                                );
+                            });
+                            ui.end_row();
                         });
                 });
 

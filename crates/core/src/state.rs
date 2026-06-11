@@ -42,6 +42,9 @@ pub struct ModelManifest {
     pub reasoning_efforts: Vec<String>,
     #[serde(default)]
     pub supports_cache_control: bool,
+    /// Max API requests allowed per hour (0 or None = unlimited).
+    #[serde(default)]
+    pub requests_per_hour: Option<u32>,
 }
 
 fn manifest() -> &'static Manifest {
@@ -79,6 +82,7 @@ pub fn safe_model_defaults() -> ModelManifest {
         thinking_api: String::new(),
         reasoning_efforts: vec!["high".into()],
         supports_cache_control: false,
+        requests_per_hour: None,
     }
 }
 
@@ -296,6 +300,12 @@ pub struct ApiProvider {
     /// Always populated from providers.json. Not persisted in app.ron.
     #[serde(skip)]
     pub max_output_tokens_thinking: u32,
+
+    /// Max API requests allowed per hour (0 or None = unlimited).
+    /// Populated from providers.json. Not persisted in app.ron.
+    #[serde(default)]
+    #[serde(skip)]
+    pub requests_per_hour: Option<u32>,
 }
 
 impl ApiProvider {
@@ -330,6 +340,7 @@ impl ApiProvider {
             max_output_tokens_thinking: defs
                 .max_output_tokens_thinking
                 .unwrap_or(defs.max_output_tokens * 2),
+            requests_per_hour: defs.requests_per_hour,
         }
     }
 
@@ -360,6 +371,7 @@ impl ApiProvider {
             .max_output_tokens_thinking
             .unwrap_or(defs.max_output_tokens * 2);
         self.thinking_api = parse_thinking_api(&defs.thinking_api);
+        self.requests_per_hour = defs.requests_per_hour;
     }
 
     pub fn reset_defaults(&mut self) {
@@ -1285,19 +1297,21 @@ impl AppState {
 }
 
 pub const DEFAULT_SYSTEM_PROMPT: &str = "\
-You are an expert autonomous coding assistant. Work directly -- make decisions and execute.
+You are an expert coding assistant working inside a project folder. \
+Explore with tools before acting.
 
 RULES
-- Write minimal correct code. No comments unless asked.
-- Read relevant files before editing.
-- Ensure code compiles. Eliminate warnings, dead code, unused imports.
-- Use latest stable deps/tools. Check versions before adding new ones.
-- REQUIRED: Call `name_session` once at session start with the current task name.
-- REQUIRED: Call `todo_list` at task start with numbered steps. Update status live, re-send ALL items. Result shows context usage (e.g. '45678/128000 tokens (35%)') for handoff timing.
-- When near context limit: save RESUME.md, call `handoff` with reason. Next session reads RESUME.md.
-- Use file tools (read_file, grep, patch_file, write_file) for code I/O. `run_shell` only for builds, tests, git, package managers.
-- REQUIRED: After each file edit: `git add -A && git commit` with message (feat:/fix:/perf:/chore:). Push periodically.
-- After each task, briefly state what was done and what remains.
+- Minimal correct code. No comments, dead code, or unused imports.
+- Read before editing. Prefer patch_file.
+- run_shell only for builds, tests, git, package managers.
+
+SESSION
+- name_session once at start with the task name.
+- todo_list at start with numbered steps. Update live. Result shows context \
+usage (e.g. '45K/128K (35%)') for handoff timing.
+- Near limit: save RESUME.md, call handoff.
+- After edits: git add -A && git commit (feat:/fix:/perf:/chore:). Push.
+- After each task, state what was done and what remains.
 ";
 
 pub const DEFAULT_HANDOFF_PROMPT: &str = "\

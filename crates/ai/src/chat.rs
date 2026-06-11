@@ -585,7 +585,7 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
             return;
         }
     };
-    let provider = {
+    let (provider, prov_label) = {
         let prov_label = state
             .sessions
             .iter()
@@ -604,12 +604,12 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
                     }
                 })
             });
-        let (prov_label, provider) = match prov_label {
-            Some((label, p)) => (label, p),
+        match prov_label {
+            Some((label, p)) => (p, label),
             None => {
                 let label = state.active_provider.clone();
                 match state.providers.get(&label) {
-                    Some(p) if p.enabled && !p.api_key.is_empty() => (label, p.clone()),
+                    Some(p) if p.enabled && !p.api_key.is_empty() => (p.clone(), label),
                     Some(_) => {
                         runtime.status = "API key not set.".into();
                         push_error(
@@ -634,10 +634,25 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
                     }
                 }
             }
-        };
-        drop(prov_label);
-        provider
+        }
     };
+
+    // Rate limit: non-blocking wait before starting the request.
+    // Uses the same retry_after mechanism as the retry backoff — the UI
+    // shows a countdown and start_completion fires again when the timer
+    // expires.
+    let rate_wait_ms = crate::provider::api_rate_limit_wait_ms(&provider, &prov_label);
+    if rate_wait_ms > 50 {
+        runtime.status = format!(
+            "Rate limit: waiting ~{}s before next request...",
+            (rate_wait_ms + 500) / 1000
+        );
+        runtime.retry_after = Some(
+            std::time::Instant::now() + std::time::Duration::from_millis(rate_wait_ms),
+        );
+        return;
+    }
+    crate::provider::api_rate_limit_record(&provider, &prov_label);
 
     let mut messages = session::prepare_request_messages_for_session(state, session_id);
 
@@ -839,12 +854,23 @@ fn update_runtime(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
     // only stopped by user interaction (stop button → drain()).
     if let Some(after) = runtime.retry_after {
         repaint = true;
-        if std::time::Instant::now() >= after
+        let remaining = after.checked_duration_since(std::time::Instant::now()).unwrap_or_default();
+        let remaining_secs = (remaining.as_millis() + 500) / 1000;
+        // Live countdown — only overwrite status if it's a rate-limit wait
+        // (set by start_completion), not a retry backoff (set by error handler).
+        if remaining_secs > 0 && runtime.status.starts_with("Rate limit") {
+            runtime.status = format!(
+                "Rate limit: waiting ~{}s before next request...",
+                remaining_secs
+            );
+        }
+        if remaining.is_zero()
             && runtime.stream_rx.is_none()
             && runtime.tool_rx.is_none()
             && runtime.live_shell_rx.is_none()
         {
             runtime.retry_after = None;
+            runtime.status = "Starting request...".into();
             start_completion(state, runtime);
         }
     }
@@ -1921,7 +1947,7 @@ fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     // Point the runtime at the new session before pushing messages.
     runtime.active_session_id = state.active_session_id.clone();
 
-    // Seed the new session with system prompt + host environment info.
+    // Seed the new session with system prompt + host environment + project context.
     let mut sys_prompt = state.system_prompt.clone();
     if autocode_core::sysinfo::is_ready() {
         if !sys_prompt.ends_with('\n') {
@@ -1931,6 +1957,8 @@ fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
         sys_prompt.push_str(&state.sysinfo.report);
         sys_prompt.push('\n');
     }
+    sys_prompt.push_str(&crate::helpers::project_context_string(state));
+    sys_prompt.push('\n');
     let sys = ChatMessage::new(Role::System, sys_prompt);
     push_runtime(state, runtime, sys);
 

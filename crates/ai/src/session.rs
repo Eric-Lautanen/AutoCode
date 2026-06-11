@@ -1,5 +1,6 @@
 // session.rs -- Session management.
 
+use crate::helpers;
 use crate::provider::{ApiMessage, tool_definitions};
 use autocode_core::state::{AppState, ChatMessage, Role};
 
@@ -23,6 +24,8 @@ pub fn ensure_session(state: &mut AppState) -> bool {
     }
     prompt.push_str("\nHOST ENVIRONMENT\n");
     prompt.push_str(&info.report);
+    prompt.push('\n');
+    prompt.push_str(&helpers::project_context_string(state));
     prompt.push('\n');
     if let Some(sess) = state.active_session_mut()
         && sess.messages.is_empty()

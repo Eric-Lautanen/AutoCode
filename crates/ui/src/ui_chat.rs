@@ -393,7 +393,7 @@ pub fn show(
                         let has_streaming =
                             !r.pending_response.is_empty() || !r.live_shell_buf.is_empty();
 
-                        if r.is_busy() && !has_streaming {
+                        if (r.is_busy() && !has_streaming) || r.retry_after.is_some() {
                             show_waiting_bubble(ui, &r.status, chat_w);
                             ui.add_space(8.0);
                         } else {
@@ -2163,7 +2163,7 @@ fn show_input_row(
                     let active_sid = state.active_session_id.clone();
                     let busy = active_sid
                         .as_ref()
-                        .is_some_and(|sid| runtimes.get(sid).is_some_and(|r| r.is_busy()));
+                        .is_some_and(|sid| runtimes.get(sid).is_some_and(|r| r.is_busy() || r.retry_after.is_some()));
                     // Buttons: Send(72) + gap(6) + TH(36) + gap(6) + Effort(44) + gap(6) + [=](28) = 198
                     // Plus item_spacing before button group in this horizontal (default ~6) = 204
                     // Small buffer for padding = 206
