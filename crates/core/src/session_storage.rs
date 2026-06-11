@@ -5,6 +5,90 @@ use crate::fsutil;
 use crate::helpers;
 use crate::state::{AppState, ChatMessage, Project, Role, Session};
 
+/// Try to salvage a truncated JSON line by finding the longest valid prefix.
+/// Always operates on UTF-8 char boundaries — never panics.
+/// Returns `Some(valid_json)` if a prefix parses, or `None` if nothing works.
+fn repair_truncated_jsonl_line(line: &str) -> Option<String> {
+    let line = line.trim();
+    if line.is_empty() {
+        return None;
+    }
+    // Quick check: if the line already parses, return it.
+    if serde_json::from_str::<serde_json::Value>(line).is_ok() {
+        return Some(line.to_string());
+    }
+    // Walk backward, trying suffixes at quote boundaries and regular positions.
+    // Limit iterations to avoid O(n²) on very long corrupt lines.
+    let max_steps = line.len().min(256);
+    let mut end = line.len();
+    for _ in 0..max_steps {
+        end = line.floor_char_boundary(end.saturating_sub(1));
+        if end == 0 {
+            break;
+        }
+        for suffix in &["", "}", "}]", "}}", "}]}", "}}]"] {
+            let candidate = format!("{}{}", &line[..end], suffix);
+            if serde_json::from_str::<serde_json::Value>(&candidate).is_ok() {
+                return Some(line[..end].to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Validate and auto-fix tool_calls arguments that contain corrupt/non-JSON data.
+/// Modifies the tool_calls Value in place, removing any function call whose
+/// arguments field is not valid JSON after repair attempts.
+/// Returns true if any changes were made.
+fn sanitize_tool_calls(tool_calls: &mut Option<serde_json::Value>) -> bool {
+    let Some(arr) = tool_calls.as_mut().and_then(|v| v.as_array_mut()) else {
+        return false;
+    };
+    let mut changed = false;
+    let mut i = 0;
+    while i < arr.len() {
+        let args_str = match arr[i]["function"]["arguments"].as_str() {
+            Some(s) if !s.is_empty() => s.to_string(),
+            _ => { i += 1; continue; }
+        };
+        if serde_json::from_str::<serde_json::Value>(&args_str).is_ok() {
+            i += 1;
+            continue;
+        }
+        changed = true;
+        // Attempt repair: try to re-escape content by parsing raw bytes as JSON string.
+        if let Ok(repaired) = serde_json::from_str::<String>(&format!("\"{}\"", args_str)) {
+            if serde_json::from_str::<serde_json::Value>(&repaired).is_ok() {
+                arr[i]["function"]["arguments"] = serde_json::Value::String(repaired);
+                i += 1;
+                continue;
+            }
+        }
+        // Last resort: find the longest valid JSON prefix.
+        let mut end = args_str.len();
+        let mut fixed = false;
+        for _ in 0..args_str.len().min(256) {
+            if end <= 2 {
+                break;
+            }
+            end = args_str.floor_char_boundary(end - 1);
+            if serde_json::from_str::<serde_json::Value>(&args_str[..end]).is_ok() {
+                arr[i]["function"]["arguments"] = serde_json::Value::String(args_str[..end].to_string());
+                fixed = true;
+                i += 1;
+                break;
+            }
+            if let Some(prev_quote) = args_str[..end].rfind('"') {
+                end = prev_quote + 1;
+            }
+        }
+        if !fixed {
+            arr.remove(i);
+        }
+    }
+    changed
+}
+
 /// Find a session metadata file on disk by its ID prefix.
 /// Tries `filename()` first, then scans for `{id}_` prefix.
 fn find_session_file(dir: &Path, session: &Session) -> Option<PathBuf> {
@@ -125,11 +209,54 @@ fn read_jsonl_messages(path: &Path) -> Vec<ChatMessage> {
     let Ok(content) = fsutil::read_to_string(path) else {
         return Vec::new();
     };
-    content
-        .lines()
-        .filter(|l| !l.is_empty())
-        .filter_map(|l| serde_json::from_str::<ChatMessage>(l).ok())
-        .collect()
+    let lines: Vec<&str> = content.lines().filter(|l| !l.is_empty()).collect();
+    let mut result: Vec<ChatMessage> = Vec::with_capacity(lines.len());
+    let mut fixed_lines: Vec<String> = Vec::new();
+    let mut needs_rewrite = false;
+
+    for line in &lines {
+        match serde_json::from_str::<ChatMessage>(line) {
+            Ok(mut msg) => {
+                if sanitize_tool_calls(&mut msg.tool_calls) {
+                    needs_rewrite = true;
+                    fixed_lines.push(serde_json::to_string(&msg).unwrap_or_else(|_| line.to_string()));
+                } else {
+                    fixed_lines.push(line.to_string());
+                }
+                result.push(msg);
+            }
+            Err(_) => {
+                // Try to repair truncated/corrupt lines.
+                if let Some(repaired) = repair_truncated_jsonl_line(line) {
+                    if let Ok(mut msg) = serde_json::from_str::<ChatMessage>(&repaired) {
+                        let changed = sanitize_tool_calls(&mut msg.tool_calls);
+                        if changed {
+                            fixed_lines.push(serde_json::to_string(&msg).unwrap_or_else(|_| repaired.clone()));
+                        } else {
+                            fixed_lines.push(repaired);
+                        }
+                        result.push(msg);
+                        needs_rewrite = true;
+                    }
+                }
+            }
+        }
+    }
+
+    // Persist fixed data back to disk so the corruption doesn't come back.
+    if needs_rewrite {
+        let mut serialized: String = fixed_lines
+            .iter()
+            .map(|l| l.as_str())
+            .collect::<Vec<&str>>()
+            .join("\n");
+        if !fixed_lines.is_empty() {
+            serialized.push('\n');
+        }
+        let _ = atomic_write(path, &serialized);
+    }
+
+    result
 }
 
 /// Truncate the session's JSONL file, keeping only messages with `id <= keep_up_to_id`.
@@ -194,7 +321,9 @@ pub fn append_messages_to_jsonl(
         .open(&path)?;
 
     for msg in messages {
-        let line = serde_json::to_string(msg)
+        let mut sanitized = msg.clone();
+        sanitize_tool_calls(&mut sanitized.tool_calls);
+        let line = serde_json::to_string(&sanitized)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         writeln!(file, "{}", line)?;
     }
