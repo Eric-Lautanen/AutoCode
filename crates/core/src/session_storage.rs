@@ -135,6 +135,45 @@ fn read_jsonl_messages(path: &Path) -> Vec<ChatMessage> {
         .collect()
 }
 
+/// Truncate the session's JSONL file, keeping only messages with `id <= keep_up_to_id`.
+/// Rewrites the file atomically via a temp file + rename.
+pub fn truncate_messages_after(
+    project: &Project,
+    session: &Session,
+    keep_up_to_id: u64,
+) -> std::io::Result<()> {
+    let dir = project_sessions_dir(project);
+    let path = find_messages_file(&dir, session)
+        .unwrap_or_else(|| dir.join(session.messages_filename()));
+    let ext_path = fsutil::extended_path(&path);
+
+    let all = read_jsonl_messages(&ext_path);
+    let keep: Vec<ChatMessage> = all
+        .into_iter()
+        .filter(|m| m.id <= keep_up_to_id)
+        .collect();
+
+    let serialized: String = keep
+        .iter()
+        .map(|m| serde_json::to_string(m))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?
+        .join("\n");
+
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let pid = std::process::id();
+    let n = crate::helpers::ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = dir.join(format!(".tmp_{}_{}.jsonl", pid, n));
+    {
+        let ext_tmp = fsutil::extended_path(&tmp);
+        let mut file = std::fs::File::create(&ext_tmp)?;
+        file.write_all(serialized.as_bytes())?;
+        file.sync_all()?;
+    }
+    fsutil::rename(&tmp, &path)?;
+    Ok(())
+}
+
 /// Append messages to the session's JSONL file (fast path, append-only).
 /// The JSONL is the source of truth — never rewritten from RAM.
 pub fn append_messages_to_jsonl(

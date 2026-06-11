@@ -138,6 +138,44 @@ fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: Chat
     }
 }
 
+/// Replay from a user message: truncate the conversation at that message,
+/// copy its text to the input, and reset session/runtime state.
+/// Returns the message text to insert in the input field.
+pub fn replay_to_message(
+    state: &mut AppState,
+    runtimes: &mut std::collections::HashMap<String, ChatRuntime>,
+    session_id: &str,
+    message_id: u64,
+) -> Option<String> {
+    let text;
+    {
+        let sess = state.sessions.iter_mut().find(|s| s.id == session_id)?;
+        let msg = sess.messages.iter().find(|m| m.id == message_id)?;
+        text = msg.content.clone();
+
+        // Truncate in-RAM messages to this point.
+        sess.messages.retain(|m| m.id <= message_id);
+        sess.next_message_id = message_id + 1;
+        sess.actual_tokens_used = 0;
+
+        // Persist truncation to disk.
+        let pid = sess.project_id.clone()?;
+        let proj = state.projects.iter().find(|p| p.id == pid)?;
+        autocode_core::session_storage::truncate_messages_after(proj, sess, message_id).ok()?;
+        autocode_core::session_storage::save_session_meta(proj, sess).ok()?;
+    }
+
+    // Discard any pending disk writes for this session.
+    state.pending_writes.pending.retain(|(sid, _)| sid != session_id);
+
+    // Kill any active stream/tools for this session.
+    if let Some(runtime) = runtimes.get_mut(session_id) {
+        runtime.drain();
+    }
+
+    Some(text)
+}
+
 /// Trim `sess.messages` to the display window. Full history is on disk.
 /// Only trims when messages exceed 2x the window to avoid thrashing.
 /// Re-numbers remaining messages so IDs stay sequential (load_messages_before

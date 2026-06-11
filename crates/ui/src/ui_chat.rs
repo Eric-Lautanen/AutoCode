@@ -491,6 +491,20 @@ pub fn show(
         }
     } // end scoped block — runtime borrow is released here
 
+    // Handle any pending replay action from a ↺ button click.
+    let replay = ui
+        .ctx()
+        .data_mut(|d| d.remove_temp::<Option<(String, u64)>>(egui::Id::new("replay_action")))
+        .flatten();
+    if let Some((sid, msg_id)) = replay {
+        if let Some(text) =
+            autocode_ai::chat::replay_to_message(state, runtimes, &sid, msg_id)
+        {
+            panel_state.input = text;
+            panel_state.scroll_to_bottom = true;
+        }
+    }
+
     ui.separator();
     show_input_row(ui, state, runtimes, panel_state, &active_sid_str);
 }
@@ -874,6 +888,26 @@ fn show_bubble(
                             .clicked()
                         {
                             ui.ctx().copy_text(copy_src);
+                        }
+                        if is_user && !sid.is_empty() {
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        RichText::new("↺").size(10.0).color(theme().warning),
+                                    )
+                                    .fill(Color32::TRANSPARENT)
+                                    .stroke(Stroke::NONE),
+                                )
+                                .on_hover_text("Replay from this message")
+                                .clicked()
+                            {
+                                ui.data_mut(|d| {
+                                    d.insert_temp(
+                                        egui::Id::new("replay_action"),
+                                        Some((sid.to_string(), msg.id)),
+                                    );
+                                });
+                            }
                         }
                     });
                     Frame::NONE
