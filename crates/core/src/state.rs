@@ -337,6 +337,7 @@ impl ApiProvider {
             .first()
             .cloned()
             .unwrap_or_else(|| "high".into());
+        let models_url = format!("{}/models", base_url.trim_end_matches('/'));
 
         Self {
             kind,
@@ -355,7 +356,7 @@ impl ApiProvider {
                 .max_output_tokens_thinking
                 .unwrap_or(defs.max_output_tokens * 2),
             requests_per_hour: defs.requests_per_hour,
-            models_list_url: String::new(),
+            models_list_url: models_url,
             saved_models: Vec::new(),
         }
     }
@@ -394,7 +395,7 @@ impl ApiProvider {
         self.thinking_mode = false;
         self.reasoning_effort = defaults.reasoning_effort;
         self.requests_per_hour = defaults.requests_per_hour;
-        self.models_list_url = String::new();
+        self.models_list_url = defaults.models_list_url.clone();
         self.saved_models = Vec::new();
         self.max_context_tokens = defaults.max_context_tokens;
         self.thinking_api = defaults.thinking_api;

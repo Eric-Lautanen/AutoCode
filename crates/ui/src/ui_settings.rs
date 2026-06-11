@@ -382,25 +382,16 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                             // Models List URL.
                             ui.label(helpers::field_label("Models URL"));
                             let mut models_url = p.models_list_url.clone();
-                            let changed = ui
+                            if ui
                                 .add(
                                     TextEdit::singleline(&mut models_url)
                                         .id(egui::Id::new(("provider_models_url", &key)))
                                         .desired_width(f32::INFINITY)
-                                        .hint_text("Leave empty to use {base_url}/models"),
+                                        .hint_text("https://api.example.com/v1/models"),
                                 )
-                                .changed();
-                            if changed {
+                                .changed()
+                            {
                                 p.models_list_url = models_url;
-                            }
-                            if p.models_list_url.is_empty() {
-                                let fallback =
-                                    format!("{}/models", p.base_url.trim_end_matches('/'));
-                                ui.label(
-                                    RichText::new(fallback)
-                                        .size(10.0)
-                                        .color(Palette::TEXT_MUTED),
-                                );
                             }
                             ui.end_row();
 
