@@ -29,6 +29,10 @@ pub struct ProviderManifest {
     pub anthropic_version: Option<String>,
     #[serde(default)]
     pub model_prefix_strip: Option<String>,
+    /// Optional models list endpoint (e.g. "https://api.example.com/v1/models").
+    /// If empty, defaults to `{base_url}/models`.
+    #[serde(default)]
+    pub models_endpoint: Option<String>,
 }
 
 #[derive(Deserialize, Clone)]
@@ -337,7 +341,9 @@ impl ApiProvider {
             .first()
             .cloned()
             .unwrap_or_else(|| "high".into());
-        let models_url = format!("{}/models", base_url.trim_end_matches('/'));
+        let models_url = provider_manifest(&kind)
+            .and_then(|m| m.models_endpoint.clone())
+            .unwrap_or_else(|| format!("{}/models", base_url.trim_end_matches('/')));
 
         Self {
             kind,
