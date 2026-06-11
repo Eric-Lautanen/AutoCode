@@ -302,9 +302,8 @@ pub struct ApiProvider {
     pub max_output_tokens_thinking: u32,
 
     /// Max API requests allowed per hour (0 or None = unlimited).
-    /// Populated from providers.json. Not persisted in app.ron.
+    /// Set from providers.json on first load; user can override in settings.
     #[serde(default)]
-    #[serde(skip)]
     pub requests_per_hour: Option<u32>,
 }
 
@@ -371,7 +370,8 @@ impl ApiProvider {
             .max_output_tokens_thinking
             .unwrap_or(defs.max_output_tokens * 2);
         self.thinking_api = parse_thinking_api(&defs.thinking_api);
-        self.requests_per_hour = defs.requests_per_hour;
+        // requests_per_hour is NOT set here — it persists across restarts
+        // via app.ron and should not be overwritten on reload.
     }
 
     pub fn reset_defaults(&mut self) {
@@ -382,6 +382,7 @@ impl ApiProvider {
         self.allow_project_escape = false;
         self.thinking_mode = false;
         self.reasoning_effort = defaults.reasoning_effort;
+        self.requests_per_hour = defaults.requests_per_hour;
         self.fill_from_manifest();
     }
 }
