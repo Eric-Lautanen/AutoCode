@@ -493,11 +493,12 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                             ui.end_row();
                             if !saved.is_empty() {
                                 let mut remove_idx: Option<usize> = None;
-                                for (i, name) in saved.iter().enumerate() {
-                                    let mut display = name.clone();
+                                let len = saved.len();
+                                for i in 0..len {
+                                    let name = saved[i].clone();
                                     ui.label("");
                                     ui.horizontal(|ui| {
-                                        let mut new_name = display.clone();
+                                        let mut new_name = name.clone();
                                         let resp = ui.add_sized(
                                             egui::vec2(ui.available_width() - 40.0, 20.0),
                                             TextEdit::singleline(&mut new_name)
