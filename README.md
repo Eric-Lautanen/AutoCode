@@ -93,7 +93,7 @@ Cargo.toml                               # workspace root, resolver = "2"
 - **Custom tool definitions** — all 18 tool definitions hand-written in `provider.rs` for token efficiency
 - **Three-tier token estimation** — API counting endpoint → tiktoken offline (model-aware) → heuristic fallback
 - **6-strategy fuzzy patch matching** — exact → CRLF-normalized → whitespace-normalized → tabs-normalized → anchored line matching → Myers DP sequence alignment
-- **Transient/permanent error classification** — transient errors (rate limits, timeouts, 5xx, 400) get exponential backoff retry (up to 3 retries, 900s max wait); permanent errors (auth, quota, content filter) are surfaced immediately
+- **Transient/permanent error classification** — transient errors (rate limits, timeouts, 5xx, 400) get exponential backoff retry (5s → 180s cap, retries forever); permanent errors (auth, quota, content filter) are surfaced immediately
 - **Connection: close** — HTTP connections use `Connection: close` to prevent read timeouts with certain providers
 
 ### Data Flow
@@ -146,9 +146,9 @@ AutoCode persists its state (API keys, provider settings, projects, prompts, ses
 1. **Providers** — Add API keys and select models for OpenRouter, NVIDIA NIM, OpenAI-Compatible, or OpenCode Go endpoints (per-model manifests are editable via `<exe>/providers.json`)
 2. **Projects** — Add project directories for the file explorer to scan (uses native folder picker via `rfd`)
 3. **Prompts** — Customize the system prompt and summarization/handoff prompt
-4. **Session** — Configure display window size, API tail size, scroll page length
+4. **Session** — Configure messages kept in RAM display window, completion delay, web rate limit, and disk write rate
 5. **Timeouts** — Adjust read/write/connect timeouts for API requests
-6. **Design** — Full color customization with 20 adjustable color fields and screen pixel eyedropper (Windows)
+6. **Design** — Full color customization with 47 adjustable color fields across bubbles, terminal, code, diff, reasoning, badges, and semantic colors; plus font sizes, line heights, margins, and screen pixel eyedropper (Windows)
 7. **About** — Version info, renderer backend info (Glow/Wgpu), debug mode toggle (F12 for egui inspection panel)
 
 ### Persistence Layout
@@ -172,7 +172,7 @@ AutoCode persists its state (API keys, provider settings, projects, prompts, ses
 
 1. Launch the application
 2. Configure at least one AI provider in Settings (Providers tab)
-3. Add a project directory (Projects tab or toolbar "+" button)
+3. Add a project directory (toolbar project picker → "New Project..." folder dialog)
 4. Type your task in the chat input and press Enter
 5. The AI will autonomously use tools to complete the task — you can watch the progress in real time with live streaming, reasoning, and shell output bubbles
 

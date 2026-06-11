@@ -6,7 +6,7 @@
 - Essential features only, no bloat
 - Prefer `std`; minimize deps
 
-Cargo.toml (25) — workspace root, 5 crate members (autocode/core/ai/fs/ui), resolver = "2", release LTO/strip, panic=unwind
+Cargo.toml (22) — workspace root, 5 crate members (autocode/core/ai/fs/ui), resolver = "2", release LTO/strip, panic=unwind
 
 ## crates/autocode/ — binary entry (446 lines)
 main.rs (40) — rustls crypto install, eframe::run_native (1400×900, Glow/Wgpu auto-select)
