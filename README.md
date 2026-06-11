@@ -8,16 +8,16 @@ Write code, run commands, edit files, search your codebase, and iterate — all 
 
 ## Features
 
-- **AI-Powered Autonomous Coding** — The AI can read, write, edit, search, and execute code across your projects using 18 built-in tools
-- **Multi-Provider Support** — OpenRouter, NVIDIA NIM, OpenAI-Compatible, or OpenCode Go API endpoints, with per-model manifests for context windows, output limits, thinking API support, and reasoning efforts
-- **18 Built-in Tools** — Shell execution, file I/O, grep, patch (with 6-strategy fuzzy matching via Levenshtein/Jaro-Winkler/token-set + line-number-based `patch_lines`), directory listing, file operations, web search, URL fetching, task tracking, handoff, and session naming
+- **AI-Powered Autonomous Coding** — The AI can read, write, edit (with 6-strategy fuzzy patch matching), search, and execute code across your projects using 18 built-in tools
+- **Multi-Provider Support** — OpenRouter, NVIDIA NIM, OpenAI-Compatible, or OpenCode Go API endpoints, with per-model manifests for context windows, output limits, thinking API support, reasoning efforts, and per-provider rate limits (`requests_per_hour`) editable in Settings
+- **File Editing** — Surgical find-and-replace with 6-strategy fuzzy matching (exact → CRLF-normalized → whitespace-normalized → tabs-normalized → anchored line matching → Myers DP sequence alignment), plus `patch_lines` for line-number-based replacement and full `write_file`/`read_entire_file` support
 - **Streaming Responses** — Real-time SSE streaming with automatic recovery and retry logic (transient vs permanent error classification with exponential backoff, up to 3 retries)
 - **Session Management** — Multiple named sessions per project (up to 50), full history via JSONL-backed storage, atomic writes, orphan message scavenging, lazy-load display buffering, per-project tab colors
-- **Token Budgeting** — Three-tier token counting (API endpoint → tiktoken offline → heuristic fallback), automatic handoff when approaching context limits, configurable display window and scroll paging
+- **Token Budgeting** — Three-tier token counting (API endpoint → tiktoken offline → heuristic fallback), automatic handoff when approaching context limits (with configurable threshold percentage and trigger prompt), configurable display window and scroll paging
 - **Session Auto-Naming** — AI-captured session names are sanitized using a comprehensive stop-word list, keeping up to 3 meaningful words
 - **File Explorer** — Browse your projects with gitignore-aware tree view (shows all files including hidden), file preview (text with syntax highlighting + images), inline rename/delete with context menu, horizontal scrollbar
 - **Task Tracking** — Built-in floating todo list with progress bar, priority indicators (colored dots), and auto-close on completion
-- **Session Handoff** — Automatic session continuation when context limits are reached, with summarization prompt support, continuation-chain detection, and RESUME.md generation
+- **Session Handoff** — Automatic session continuation when context limits are reached, with trigger prompt warning, summarization prompt support, and RESUME.md generation
 - **System Info Detection** — Automatic OS, CPU, GPU, RAM, shell, and tool availability detection (Windows via Win32 FFI, Unix via `/proc`/`sysctl`/`lspci`)
 - **Security Hardening** — API keys stored with heap-zeroing `SecretString`, path traversal detection with cached resolver, shell commands scoped to project directory, temporary file tracking and cleanup on exit, atomic session file writes, `#[must_use]` on security-critical functions
 - **Custom Dark Theme** — Full 20-color palette with adjustable fonts, bubble/diff/code/terminal/reasoning colors, and screen pixel eyedropper (Windows)
@@ -83,7 +83,7 @@ Cargo.toml                               # workspace root, resolver = "2"
 │                                 screen pixel sampling (Windows FFI)
 ```
 
-**Total: 17,003 lines of Rust source across 29 files.**
+**Total: ~17,000 lines of Rust source across 29 files.**
 
 ### Key Architecture Decisions
 
@@ -143,10 +143,10 @@ AutoCode automatically detects OpenGL availability at startup:
 
 AutoCode persists its state (API keys, provider settings, projects, prompts, sessions) via eframe's built-in persistence layer (`app.ron` in the executable's `AutoCode_data/` directory). On first launch, open the **Settings** window to configure:
 
-1. **Providers** — Add API keys and select models for OpenRouter, NVIDIA NIM, OpenAI-Compatible, or OpenCode Go endpoints (per-model manifests are editable via `<exe>/providers.json`)
+1. **Providers** — Add API keys, select models, and set per-provider rate limits (`requests_per_hour`) for OpenRouter, NVIDIA NIM, OpenAI-Compatible, or OpenCode Go endpoints (per-model manifests are editable via `<exe>/providers.json`)
 2. **Projects** — Add project directories for the file explorer to scan (uses native folder picker via `rfd`)
 3. **Prompts** — Customize the system prompt and summarization/handoff prompt
-4. **Session** — Configure messages kept in RAM display window, completion delay, web rate limit, and disk write rate
+4. **Session** — Configure messages kept in RAM display window, completion delay, handoff trigger threshold, web rate limit, and disk write rate
 5. **Timeouts** — Adjust read/write/connect timeouts for API requests
 6. **Design** — Full color customization with 47 adjustable color fields across bubbles, terminal, code, diff, reasoning, badges, and semantic colors; plus font sizes, line heights, margins, and screen pixel eyedropper (Windows)
 7. **About** — Version info, renderer backend info (Glow/Wgpu), debug mode toggle (F12 for egui inspection panel)

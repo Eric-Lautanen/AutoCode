@@ -47,4 +47,4 @@ helpers.rs (422) — `format_time`, tool result summary/body extraction, markdow
 ui_toolbar.rs (330) — project/session/provider/model pickers, context-budget meter bar, network blink-dot, action buttons (Settings/Files/Handoff toggles, +Session), lit_btn helper
 ui_todo.rs (271) — floating task list, progress bar, priority dots, auto-close on completion, empty state
 
-**Total: 17,003 lines of Rust source across 29 files (excluding `target/` and binary assets).**
+**Total: ~17,000 lines of Rust source across 29 files (excluding `target/` and binary assets).**
