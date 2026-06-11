@@ -379,6 +379,20 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                             }
                             ui.end_row();
 
+                            // Models List URL.
+                            ui.label(helpers::field_label("Models URL"));
+                            let mut models_url = p.models_list_url.clone();
+                            let _ = ui
+                                .add(
+                                    TextEdit::singleline(&mut models_url)
+                                        .id(egui::Id::new(("provider_models_url", &key)))
+                                        .desired_width(f32::INFINITY)
+                                        .hint_text("https://api.example.com/v1/models"),
+                                )
+                                .changed();
+                            p.models_list_url = models_url;
+                            ui.end_row();
+
                             // Model.
                             ui.label(helpers::field_label("Model"));
                             ui.horizontal(|ui| {
@@ -446,6 +460,75 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                 });
                                 ui.end_row();
                             }
+
+                            // Saved models list with add/remove.
+                            ui.label("");
+                            ui.horizontal(|ui| {
+                                ui.set_max_width(260.0);
+                                let model_count = p.saved_models.len();
+                                if model_count == 0 {
+                                    ui.label(
+                                        RichText::new("No saved models")
+                                            .size(10.5)
+                                            .color(Palette::TEXT_MUTED),
+                                    );
+                                } else {
+                                    ui.label(
+                                        RichText::new(format!("{} saved", model_count))
+                                            .size(10.5)
+                                            .color(Palette::TEXT_MUTED),
+                                    );
+                                }
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if ui.small_button("+").clicked() {
+                                        p.saved_models.push(String::new());
+                                    }
+                                });
+                            });
+                            ui.end_row();
+                            if !p.saved_models.is_empty() {
+                                let mut remove_idx: Option<usize> = None;
+                                for (i, saved) in p.saved_models.iter().enumerate() {
+                                    let mut name = saved.clone();
+                                    ui.label("");
+                                    ui.horizontal(|ui| {
+                                        let mut new_name = name.clone();
+                                        let resp = ui.add_sized(
+                                            egui::vec2(ui.available_width() - 40.0, 20.0),
+                                            TextEdit::singleline(&mut new_name)
+                                                .id(egui::Id::new(("saved_model", &key, i)))
+                                                .hint_text("model-name"),
+                                        );
+                                        if resp.changed() {
+                                            if let Some(m) = p.saved_models.get_mut(i) {
+                                                *m = new_name;
+                                            }
+                                        }
+                                        if let Some(models) = settings.fetched_models.get(&key) {
+                                            if !name.is_empty() && !models.contains(&name) {
+                                                ui.label(
+                                                    RichText::new("\u{2605}")
+                                                        .size(12.0)
+                                                        .color(Palette::WARNING),
+                                                );
+                                            }
+                                        }
+                                        if ui.small_button("x").clicked() {
+                                            remove_idx = Some(i);
+                                        }
+                                    });
+                                    ui.end_row();
+                                }
+                                if let Some(idx) = remove_idx {
+                                    p.saved_models.remove(idx);
+                                }
+                            }
+
+                            // Section separator.
+                            ui.label("");
+                            ui.horizontal(|ui| {
+                                ui.separator();
+                            });
                             ui.end_row();
 
                             // Context window (from providers.json, read-only).

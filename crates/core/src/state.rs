@@ -305,6 +305,16 @@ pub struct ApiProvider {
     /// Set from providers.json on first load; user can override in settings.
     #[serde(default)]
     pub requests_per_hour: Option<u32>,
+
+    /// Separate URL for fetching model lists (e.g. "https://api.example.com/v1/models").
+    /// If empty, defaults to `{base_url}/models`.
+    #[serde(default)]
+    pub models_list_url: String,
+
+    /// User-managed model names for this provider.
+    /// Persisted across restarts alongside other provider settings.
+    #[serde(default)]
+    pub saved_models: Vec<String>,
 }
 
 impl ApiProvider {
@@ -340,6 +350,8 @@ impl ApiProvider {
                 .max_output_tokens_thinking
                 .unwrap_or(defs.max_output_tokens * 2),
             requests_per_hour: defs.requests_per_hour,
+            models_list_url: String::new(),
+            saved_models: Vec::new(),
         }
     }
 
@@ -383,6 +395,8 @@ impl ApiProvider {
         self.thinking_mode = false;
         self.reasoning_effort = defaults.reasoning_effort;
         self.requests_per_hour = defaults.requests_per_hour;
+        self.models_list_url = String::new();
+        self.saved_models = Vec::new();
         self.fill_from_manifest();
     }
 }
