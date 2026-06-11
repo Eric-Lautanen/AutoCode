@@ -737,10 +737,16 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
     // Must use the higher token budget so content isn't starved.
     let force_thinking = matches!(thinking_api, autocode_core::state::ThinkingApi::DeepSeek);
     let mut max_tokens = if thinking || force_thinking {
-        defs.max_output_tokens_thinking
-            .unwrap_or(defs.max_output_tokens * 2)
+        let t = provider.max_output_tokens_thinking;
+        if t > 0 {
+            t
+        } else {
+            defs.max_output_tokens_thinking
+                .unwrap_or(defs.max_output_tokens * 2)
+        }
     } else {
-        defs.max_output_tokens
+        let t = provider.max_output_tokens;
+        if t > 0 { t } else { defs.max_output_tokens }
     };
     let reasoning_effort = if provider.reasoning_effort.is_empty() {
         defs.reasoning_efforts
