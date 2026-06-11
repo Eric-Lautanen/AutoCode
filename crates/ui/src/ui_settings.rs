@@ -462,10 +462,12 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                             }
 
                             // Saved models list with add/remove.
+                            // Work on a local copy to avoid borrow conflicts with closures.
+                            let mut saved = std::mem::take(&mut p.saved_models);
                             ui.label("");
                             ui.horizontal(|ui| {
                                 ui.set_max_width(260.0);
-                                let model_count = p.saved_models.len();
+                                let model_count = saved.len();
                                 if model_count == 0 {
                                     ui.label(
                                         RichText::new("No saved models")
@@ -481,18 +483,18 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                 }
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                     if ui.small_button("+").clicked() {
-                                        p.saved_models.push(String::new());
+                                        saved.push(String::new());
                                     }
                                 });
                             });
                             ui.end_row();
-                            if !p.saved_models.is_empty() {
+                            if !saved.is_empty() {
                                 let mut remove_idx: Option<usize> = None;
-                                for (i, saved) in p.saved_models.iter().enumerate() {
-                                    let mut name = saved.clone();
+                                for (i, name) in saved.iter().enumerate() {
+                                    let mut display = name.clone();
                                     ui.label("");
                                     ui.horizontal(|ui| {
-                                        let mut new_name = name.clone();
+                                        let mut new_name = display.clone();
                                         let resp = ui.add_sized(
                                             egui::vec2(ui.available_width() - 40.0, 20.0),
                                             TextEdit::singleline(&mut new_name)
@@ -500,18 +502,14 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                                 .hint_text("model-name"),
                                         );
                                         if resp.changed() {
-                                            if let Some(m) = p.saved_models.get_mut(i) {
-                                                *m = new_name;
-                                            }
+                                            saved[i] = new_name;
                                         }
-                                        if let Some(models) = settings.fetched_models.get(&key) {
-                                            if !name.is_empty() && !models.contains(&name) {
-                                                ui.label(
-                                                    RichText::new("\u{2605}")
-                                                        .size(12.0)
-                                                        .color(Palette::WARNING),
-                                                );
-                                            }
+                                        if !name.is_empty() {
+                                            ui.label(
+                                                RichText::new("\u{2605}")
+                                                    .size(12.0)
+                                                    .color(Palette::WARNING),
+                                            );
                                         }
                                         if ui.small_button("x").clicked() {
                                             remove_idx = Some(i);
@@ -520,9 +518,10 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                     ui.end_row();
                                 }
                                 if let Some(idx) = remove_idx {
-                                    p.saved_models.remove(idx);
+                                    saved.remove(idx);
                                 }
                             }
+                            p.saved_models = saved;
 
                             // Section separator.
                             ui.label("");
