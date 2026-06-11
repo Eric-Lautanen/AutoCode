@@ -481,11 +481,14 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                             .color(Palette::TEXT_MUTED),
                                     );
                                 }
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui.small_button("+").clicked() {
-                                        saved.push(String::new());
-                                    }
-                                });
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if ui.small_button("+").clicked() {
+                                            saved.push(String::new());
+                                        }
+                                    },
+                                );
                             });
                             ui.end_row();
                             if !saved.is_empty() {
@@ -540,10 +543,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
 
                             // Thinking API (from providers.json, read-only).
                             ui.label(helpers::field_label("Thinking API"));
-                            ui.colored_label(
-                                Palette::TEXT_MUTED,
-                                p.thinking_api.label(),
-                            );
+                            ui.colored_label(Palette::TEXT_MUTED, p.thinking_api.label());
                             ui.end_row();
 
                             // Handoff percentage.
@@ -642,7 +642,8 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                     )
                                     .changed()
                                 {
-                                    p.requests_per_hour = if val <= 0 { None } else { Some(val as u32) };
+                                    p.requests_per_hour =
+                                        if val <= 0 { None } else { Some(val as u32) };
                                 }
                                 ui.label(
                                     RichText::new("req/hr (0 = unlimited)")
@@ -672,12 +673,22 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
         }
     }
     if let Some(disabled_key) = disable_switch_key {
-        let next = state.providers.iter()
+        let next = state
+            .providers
+            .iter()
             .find(|(k, v)| *k != &disabled_key && v.enabled)
             .map(|(k, _)| k.clone())
-            .or_else(|| state.providers.keys().find(|k| *k != &disabled_key).cloned());
+            .or_else(|| {
+                state
+                    .providers
+                    .keys()
+                    .find(|k| *k != &disabled_key)
+                    .cloned()
+            });
         if let Some(next_key) = next {
-            let model = state.providers.get(&next_key)
+            let model = state
+                .providers
+                .get(&next_key)
                 .map(|p| p.model.clone())
                 .unwrap_or_default();
             state.active_provider = next_key.clone();
@@ -1472,16 +1483,19 @@ fn show_about(ui: &mut egui::Ui, state: &mut AppState) {
     );
     ui.add_space(14.0);
 
-    let providers_str = ["openrouter", "nvidia-nim", "openai-compatible", "opencode-go"]
-        .iter()
-        .filter_map(|id| {
-            autocode_core::state::provider_manifest(
-                &autocode_core::state::ProviderKind::new(id),
-            )
+    let providers_str = [
+        "openrouter",
+        "nvidia-nim",
+        "openai-compatible",
+        "opencode-go",
+    ]
+    .iter()
+    .filter_map(|id| {
+        autocode_core::state::provider_manifest(&autocode_core::state::ProviderKind::new(id))
             .map(|m| m.label.as_str())
-        })
-        .collect::<Vec<&str>>()
-        .join(" | ");
+    })
+    .collect::<Vec<&str>>()
+    .join(" | ");
     let info = [
         ("Version", "0.1.0"),
         ("UI", "egui 0.34 / eframe 0.34"),

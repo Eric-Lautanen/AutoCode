@@ -105,9 +105,7 @@ pub fn prepare_request_messages_for_session(
                 continue;
             }
             let mut j = i + 1;
-            while j < full_messages.len()
-                && full_messages[j].role == Role::Tool
-            {
+            while j < full_messages.len() && full_messages[j].role == Role::Tool {
                 j += 1;
             }
             if j - i - 1 != tool_calls_count {
@@ -131,8 +129,10 @@ pub fn prepare_request_messages_for_session(
             .iter()
             .find(|s| s.id == session_id)
             .map(|s| s.model.as_str());
-        let estimated_full = autocode_core::helpers::estimate_full_request_tokens(&filtered, Some(&tools), model);
-        let estimated_messages = autocode_core::helpers::estimate_full_request_tokens(&filtered, None, model);
+        let estimated_full =
+            autocode_core::helpers::estimate_full_request_tokens(&filtered, Some(&tools), model);
+        let estimated_messages =
+            autocode_core::helpers::estimate_full_request_tokens(&filtered, None, model);
         if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == session_id) {
             sess.estimated_full_tokens = estimated_full;
             sess.estimated_messages_tokens = estimated_messages;

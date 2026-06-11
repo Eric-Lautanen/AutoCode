@@ -1,8 +1,6 @@
 // helpers.rs -- Shared helpers: ID/time, token estimation, string utils,
 // path resolution, serde helpers, default values, regex pattern matcher.
 
-
-
 use serde::Deserialize;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -69,8 +67,8 @@ pub fn estimate_tokens(text: &str) -> usize {
 
     // Common code symbols that are typically separate tokens or part of operators
     const CODE_SYMBOLS: &[char] = &[
-        '{', '}', '(', ')', '[', ']', ';', ',', '.', ':', '+', '-', '*', '/', '%',
-        '<', '>', '=', '!', '&', '|', '^', '~', '?', '@', '#', '$', '\\', '`', '\'', '"',
+        '{', '}', '(', ')', '[', ']', ';', ',', '.', ':', '+', '-', '*', '/', '%', '<', '>', '=',
+        '!', '&', '|', '^', '~', '?', '@', '#', '$', '\\', '`', '\'', '"',
     ];
 
     for ch in text.chars() {
@@ -99,28 +97,42 @@ pub fn estimate_tokens(text: &str) -> usize {
     // Keywords are matched at word boundaries (preceded by whitespace or start of text).
     let total_chars = text.chars().count();
     let symbol_density = symbol_count as f32 / total_chars.max(1) as f32;
-    let has_code_keyword = text.starts_with("fn ") || text.starts_with("function ") || text.starts_with("def ")
-        || text.starts_with("class ") || text.starts_with("struct ") || text.starts_with("impl ")
-        || text.starts_with("pub ") || text.starts_with("const ") || text.starts_with("let ")
+    let has_code_keyword = text.starts_with("fn ")
+        || text.starts_with("function ")
+        || text.starts_with("def ")
+        || text.starts_with("class ")
+        || text.starts_with("struct ")
+        || text.starts_with("impl ")
+        || text.starts_with("pub ")
+        || text.starts_with("const ")
+        || text.starts_with("let ")
         || text.starts_with("var ")
-        || text.contains("\nfn ") || text.contains("\nfunction ") || text.contains("\ndef ")
-        || text.contains("\nclass ") || text.contains("\nstruct ") || text.contains("\nimpl ")
-        || text.contains("\npub ") || text.contains("\nconst ") || text.contains("\nlet ")
+        || text.contains("\nfn ")
+        || text.contains("\nfunction ")
+        || text.contains("\ndef ")
+        || text.contains("\nclass ")
+        || text.contains("\nstruct ")
+        || text.contains("\nimpl ")
+        || text.contains("\npub ")
+        || text.contains("\nconst ")
+        || text.contains("\nlet ")
         || text.contains("\nvar ")
-        || text.contains("=>") || text.contains("->") || text.contains("::");
+        || text.contains("=>")
+        || text.contains("->")
+        || text.contains("::");
     let is_code = symbol_density > 0.08 || has_code_keyword;
 
     // Token estimation based on content type
     // Code: ~3.2 chars/token, English: ~4.0 chars/token, CJK: ~1.3 tokens/char
     let (word_mult, char_per_token) = if is_code {
-        (1.3, 3.2)  // Code has more symbols, fewer chars per token
+        (1.3, 3.2) // Code has more symbols, fewer chars per token
     } else {
-        (1.5, 4.0)  // Prose
+        (1.5, 4.0) // Prose
     };
 
     let word_tokens = (word_count as f32 * word_mult) as usize;
-    let symbol_tokens = symbol_count;  // Most symbols are 1 token each
-    let cjk_tokens = (cjk_count as f32 * 1.3) as usize;  // ~1.3 tokens per CJK char
+    let symbol_tokens = symbol_count; // Most symbols are 1 token each
+    let cjk_tokens = (cjk_count as f32 * 1.3) as usize; // ~1.3 tokens per CJK char
     let char_floor = (total_chars as f32 / char_per_token).ceil() as usize;
 
     // Combine estimates: max of word+symbol, cjk+word, char_floor
@@ -135,22 +147,22 @@ pub fn estimate_tokens(text: &str) -> usize {
 /// This provides a more accurate per-message estimate than just content alone.
 pub fn estimate_message_tokens(msg: &crate::state::ChatMessage) -> usize {
     let mut total = estimate_tokens(&msg.content);
-    
+
     // Add tool_calls overhead (JSON structure + content)
     if let Some(tc) = &msg.tool_calls {
         total += estimate_tokens(&serde_json::to_string(tc).unwrap_or_default());
     }
-    
+
     // Add reasoning_content if present
     if let Some(rc) = &msg.reasoning_content {
         total += estimate_tokens(rc);
     }
-    
+
     // Add tool_call_id overhead
     if msg.tool_call_id.is_some() {
-        total += 2;  // "tool_call_id": "xxx"
+        total += 2; // "tool_call_id": "xxx"
     }
-    
+
     total
 }
 
@@ -159,7 +171,7 @@ pub fn estimate_message_tokens(msg: &crate::state::ChatMessage) -> usize {
 /// into a JSON array and applying the tokenizer/heuristic to the full serialized text.
 /// This accounts for JSON structural overhead, tool calls, and reasoning content
 /// that the per-message `estimate_tokens(&content)` misses.
-/// 
+///
 /// If `model` is provided, uses tiktoken for accurate counting. Otherwise falls back to heuristic.
 pub fn estimate_full_request_tokens(
     messages: &[ChatMessage],
@@ -194,14 +206,14 @@ pub fn estimate_full_request_tokens(
     }
 
     let json_str = serde_json::to_string(&body).unwrap_or_default();
-    
+
     // Try tiktoken first for accuracy
     if let Some(model_name) = model
         && let Some(count) = crate::tokenizer::offline_token_count(model_name, &json_str)
     {
         return count;
     }
-    
+
     // Fallback to heuristic with adjusted char/token ratio for JSON
     // JSON has more structural chars (braces, quotes, colons) so ~3.5 chars/token
     estimate_tokens_json(&json_str)
@@ -221,9 +233,7 @@ fn estimate_tokens_json(text: &str) -> usize {
     let mut cjk_count = 0usize;
     let mut in_word = false;
 
-    const JSON_SYMBOLS: &[char] = &[
-        '{', '}', '[', ']', ':', ',', '"', '\\',
-    ];
+    const JSON_SYMBOLS: &[char] = &['{', '}', '[', ']', ':', ',', '"', '\\'];
 
     for ch in text.chars() {
         if ch.is_alphanumeric() || ch == '_' {
@@ -255,7 +265,10 @@ fn estimate_tokens_json(text: &str) -> usize {
     let cjk_tokens = (cjk_count as f32 * 1.3) as usize;
 
     let combined = word_tokens + symbol_tokens;
-    combined.max(cjk_tokens + word_tokens).max(char_floor).saturating_add(3)
+    combined
+        .max(cjk_tokens + word_tokens)
+        .max(char_floor)
+        .saturating_add(3)
 }
 
 pub fn is_cjk(ch: char) -> bool {
@@ -1118,7 +1131,8 @@ pub fn update_full_estimate(session: &mut crate::state::Session, tools_json: &se
     } else {
         Some(session.model.as_str())
     };
-    session.estimated_full_tokens = estimate_full_request_tokens(&filtered, Some(tools_json), model);
+    session.estimated_full_tokens =
+        estimate_full_request_tokens(&filtered, Some(tools_json), model);
     session.estimated_messages_tokens = estimate_full_request_tokens(&filtered, None, model);
 }
 
@@ -1419,15 +1433,20 @@ fn main() {
     fn test_code_vs_prose_detection() {
         let code = "fn main() { let x = 1 + 2; }";
         let prose = "This is a regular sentence with words.";
-        
+
         let code_count = estimate_tokens(code);
         let prose_count = estimate_tokens(prose);
-        
+
         // Code should have more tokens per char due to symbols
         let code_ratio = code_count as f32 / code.len() as f32;
         let prose_ratio = prose_count as f32 / prose.len() as f32;
-        
+
         // Code typically has higher token/char ratio
-        assert!(code_ratio > prose_ratio * 0.8, "code_ratio={} prose_ratio={}", code_ratio, prose_ratio);
+        assert!(
+            code_ratio > prose_ratio * 0.8,
+            "code_ratio={} prose_ratio={}",
+            code_ratio,
+            prose_ratio
+        );
     }
 }

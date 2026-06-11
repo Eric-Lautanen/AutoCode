@@ -8,8 +8,7 @@ use egui::{CentralPanel, Frame, Panel};
 
 use autocode_ai::{
     chat::{self, ChatRuntime},
-    provider,
-    session,
+    provider, session,
 };
 use autocode_core::{state::AppState, theme};
 use autocode_ui::{
@@ -61,8 +60,6 @@ impl AutocodeApp {
             prev_session_id: None,
         }
     }
-
-
 
     fn restore_active_session(state: &mut AppState) {
         if let Some(ref sid) = state.active_session_id

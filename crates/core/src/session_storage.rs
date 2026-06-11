@@ -103,10 +103,7 @@ fn atomic_write(path: &Path, contents: &str) -> std::io::Result<()> {
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     let pid = std::process::id();
     let n = crate::helpers::ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("tmp");
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("tmp");
     let tmp = dir.join(format!(".tmp_{}_{}.{}", pid, n, ext));
     {
         let ext_path = fsutil::extended_path(&tmp);
@@ -143,19 +140,16 @@ pub fn truncate_messages_after(
     keep_up_to_id: u64,
 ) -> std::io::Result<()> {
     let dir = project_sessions_dir(project);
-    let path = find_messages_file(&dir, session)
-        .unwrap_or_else(|| dir.join(session.messages_filename()));
+    let path =
+        find_messages_file(&dir, session).unwrap_or_else(|| dir.join(session.messages_filename()));
     let ext_path = fsutil::extended_path(&path);
 
     let all = read_jsonl_messages(&ext_path);
-    let keep: Vec<ChatMessage> = all
-        .into_iter()
-        .filter(|m| m.id <= keep_up_to_id)
-        .collect();
+    let keep: Vec<ChatMessage> = all.into_iter().filter(|m| m.id <= keep_up_to_id).collect();
 
     let mut serialized: String = keep
         .iter()
-        .map(|m| serde_json::to_string(m))
+        .map(serde_json::to_string)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?
         .join("\n");
@@ -190,8 +184,8 @@ pub fn append_messages_to_jsonl(
     if !dir.exists() {
         fsutil::create_dir_all(&dir)?;
     }
-    let path = find_messages_file(&dir, session)
-        .unwrap_or_else(|| dir.join(session.messages_filename()));
+    let path =
+        find_messages_file(&dir, session).unwrap_or_else(|| dir.join(session.messages_filename()));
     let path = fsutil::extended_path(&path);
 
     let mut file = std::fs::OpenOptions::new()
@@ -348,8 +342,7 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
                 session.show_todo = meta.show_todo;
                 session.todo_user_dismissed = meta.todo_user_dismissed;
                 session.handoff_enabled = meta.handoff_enabled;
-                session.session_named = meta.session_named
-                    || !session.label.starts_with('S');
+                session.session_named = meta.session_named || !session.label.starts_with('S');
                 session.show_explorer = meta.show_explorer;
                 session.settings_open = meta.settings_open;
                 session.actual_tokens_used = meta.actual_tokens_used;
@@ -375,11 +368,9 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
                 // the first completion.
                 session.estimated_full_tokens = session.estimated_messages_tokens;
             }
-            Err(_e) => {
-                }
+            Err(_e) => {}
         },
-        Err(_e) => {
-            }
+        Err(_e) => {}
     }
     true
 }
@@ -474,7 +465,7 @@ fn cleanup_orphan_temp_files(dir: &Path, max_age_secs: u64) {
                 && now.saturating_sub(ts) > max_age_secs
             {
                 let _ = fsutil::remove_file(&entry.path());
-                }
+            }
         }
     }
 }

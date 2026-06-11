@@ -582,10 +582,13 @@ impl Session {
     }
 
     /// Sum of per-message estimated token counts for in-RAM messages only.
-    /// Includes content, tool_calls, and reasoning_content. Use `actual_tokens_used` 
+    /// Includes content, tool_calls, and reasoning_content. Use `actual_tokens_used`
     /// for the authoritative count reported by the API.
     pub fn token_count(&self) -> usize {
-        self.messages.iter().map(crate::helpers::estimate_message_tokens).sum()
+        self.messages
+            .iter()
+            .map(crate::helpers::estimate_message_tokens)
+            .sum()
     }
 
     pub fn record_actual_usage(&mut self, prompt: usize, _completion: usize) {
@@ -940,8 +943,6 @@ pub struct AppState {
     #[serde(default)]
     pub settings_open: bool,
 
-
-
     #[serde(default)]
     pub sysinfo: crate::sysinfo::SysInfo,
 
@@ -1160,7 +1161,8 @@ impl AppState {
         self.projects.retain(|p| {
             let dir = proj_dir.join(&p.data_dir_name);
             if !dir.exists() {
-                self.sessions.retain(|s| s.project_id.as_ref() != Some(&p.id));
+                self.sessions
+                    .retain(|s| s.project_id.as_ref() != Some(&p.id));
                 false
             } else {
                 true
@@ -1180,31 +1182,34 @@ impl AppState {
             .sessions
             .iter()
             .filter(|s| {
-                s.project_id.as_ref().and_then(|pid| {
-                    self.projects.iter().find(|p| &p.id == pid).map(|proj| {
-                        let dir = crate::session_storage::project_sessions_dir(proj);
-                        let candidate = dir.join(s.filename());
-                        if candidate.exists() {
-                            return false;
-                        }
-                        let prefix = format!("{}_", s.id);
-                        if let Ok(entries) = std::fs::read_dir(&dir) {
-                            !entries.flatten().any(|e| {
-                                let name = e.file_name().to_string_lossy().to_string();
-                                name.starts_with(&prefix)
-                                    && (name.ends_with(".json") || name.ends_with(".jsonl"))
-                            })
-                        } else {
-                            true
-                        }
+                s.project_id
+                    .as_ref()
+                    .and_then(|pid| {
+                        self.projects.iter().find(|p| &p.id == pid).map(|proj| {
+                            let dir = crate::session_storage::project_sessions_dir(proj);
+                            let candidate = dir.join(s.filename());
+                            if candidate.exists() {
+                                return false;
+                            }
+                            let prefix = format!("{}_", s.id);
+                            if let Ok(entries) = std::fs::read_dir(&dir) {
+                                !entries.flatten().any(|e| {
+                                    let name = e.file_name().to_string_lossy().to_string();
+                                    name.starts_with(&prefix)
+                                        && (name.ends_with(".json") || name.ends_with(".jsonl"))
+                                })
+                            } else {
+                                true
+                            }
+                        })
                     })
-                }).unwrap_or(true)
+                    .unwrap_or(true)
             })
             .map(|s| s.id.clone())
             .collect();
         if !stale.is_empty() {
             self.sessions.retain(|s| !stale.contains(&s.id));
-            }
+        }
 
         // 4. Clean up orphaned session-level state.
         if self.sessions.is_empty() {
@@ -1274,10 +1279,10 @@ impl AppState {
         sess.label = format!("S{}", id);
         // Persist metadata immediately so the session survives app restarts.
         // The JSONL message file is created later by flush_pending_writes.
-        if let Some(ref pid) = sess.project_id {
-            if let Some(proj) = self.projects.iter().find(|p| &p.id == pid) {
-                let _ = crate::session_storage::save_session_meta(proj, &sess);
-            }
+        if let Some(ref pid) = sess.project_id
+            && let Some(proj) = self.projects.iter().find(|p| &p.id == pid)
+        {
+            let _ = crate::session_storage::save_session_meta(proj, &sess);
         }
         self.active_session_id = Some(sess.id.clone());
         self.sessions.push(sess);
@@ -1291,7 +1296,8 @@ impl AppState {
             return;
         }
         let rate = self.disk_write_rate_ms;
-        if !force && rate > 0
+        if !force
+            && rate > 0
             && (self.pending_writes.last_write.elapsed().as_millis() as u64) < rate
         {
             return;
@@ -1302,9 +1308,15 @@ impl AppState {
             grouped.entry(sid).or_default().push(msg);
         }
         for (sid, msgs) in &grouped {
-            let Some(sess) = self.sessions.iter().find(|s| s.id == *sid) else { continue; };
-            let Some(pid) = sess.project_id.as_ref() else { continue; };
-            let Some(proj) = self.projects.iter().find(|p| &p.id == pid) else { continue; };
+            let Some(sess) = self.sessions.iter().find(|s| s.id == *sid) else {
+                continue;
+            };
+            let Some(pid) = sess.project_id.as_ref() else {
+                continue;
+            };
+            let Some(proj) = self.projects.iter().find(|p| &p.id == pid) else {
+                continue;
+            };
             let _ = crate::session_storage::append_messages_to_jsonl(proj, sess, msgs);
         }
         self.pending_writes.last_write = std::time::Instant::now();

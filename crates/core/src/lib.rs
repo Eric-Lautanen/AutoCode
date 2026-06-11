@@ -14,5 +14,5 @@ pub mod helpers;
 pub mod session_storage;
 pub mod state;
 pub mod sysinfo;
-pub mod tokenizer;
 pub mod theme;
+pub mod tokenizer;

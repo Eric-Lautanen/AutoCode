@@ -16,7 +16,7 @@ use autocode_ai::chat::{self, ChatRuntime};
 use autocode_ai::provider;
 use autocode_core::{
     state::{AppState, ChatMessage, DesignSettings, Role, ToolMeta},
-    theme::{project_accent, Palette, ROUND_LG, ROUND_MD, ROUND_SM},
+    theme::{Palette, ROUND_LG, ROUND_MD, ROUND_SM, project_accent},
 };
 
 thread_local! {
@@ -246,12 +246,12 @@ pub fn show(
             if !older.is_empty() {
                 let older: Vec<_> = older
                     .into_iter()
-                    .filter(|m| {
-                        m.role != Role::Error
-                    })
+                    .filter(|m| m.role != Role::Error)
                     .collect();
                 let added = older.len();
-                if added == 0 { return; }
+                if added == 0 {
+                    return;
+                }
                 panel_state.loaded_min_id = older.first().map(|m| m.id).unwrap_or(0);
                 let mut new_buf = older;
                 new_buf.extend_from_slice(&panel_state.display_buffer);
@@ -275,8 +275,7 @@ pub fn show(
         let current_count = sess.messages.len();
         if current_count > panel_state.prev_message_count {
             for msg in &sess.messages[panel_state.prev_message_count..current_count] {
-                if msg.role != Role::Error
-                {
+                if msg.role != Role::Error {
                     panel_state.display_buffer.push(msg.clone());
                 }
             }
@@ -289,13 +288,14 @@ pub fn show(
             // Rebuild display_buffer from sess.messages — the new user
             // message was pushed to the session *before* the trim, so it
             // would otherwise be silently dropped from the visible chat.
-            panel_state.display_buffer = sess.messages.iter()
-                .filter(|m| {
-                    m.role != Role::Error
-                })
+            panel_state.display_buffer = sess
+                .messages
+                .iter()
+                .filter(|m| m.role != Role::Error)
                 .cloned()
                 .collect();
-            panel_state.loaded_min_id = panel_state.display_buffer
+            panel_state.loaded_min_id = panel_state
+                .display_buffer
                 .first()
                 .map(|m| m.id)
                 .unwrap_or(0);
@@ -497,9 +497,7 @@ pub fn show(
         .data_mut(|d| d.remove_temp::<Option<(String, u64)>>(egui::Id::new("replay_action")))
         .flatten();
     if let Some((sid, msg_id)) = replay {
-        if let Some(text) =
-            autocode_ai::chat::replay_to_message(state, runtimes, &sid, msg_id)
-        {
+        if let Some(text) = autocode_ai::chat::replay_to_message(state, runtimes, &sid, msg_id) {
             panel_state.input = text;
             panel_state.scroll_to_bottom = true;
         }
@@ -555,7 +553,10 @@ fn load_new_session(state: &mut AppState, panel_state: &mut ChatPanelState) -> O
                 } else {
                     // Recompute estimate with actual tool definitions so the
                     // toolbar meter matches the pre-flight check from the start.
-                    autocode_core::helpers::update_full_estimate(new_sess, &provider::tool_definitions());
+                    autocode_core::helpers::update_full_estimate(
+                        new_sess,
+                        &provider::tool_definitions(),
+                    );
                 }
                 // Evict excess messages from RAM now that they're loaded from disk.
                 // Full history remains on disk for on-demand loading.
@@ -817,7 +818,10 @@ fn show_session_tabs(
 
 fn empty_state(ui: &mut egui::Ui, state: &AppState) {
     let has_sessions = state.active_project_id.as_ref().is_some_and(|pid| {
-        state.sessions.iter().any(|s| s.project_id.as_deref() == Some(pid))
+        state
+            .sessions
+            .iter()
+            .any(|s| s.project_id.as_deref() == Some(pid))
     });
     let msg = if has_sessions {
         "Select a session from the dropdown above or type a message to start a new one."
@@ -825,11 +829,7 @@ fn empty_state(ui: &mut egui::Ui, state: &AppState) {
         "No messages yet -- type a task below and press Send (Enter)."
     };
     ui.centered_and_justified(|ui| {
-        ui.label(
-            RichText::new(msg)
-                .color(theme().text_muted)
-                .size(13.0),
-        );
+        ui.label(RichText::new(msg).color(theme().text_muted).size(13.0));
     });
 }
 
@@ -1410,13 +1410,7 @@ fn render_structured_tool_result(
 ///
 /// `line_offset` is a 0-based offset added to snippet line numbers to produce
 /// actual file line numbers. Pass 0 when the snippet is the full file.
-fn render_unified_diff(
-    ui: &mut egui::Ui,
-    old: &str,
-    new: &str,
-    sid: &str,
-    line_offset: usize,
-) {
+fn render_unified_diff(ui: &mut egui::Ui, old: &str, new: &str, sid: &str, line_offset: usize) {
     let old_lines: Vec<&str> = old.lines().collect();
     let new_lines: Vec<&str> = new.lines().collect();
 
@@ -1565,7 +1559,11 @@ fn render_unified_diff(
                     } else {
                         dl.new_lineno
                     };
-                    let line_num = if raw_num > 0 { raw_num + line_offset } else { 0 };
+                    let line_num = if raw_num > 0 {
+                        raw_num + line_offset
+                    } else {
+                        0
+                    };
                     let fg = match dl.prefix {
                         '-' => del_color,
                         '+' => add_color,
@@ -2195,9 +2193,11 @@ fn show_input_row(
             ui.push_id(format!("input_row_{}", sid), |ui| {
                 ui.horizontal(|ui| {
                     let active_sid = state.active_session_id.clone();
-                    let busy = active_sid
-                        .as_ref()
-                        .is_some_and(|sid| runtimes.get(sid).is_some_and(|r| r.is_busy() || r.retry_after.is_some()));
+                    let busy = active_sid.as_ref().is_some_and(|sid| {
+                        runtimes
+                            .get(sid)
+                            .is_some_and(|r| r.is_busy() || r.retry_after.is_some())
+                    });
                     // Buttons: Send(72) + gap(6) + TH(36) + gap(6) + Effort(44) + gap(6) + [=](28) = 198
                     // Plus item_spacing before button group in this horizontal (default ~6) = 204
                     // Small buffer for padding = 206

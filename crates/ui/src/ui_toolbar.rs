@@ -93,22 +93,20 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                         )
                         .show_ui(ui, |ui| {
                             let has_active = state.active_session_id.is_some();
-                            if ui
-                                .selectable_label(!has_active, "Select Session")
-                                .clicked()
+                            if ui.selectable_label(!has_active, "Select Session").clicked()
                                 && has_active
                             {
                                 state.active_session_id = None;
                             }
                             for (sid, slabel) in &sessions_here {
                                 ui.push_id(("sess_sel", sid), |ui| {
-                                    let selected =
-                                        state.active_session_id.as_deref() == Some(sid);
-                                    if ui.selectable_label(selected, slabel).clicked()
-                                        && !selected
+                                    let selected = state.active_session_id.as_deref() == Some(sid);
+                                    if ui.selectable_label(selected, slabel).clicked() && !selected
                                     {
                                         // Move to end so reopened tabs appear after all open tabs.
-                                        if let Some(idx) = state.sessions.iter().position(|s| s.id == *sid) {
+                                        if let Some(idx) =
+                                            state.sessions.iter().position(|s| s.id == *sid)
+                                        {
                                             let mut sess = state.sessions.remove(idx);
                                             sess.closed = false;
                                             state.sessions.push(sess);
@@ -137,7 +135,9 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                     .show_ui(ui, |ui| {
                         let any_enabled = state.providers.values().any(|p| p.enabled);
                         let keys: Vec<String> = if any_enabled {
-                            state.providers.iter()
+                            state
+                                .providers
+                                .iter()
                                 .filter(|(_, p)| p.enabled)
                                 .map(|(k, _)| k.clone())
                                 .collect()

@@ -2,10 +2,9 @@
 // Uses only std::net + manual HTTP/HTTPS via a thin blocking wrapper.
 // To avoid a heavy async runtime we spawn threads and use channels.
 
-
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::{
     io::{BufRead, BufReader, Read, Write},
     net::TcpStream,
@@ -296,8 +295,12 @@ static LAST_API_REQUEST: Mutex<Option<HashMap<(String, String), std::time::Insta
 /// Returns the number of milliseconds to wait before the next request
 /// to this provider+model, or 0 if no wait is needed.  Does NOT sleep.
 pub fn api_rate_limit_wait_ms(provider: &ApiProvider, label: &str) -> u64 {
-    let Some(limit) = provider.requests_per_hour else { return 0 };
-    if limit == 0 { return 0; }
+    let Some(limit) = provider.requests_per_hour else {
+        return 0;
+    };
+    if limit == 0 {
+        return 0;
+    }
     let interval = (3600u64 * 1000) / limit as u64;
 
     let last_requests = match LAST_API_REQUEST.lock() {
@@ -331,7 +334,10 @@ pub fn api_rate_limit_record(provider: &ApiProvider, label: &str) {
         }
     };
     let map = last_requests.get_or_insert_with(HashMap::new);
-    map.insert((label.to_string(), provider.model.clone()), std::time::Instant::now());
+    map.insert(
+        (label.to_string(), provider.model.clone()),
+        std::time::Instant::now(),
+    );
 }
 
 // -- Request / Response types --------------------------------------------------
@@ -433,7 +439,10 @@ pub fn tool_definitions() -> serde_json::Value {
     let grep_desc = if grep_note.is_empty() {
         "Search code. Returns file:line matches. Literal by default; use ^prefix or suffix$ for regex. Glob filter, .gitignore respect.".to_string()
     } else {
-        format!("Search code. Returns file:line matches. Literal by default; use ^prefix or suffix$ for regex. Glob filter, .gitignore respect. [!] {}", grep_note)
+        format!(
+            "Search code. Returns file:line matches. Literal by default; use ^prefix or suffix$ for regex. Glob filter, .gitignore respect. [!] {}",
+            grep_note
+        )
     };
 
     let shell_note = autocode_core::sysinfo::shell_tools_note();
@@ -490,7 +499,7 @@ impl ProviderClient {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 run_request_once(provider, request, tx);
             }));
-            });
+        });
         rx
     }
 }
@@ -512,8 +521,7 @@ fn run_request_once(provider: ApiProvider, request: CompletionRequest, tx: Sende
             );
             let _ = tx.send(ProviderEvent::Error(msg));
         }
-        _ => {
-            }
+        _ => {}
     }
 }
 
@@ -623,7 +631,11 @@ fn build_request_body(
         .iter()
         .map(|m| ReqMsg {
             role: &m.role,
-            content: if m.tool_calls.is_some() { None } else { Some(&m.content) },
+            content: if m.tool_calls.is_some() {
+                None
+            } else {
+                Some(&m.content)
+            },
             tool_call_id: m.tool_call_id.as_deref(),
             tool_calls: m.tool_calls.as_ref(),
             reasoning_content: m.reasoning_content.as_deref(),
@@ -809,7 +821,9 @@ fn sanitize_for_log(s: &str) -> String {
     let mut result = s.to_string();
     for prefix in prefixes {
         loop {
-            let Some(start) = result.find(prefix) else { break };
+            let Some(start) = result.find(prefix) else {
+                break;
+            };
             let after = start + prefix.len();
             let end = after
                 + result[after..]
@@ -966,8 +980,7 @@ fn parse_sse_stream_from_reader<R: BufRead>(
             Err(e) => return Err(e.into()),
         };
         line_count += 1;
-        if line_count <= 10 {
-            }
+        if line_count <= 10 {}
         if last_log.elapsed().as_secs() >= 30 {
             last_log = std::time::Instant::now();
         }
@@ -979,8 +992,7 @@ fn parse_sse_stream_from_reader<R: BufRead>(
             raw_buf.push('\n');
             continue;
         }
-        if !saw_data_line {
-            }
+        if !saw_data_line {}
         saw_data_line = true;
         let data = line["data: ".len()..].trim();
         if data == "[DONE]" {
@@ -1000,8 +1012,7 @@ fn parse_sse_stream_from_reader<R: BufRead>(
         }
         let delta = &v["choices"][0]["delta"];
         if let Some(text) = delta["content"].as_str().filter(|s| !s.is_empty()) {
-            if content_count < 3 {
-                }
+            if content_count < 3 {}
             content_count += 1;
             if tx.send(ProviderEvent::Delta(text.to_string())).is_err() {
                 return Err("channel closed".into());
@@ -1011,8 +1022,7 @@ fn parse_sse_stream_from_reader<R: BufRead>(
             .as_str()
             .filter(|s| !s.is_empty())
         {
-            if reasoning_count < 3 {
-                }
+            if reasoning_count < 3 {}
             reasoning_count += 1;
             if tx
                 .send(ProviderEvent::Reasoning(reasoning.to_string()))
@@ -1309,8 +1319,8 @@ pub fn native_post(
             let dns_name = rustls::pki_types::DnsName::try_from(host.clone())
                 .map_err(|_| "invalid DNS name".to_string())?;
             let server_name = ServerName::DnsName(dns_name);
-            let client =
-                rustls::ClientConnection::new(config, server_name).map_err(|e| format!("tls: {}", e))?;
+            let client = rustls::ClientConnection::new(config, server_name)
+                .map_err(|e| format!("tls: {}", e))?;
             let mut tls_stream = rustls::StreamOwned::new(client, stream);
             tls_stream
                 .write_all(request_bytes)
@@ -1354,9 +1364,7 @@ pub fn native_post(
         Ok(())
     })();
 
-    read_result.map_err(|e| {
-        e
-    })?;
+    read_result.map_err(|e| e)?;
 
     let body_bytes = http_response_body(&buffer);
     Ok(String::from_utf8_lossy(&body_bytes).to_string())
@@ -1403,7 +1411,13 @@ pub fn count_input_tokens(
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
 
-    let response = native_post(&url, provider.api_key.as_str(), &body_str, timeout_secs, &extra_refs)?;
+    let response = native_post(
+        &url,
+        provider.api_key.as_str(),
+        &body_str,
+        timeout_secs,
+        &extra_refs,
+    )?;
 
     let v: serde_json::Value =
         serde_json::from_str(&response).map_err(|e| format!("json parse response: {}", e))?;
@@ -1417,12 +1431,8 @@ pub fn count_input_tokens(
         .or_else(|| v["usage"]["prompt_tokens"].as_u64())
         .or_else(|| v["total_tokens"].as_u64())
         .or_else(|| v["usage"]["total_tokens"].as_u64())
-        .map(|n| {
-            n as usize
-        })
-        .ok_or_else(|| {
-            format!("no token count in response: {}", response.trim())
-        })
+        .map(|n| n as usize)
+        .ok_or_else(|| format!("no token count in response: {}", response.trim()))
 }
 
 /// Perform a native HTTP GET request, returning the response body with

@@ -2,7 +2,9 @@
 // Uses egui CollapsingHeader for directory nodes (native open/close triangles),
 // selectable labels for files, and a floating code-viewer window.
 
-use egui::{Color32, FontId, Frame, Key, Margin, RichText, ScrollArea, Stroke, TextEdit, TextureHandle};
+use egui::{
+    Color32, FontId, Frame, Key, Margin, RichText, ScrollArea, Stroke, TextEdit, TextureHandle,
+};
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -484,9 +486,8 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
                                     d.insert_temp(egui::Id::new("file_viewer_close"), true);
                                 });
                             }
-                            let ctrl_s = ui.input_mut(|i| {
-                                i.consume_key(egui::Modifiers::COMMAND, Key::S)
-                            });
+                            let ctrl_s =
+                                ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::S));
                             let save_clicked = is_modified
                                 && ui
                                     .add(
@@ -503,8 +504,7 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
                                 if let Some(path) = &panel.selected_file {
                                     if let Some(buffer) = &panel.file_edit_buffer {
                                         if std::fs::write(path, buffer).is_ok() {
-                                            panel.file_content =
-                                                Some(Ok(buffer.clone()));
+                                            panel.file_content = Some(Ok(buffer.clone()));
                                         }
                                     }
                                 }
@@ -576,17 +576,22 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
                         let gutter_w = 12.0 + digits as f32 * 8.0;
                         let font_id = FontId::monospace(13.0);
                         let char_width = ui.fonts_mut(|f| f.glyph_width(&font_id, 'W'));
-                        let max_line_len = buffer.lines().map(|l| l.chars().count()).max().unwrap_or(0);
+                        let max_line_len =
+                            buffer.lines().map(|l| l.chars().count()).max().unwrap_or(0);
                         let right_pad = 48.0;
                         // gutter_gap is the space between the gutter separator and the text column.
                         // It must exactly match the left Margin on the TextEdit below.
                         let gutter_gap = 8.0f32;
-                        let max_content_width = gutter_w + gutter_gap + max_line_len as f32 * char_width + right_pad;
+                        let max_content_width =
+                            gutter_w + gutter_gap + max_line_len as f32 * char_width + right_pad;
                         let scroll_out = ScrollArea::both()
                             .id_salt("file_viewer_scroll")
                             .auto_shrink([false; 2])
                             .scroll_offset(panel.viewer_scroll)
-                            .scroll_source(egui::scroll_area::ScrollSource { drag: false, ..Default::default() })
+                            .scroll_source(egui::scroll_area::ScrollSource {
+                                drag: false,
+                                ..Default::default()
+                            })
                             .show(ui, |ui| {
                                 ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
                                 ui.set_min_width(max_content_width);
@@ -621,9 +626,11 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
                                     // allocated rect at clone-time, which can be too small or already
                                     // scrolled out of the visible area. Painting directly on the
                                     // context layer bypasses that and always renders correctly.
-                                    let mut ctx_painter = ui.ctx().layer_painter(
-                                        egui::LayerId::new(egui::Order::Middle, egui::Id::new("gutter_layer"))
-                                    );
+                                    let mut ctx_painter =
+                                        ui.ctx().layer_painter(egui::LayerId::new(
+                                            egui::Order::Middle,
+                                            egui::Id::new("gutter_layer"),
+                                        ));
                                     ctx_painter.set_clip_rect(clip_rect_before);
                                     ctx_painter.rect_filled(
                                         gutter_rect,
@@ -670,8 +677,7 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
                                     // Compute the scroll target while we still have te_output,
                                     // but don't call scroll_to_rect yet — do it after this
                                     // closure so layout is not disturbed.
-                                    let pointer_down =
-                                        ui.input(|i| i.pointer.primary_down());
+                                    let pointer_down = ui.input(|i| i.pointer.primary_down());
                                     if pointer_down {
                                         if let Some(cursor_range) = &te_output.cursor_range {
                                             let primary = cursor_range.primary;
@@ -730,7 +736,11 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
     let clicked_outside = ctx.input(|i| i.pointer.any_click())
         && window_resp
             .as_ref()
-            .map(|r| !r.response.rect.contains(ctx.input(|i| i.pointer.interact_pos().unwrap_or_default())))
+            .map(|r| {
+                !r.response
+                    .rect
+                    .contains(ctx.input(|i| i.pointer.interact_pos().unwrap_or_default()))
+            })
             .unwrap_or(false)
         && !panel.show_close_confirm;
 
@@ -781,11 +791,9 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
                                     .color(Palette::TEXT_PRIMARY),
                             );
                             ui.label(
-                                RichText::new(
-                                    "You have unsaved changes. Save before closing?",
-                                )
-                                .size(12.0)
-                                .color(Palette::TEXT_MUTED),
+                                RichText::new("You have unsaved changes. Save before closing?")
+                                    .size(12.0)
+                                    .color(Palette::TEXT_MUTED),
                             );
 
                             ui.add_space(4.0);

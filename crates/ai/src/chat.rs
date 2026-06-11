@@ -2,15 +2,14 @@
 // tool calls (run_shell, read_file, write_file, list_dir),
 // security hardening, and actual token usage tracking.
 
-
 use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
 
 use crate::{
     helpers,
     provider::{
-        count_input_tokens, ApiMessage, CompletionRequest, ProviderClient, ProviderEvent, ToolCall,
-        ToolChoice, tool_definitions,
+        ApiMessage, CompletionRequest, ProviderClient, ProviderEvent, ToolCall, ToolChoice,
+        count_input_tokens, tool_definitions,
     },
     session,
 };
@@ -47,41 +46,41 @@ fn is_transient_error(msg: &str) -> bool {
 
     // Transient errors - worth retrying
     let transient_patterns = [
-        "429",                // Rate limited
-        "502",                // Bad gateway
-        "503",                // Service unavailable
-        "504",                // Gateway timeout
-        "520",                // Cloudflare origin error (transient)
-        "timed out",          // Connection/request timeout
-        "timeout",            // Timeout
-        "no response",        // No initial response from provider
-        "connection refused", // Server not accepting connections
-        "connection lost",    // Dropped connection
-        "connection reset",   // Connection reset by peer
-        "connection closed",  // Connection closed
-        "connection aborted", // Connection aborted
-        "broken pipe",        // Broken pipe (Unix connection close)
-        "stream stalled",     // Stream idle timeout
-        "os error",           // OS-level network error
-        "unexpected empty",   // Provider returned empty response
-        "invalid tool calls", // Malformed tool calls (model hallucination)
-        "orphaned tool",      // Orphaned tool calls
-        "panic",              // Internal panic (may be transient)
-        "consumer dropped",   // Channel closed
-        "overloaded",         // Server overloaded
-        "capacity",           // Server at capacity
-        "server error",       // Generic 500
-        "internal server",    // 500 Internal Server Error
-        "dns",                // DNS resolution failure
-        "could not resolve",  // DNS resolution failure
-        "name or service",    // DNS resolution failure (getaddrinfo)
-        "no such host",       // DNS resolution failure
-        "tls",                // TLS/SSL error
-        "ssl",                // TLS/SSL error
-        "certificate",        // TLS certificate error
-        "handshake",          // TLS handshake failure
-        "bad request",        // 400 — often a transient provider glitch
-        "unterminated string",// Provider-side JSON parse failure (transient)
+        "429",                 // Rate limited
+        "502",                 // Bad gateway
+        "503",                 // Service unavailable
+        "504",                 // Gateway timeout
+        "520",                 // Cloudflare origin error (transient)
+        "timed out",           // Connection/request timeout
+        "timeout",             // Timeout
+        "no response",         // No initial response from provider
+        "connection refused",  // Server not accepting connections
+        "connection lost",     // Dropped connection
+        "connection reset",    // Connection reset by peer
+        "connection closed",   // Connection closed
+        "connection aborted",  // Connection aborted
+        "broken pipe",         // Broken pipe (Unix connection close)
+        "stream stalled",      // Stream idle timeout
+        "os error",            // OS-level network error
+        "unexpected empty",    // Provider returned empty response
+        "invalid tool calls",  // Malformed tool calls (model hallucination)
+        "orphaned tool",       // Orphaned tool calls
+        "panic",               // Internal panic (may be transient)
+        "consumer dropped",    // Channel closed
+        "overloaded",          // Server overloaded
+        "capacity",            // Server at capacity
+        "server error",        // Generic 500
+        "internal server",     // 500 Internal Server Error
+        "dns",                 // DNS resolution failure
+        "could not resolve",   // DNS resolution failure
+        "name or service",     // DNS resolution failure (getaddrinfo)
+        "no such host",        // DNS resolution failure
+        "tls",                 // TLS/SSL error
+        "ssl",                 // TLS/SSL error
+        "certificate",         // TLS certificate error
+        "handshake",           // TLS handshake failure
+        "bad request",         // 400 — often a transient provider glitch
+        "unterminated string", // Provider-side JSON parse failure (transient)
     ];
     for pattern in &transient_patterns {
         if msg_lower.contains(pattern) {
@@ -132,7 +131,10 @@ fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: Chat
         sess.next_message_id += 1;
         // Error messages are display-only — never persist to disk.
         if msg.role != Role::Error {
-            state.pending_writes.pending.push((sid.to_string(), msg.clone()));
+            state
+                .pending_writes
+                .pending
+                .push((sid.to_string(), msg.clone()));
         }
         sess.messages.push(msg);
     }
@@ -159,8 +161,7 @@ pub fn replay_to_message(
             Some(msg) => msg.content.clone(),
             None => {
                 let proj = &state.projects[proj_idx];
-                let all =
-                    autocode_core::session_storage::load_all_messages(proj, sess);
+                let all = autocode_core::session_storage::load_all_messages(proj, sess);
                 all.iter().find(|m| m.id == message_id)?.content.clone()
             }
         }
@@ -179,7 +180,10 @@ pub fn replay_to_message(
     }
 
     // Discard any pending disk writes for this session.
-    state.pending_writes.pending.retain(|(sid, _)| sid != session_id);
+    state
+        .pending_writes
+        .pending
+        .retain(|(sid, _)| sid != session_id);
 
     // Kill any active stream/tools for this session.
     if let Some(runtime) = runtimes.get_mut(session_id) {
@@ -221,7 +225,7 @@ fn trim_session_ram(state: &mut AppState, session_id: &str) {
     sess.messages = sess.messages.split_off(len - keep);
     sess.messages.shrink_to(0);
     let _new_next_id = sess.next_message_id;
-    }
+}
 
 /// Push a message to the runtime's active session (not necessarily the viewed one).
 fn push_runtime(state: &mut AppState, runtime: &ChatRuntime, msg: ChatMessage) {
@@ -470,7 +474,10 @@ fn project_root_for_session(state: &AppState, session_id: &str) -> String {
         .unwrap_or_default()
 }
 
-fn context_usage_info_for_session(state: &AppState, session_id: &str) -> (usize, usize, usize, usize) {
+fn context_usage_info_for_session(
+    state: &AppState,
+    session_id: &str,
+) -> (usize, usize, usize, usize) {
     let max = state
         .sessions
         .iter()
@@ -615,8 +622,7 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
             let now = std::time::Instant::now();
             if now < allowed {
                 let sleep_ms = (allowed - now).as_millis();
-                if sleep_ms > 50 {
-                    }
+                if sleep_ms > 50 {}
                 std::thread::sleep(allowed - now);
             }
         }
@@ -698,9 +704,8 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
             "Rate limit: waiting ~{}s before next request...",
             (rate_wait_ms + 500) / 1000
         );
-        runtime.retry_after = Some(
-            std::time::Instant::now() + std::time::Duration::from_millis(rate_wait_ms),
-        );
+        runtime.retry_after =
+            Some(std::time::Instant::now() + std::time::Duration::from_millis(rate_wait_ms));
         return;
     }
     crate::provider::api_rate_limit_record(&provider, &prov_label);
@@ -750,22 +755,25 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
     // model's context window before sending. Prevents opaque API errors.
     let _estimated = {
         let tools_json = tool_definitions();
-        let msgs: Vec<serde_json::Value> = messages.iter().map(|m| {
-            let mut obj = serde_json::json!({
-                "role": m.role,
-                "content": m.content,
-            });
-            if let Some(id) = &m.tool_call_id {
-                obj["tool_call_id"] = serde_json::json!(id);
-            }
-            if let Some(tc) = &m.tool_calls {
-                obj["tool_calls"] = tc.clone();
-            }
-            if let Some(rc) = &m.reasoning_content {
-                obj["reasoning_content"] = serde_json::json!(rc);
-            }
-            obj
-        }).collect();
+        let msgs: Vec<serde_json::Value> = messages
+            .iter()
+            .map(|m| {
+                let mut obj = serde_json::json!({
+                    "role": m.role,
+                    "content": m.content,
+                });
+                if let Some(id) = &m.tool_call_id {
+                    obj["tool_call_id"] = serde_json::json!(id);
+                }
+                if let Some(tc) = &m.tool_calls {
+                    obj["tool_calls"] = tc.clone();
+                }
+                if let Some(rc) = &m.reasoning_content {
+                    obj["reasoning_content"] = serde_json::json!(rc);
+                }
+                obj
+            })
+            .collect();
         let body = serde_json::json!({
             "messages": msgs,
             "tools": tools_json,
@@ -780,19 +788,21 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
                     Ok(count) => {
                         break 'block count;
                     }
-                    Err(_e) => {
-                        }
+                    Err(_e) => {}
                 }
             }
             // Tier 2: Offline tokenizer via tiktoken (with fallback encodings)
-            if let Some(count) = autocode_core::tokenizer::offline_token_count(&provider.model, &json_str) {
+            if let Some(count) =
+                autocode_core::tokenizer::offline_token_count(&provider.model, &json_str)
+            {
                 break 'block count;
             }
             // Tier 3: Improved heuristic fallback (JSON-optimized) on the
             // already-serialized body. Avoids redundant re-serialization from ApiMessages.
             let count = core_helpers::estimate_full_request_tokens(
-                &messages.iter().map(|m| {
-                    autocode_core::state::ChatMessage {
+                &messages
+                    .iter()
+                    .map(|m| autocode_core::state::ChatMessage {
                         id: 0,
                         role: match m.role.as_str() {
                             "system" => autocode_core::state::Role::System,
@@ -809,8 +819,8 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
                         tool_meta: None,
                         reasoning_content: m.reasoning_content.clone(),
                         full_content: None,
-                    }
-                }).collect::<Vec<_>>(),
+                    })
+                    .collect::<Vec<_>>(),
                 Some(&tools_json),
                 Some(&provider.model),
             );
@@ -905,7 +915,9 @@ fn update_runtime(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
     // only stopped by user interaction (stop button → drain()).
     if let Some(after) = runtime.retry_after {
         repaint = true;
-        let remaining = after.checked_duration_since(std::time::Instant::now()).unwrap_or_default();
+        let remaining = after
+            .checked_duration_since(std::time::Instant::now())
+            .unwrap_or_default();
         let remaining_secs = (remaining.as_millis() + 500) / 1000;
         // Live countdown — only overwrite status if it's a rate-limit wait
         // (set by start_completion), not a retry backoff (set by error handler).
@@ -1137,7 +1149,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 runtime.assistant_tool_calls_json = None;
                 // Increment stream-drop retry counter for backoff.
                 runtime.stream_drop_retries += 1;
-                } else {
+            } else {
                 runtime.pending_response.clear();
                 runtime.pending_tool_calls.clear();
                 runtime.assistant_tool_calls_json = None;
@@ -1152,8 +1164,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 || err_msg.contains("tool_calls")
                     && err_msg.contains("must be followed by tool messages");
             if orphaned {
-                runtime.orphaned_retry_count =
-                    runtime.orphaned_retry_count.saturating_add(1);
+                runtime.orphaned_retry_count = runtime.orphaned_retry_count.saturating_add(1);
                 if runtime.orphaned_retry_count > 3 {
                     runtime.status = format!("Provider error: {}", shorten_err(&err_msg));
                     push_error(
@@ -1195,9 +1206,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                         }
                         // Count consecutive tool messages that follow this assistant.
                         let mut j = i + 1;
-                        while j < sess.messages.len()
-                            && sess.messages[j].role == Role::Tool
-                        {
+                        while j < sess.messages.len() && sess.messages[j].role == Role::Tool {
                             j += 1;
                         }
                         let tool_count = j - i - 1;
@@ -1220,11 +1229,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 if !removed {
                     runtime.orphaned_retry_count = 0;
                     runtime.status = format!("Provider error: {}", shorten_err(&err_msg));
-                    push_error(
-                        state,
-                        runtime,
-                        format!("Provider error: {}", err_msg),
-                    );
+                    push_error(state, runtime, format!("Provider error: {}", err_msg));
                     return true;
                 }
                 start_completion(state, runtime);
@@ -1255,11 +1260,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 runtime.retry_count = 0;
                 runtime.partial_response_backup.clear();
                 runtime.stream_drop_retries = 0;
-                push_error(
-                    state,
-                    runtime,
-                    format!("Provider error: {}", err_msg),
-                );
+                push_error(state, runtime, format!("Provider error: {}", err_msg));
             }
             return true;
         }
@@ -1309,8 +1310,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     } else if args.get("start_line").is_some() {
                         tc.name = "patch_lines".into();
                     }
-                    if !tc.name.is_empty() {
-                        }
+                    if !tc.name.is_empty() {}
                 }
             }
 
@@ -1318,8 +1318,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
             // inference. Malformed / hallucinated tool calls (empty name +
             // empty args) would otherwise create an infinite retry loop.
             let dropped = tool_calls.iter().filter(|tc| tc.name.is_empty()).count();
-            if dropped > 0 {
-                }
+            if dropped > 0 {}
             tool_calls.retain(|tc| !tc.name.is_empty());
 
             // Step 3: handle the case where ALL tool calls were invalid.
@@ -1450,10 +1449,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     push_to_session(state, runtime.active_session_id.as_deref(), msg);
                     // Save metadata after the push so next_message_id is up to date.
                     if let Some(pid) = meta_pid
-                        && let Some(proj) = state
-                            .projects
-                            .iter()
-                            .find(|p| p.id == pid)
+                        && let Some(proj) = state.projects.iter().find(|p| p.id == pid)
                         && let Some(s) = state.sessions.iter().find(|s| s.id == meta_sid)
                     {
                         let _ = autocode_core::session_storage::save_session_meta(proj, s);
@@ -1575,8 +1571,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
 
                         std::thread::yield_now();
                     }
-                    if tx.send(results).is_err() {
-                        }
+                    if tx.send(results).is_err() {}
                 });
             }
 
@@ -1984,7 +1979,7 @@ fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
         if !resume_path.exists() {
             let content = generate_resume_content(sess);
             let _ = std::fs::write(&resume_path, &content);
-            }
+        }
     }
     state.flush_pending_writes(true);
     let handoff_was_enabled = state.handoff_enabled;
@@ -2040,8 +2035,7 @@ fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     // Start a completion on the new session.
     runtime.handoff_in_progress = false;
     start_completion(state, runtime);
-
-    }
+}
 
 /// Auto-trigger a handoff when token usage exceeds the configured threshold.
 /// This provides a safety net if the model forgets to call `handoff` voluntarily.
@@ -2061,7 +2055,11 @@ fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
         .map(|s| {
             let max = state
                 .providers
-                .get(if !s.provider_label.is_empty() { &s.provider_label } else { &state.active_provider })
+                .get(if !s.provider_label.is_empty() {
+                    &s.provider_label
+                } else {
+                    &state.active_provider
+                })
                 .map(|p| p.max_context_tokens as usize)
                 .unwrap_or(128_000);
             let used = if s.actual_tokens_used > 0 {
@@ -2071,7 +2069,11 @@ fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
             } else {
                 s.token_count()
             };
-            (used, max, (used * 100).checked_div(max).unwrap_or(0).min(100))
+            (
+                used,
+                max,
+                (used * 100).checked_div(max).unwrap_or(0).min(100),
+            )
         })
         .unwrap_or((0, 0, 0));
     if max == 0 {
@@ -2256,12 +2258,10 @@ fn build_tool_meta(tc: &ToolCall, result: &str, duration_ms: u64) -> ToolMeta {
             let new_text = helpers::strip_line_numbers(args["new_text"].as_str().unwrap_or(""));
             // Parse "line N" from result: "Patched ... via ... (N -> M bytes, line 42)"
             let edit_line = if !is_error {
-                result
-                    .rsplit_once(", line ")
-                    .and_then(|(_, rest)| {
-                        let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-                        num.parse::<usize>().ok()
-                    })
+                result.rsplit_once(", line ").and_then(|(_, rest)| {
+                    let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                    num.parse::<usize>().ok()
+                })
             } else {
                 None
             };
@@ -3211,8 +3211,6 @@ fn poll_shell_tasks(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
     repaint
 }
 
-
-
 /// Sanitize a raw session name: strip special characters, remove common
 /// stop words, keep up to 3 meaningful words joined by underscores.
 /// Returns `None` if the result would be empty.
@@ -3222,9 +3220,9 @@ fn sanitize_session_name(raw: &str) -> Option<String> {
         .filter(|c| c.is_alphanumeric() || *c == '-' || *c == '_' || *c == ' ')
         .collect();
     let s = s.trim();
-    if s.is_empty() { return None; }
+    if s.is_empty() {
+        return None;
+    }
     let s: String = s.chars().take(80).collect();
     Some(s)
 }
-
-

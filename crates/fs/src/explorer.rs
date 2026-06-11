@@ -2,8 +2,8 @@
 
 use std::path::{Path, PathBuf};
 
-use autocode_core::fsutil;
 use crate::helpers;
+use autocode_core::fsutil;
 
 #[derive(Debug, Clone)]
 pub struct FsEntry {
@@ -60,7 +60,8 @@ impl Gitignore {
                 // Anchored patterns match against the full relative path.
                 // Also treat the pattern as a directory prefix: "src/gen"
                 // should ignore "src/gen/foo.rs" (rel_path = "src/gen/foo.rs").
-                helpers::glob_match(pattern, rel_path) || rel_path.starts_with(&format!("{}/", pattern))
+                helpers::glob_match(pattern, rel_path)
+                    || rel_path.starts_with(&format!("{}/", pattern))
             } else {
                 // Non-anchored: match the bare filename OR the full rel_path
                 // so that "*.log" catches "logs/foo.log" when listing subdirs.
@@ -107,7 +108,11 @@ fn list_dir_impl(dir: &Path, filter_gitignore: bool, filter_hidden: bool) -> Vec
     };
 
     // Load gitignore from project root if available.
-    let root = if filter_gitignore { find_project_root(dir) } else { None };
+    let root = if filter_gitignore {
+        find_project_root(dir)
+    } else {
+        None
+    };
     let gitignore = root
         .as_deref()
         .map(|r| Gitignore::load(&r.join(".gitignore")));
@@ -131,9 +136,7 @@ fn list_dir_impl(dir: &Path, filter_gitignore: bool, filter_hidden: bool) -> Vec
         let is_dir = fsutil::is_dir(&path);
 
         // Check gitignore rules.
-        if filter_gitignore
-            && let (Some(root), Some(gi)) = (root.as_deref(), gitignore.as_ref())
-        {
+        if filter_gitignore && let (Some(root), Some(gi)) = (root.as_deref(), gitignore.as_ref()) {
             let rel = path
                 .strip_prefix(root)
                 .ok()
