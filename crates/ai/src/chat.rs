@@ -147,20 +147,33 @@ pub fn replay_to_message(
     session_id: &str,
     message_id: u64,
 ) -> Option<String> {
-    let text;
-    {
-        let sess = state.sessions.iter_mut().find(|s| s.id == session_id)?;
-        let msg = sess.messages.iter().find(|m| m.id == message_id)?;
-        text = msg.content.clone();
+    // Find the session index and project up front to avoid borrow conflicts.
+    let session_idx = state.sessions.iter().position(|s| s.id == session_id)?;
+    let pid = state.sessions[session_idx].project_id.clone()?;
+    let proj_idx = state.projects.iter().position(|p| p.id == pid)?;
 
-        // Truncate in-RAM messages to this point.
+    // Locate the message text — search RAM first, then disk.
+    let text = {
+        let sess = &state.sessions[session_idx];
+        match sess.messages.iter().find(|m| m.id == message_id) {
+            Some(msg) => msg.content.clone(),
+            None => {
+                let proj = &state.projects[proj_idx];
+                let all =
+                    autocode_core::session_storage::load_all_messages(proj, sess);
+                all.iter().find(|m| m.id == message_id)?.content.clone()
+            }
+        }
+    };
+
+    // Truncate in-RAM and on-disk.
+    {
+        let sess = &mut state.sessions[session_idx];
         sess.messages.retain(|m| m.id <= message_id);
         sess.next_message_id = message_id + 1;
         sess.actual_tokens_used = 0;
 
-        // Persist truncation to disk.
-        let pid = sess.project_id.clone()?;
-        let proj = state.projects.iter().find(|p| p.id == pid)?;
+        let proj = &state.projects[proj_idx];
         autocode_core::session_storage::truncate_messages_after(proj, sess, message_id).ok()?;
         autocode_core::session_storage::save_session_meta(proj, sess).ok()?;
     }

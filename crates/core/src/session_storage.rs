@@ -153,12 +153,16 @@ pub fn truncate_messages_after(
         .filter(|m| m.id <= keep_up_to_id)
         .collect();
 
-    let serialized: String = keep
+    let mut serialized: String = keep
         .iter()
         .map(|m| serde_json::to_string(m))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?
         .join("\n");
+    // Preserve trailing newline so future appends don't corrupt the last line.
+    if !keep.is_empty() {
+        serialized.push('\n');
+    }
 
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     let pid = std::process::id();
