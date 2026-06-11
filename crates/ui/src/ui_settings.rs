@@ -386,8 +386,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                 .add(
                                     TextEdit::singleline(&mut models_url)
                                         .id(egui::Id::new(("provider_models_url", &key)))
-                                        .desired_width(f32::INFINITY)
-                                        .hint_text("https://api.example.com/v1/models"),
+                                        .desired_width(f32::INFINITY),
                                 )
                                 .changed()
                             {
