@@ -1,6 +1,6 @@
 # AutoCode
 
-> **Status:** Near release and fully functional, but development is on hold for now.
+> **Status:** Near release and fully functional, but development is on hold for now
 
 **AutoCode** is an autonomous AI coding agent — a native desktop application written in **Rust** that connects to large language models (LLMs) and gives them full access to your filesystem and shell, enabling them to independently perform software engineering tasks.
 
@@ -8,9 +8,9 @@ Write code, run commands, edit files, search your codebase, and iterate — all 
 
 ## Features
 
-- **AI-Powered Autonomous Coding** — The AI can read, write, edit, search, and execute code across your projects using 17 built-in tools
+- **AI-Powered Autonomous Coding** — The AI can read, write, edit, search, and execute code across your projects using 18 built-in tools
 - **Multi-Provider Support** — OpenRouter, NVIDIA NIM, OpenAI-Compatible, or OpenCode Go API endpoints, with per-model manifests for context windows, output limits, thinking API support, and reasoning efforts
-- **17 Built-in Tools** — Shell execution, file I/O, grep, patch (with 6-strategy fuzzy matching via Levenshtein/Jaro-Winkler/token-set), directory listing, file operations, web search, URL fetching, task tracking, handoff, and session naming
+- **18 Built-in Tools** — Shell execution, file I/O, grep, patch (with 6-strategy fuzzy matching via Levenshtein/Jaro-Winkler/token-set + line-number-based `patch_lines`), directory listing, file operations, web search, URL fetching, task tracking, handoff, and session naming
 - **Streaming Responses** — Real-time SSE streaming with automatic recovery and retry logic (transient vs permanent error classification with exponential backoff, up to 3 retries)
 - **Session Management** — Multiple named sessions per project (up to 50), full history via JSONL-backed storage, atomic writes, orphan message scavenging, lazy-load display buffering, per-project tab colors
 - **Token Budgeting** — Three-tier token counting (API endpoint → tiktoken offline → heuristic fallback), automatic handoff when approaching context limits, configurable display window and scroll paging
@@ -38,54 +38,59 @@ Cargo.toml                               # workspace root, resolver = "2"
 │   ├── icon.icns / icon.ico              # macOS / Windows icons
 │   └── linux/                           # Linux icons (16–512px)
 ├── crates/
-│   ├── autocode/          — binary entry (482 lines)
-│   │   ├── main.rs         (48)   # entry point, rustls init, eframe::run_native
-│   │   └── app.rs         (433)   # AutocodeApp (eframe::App), frame loop, state wiring
-│   ├── core/               — core types, utilities, infrastructure (4,711 lines)
-│   │   ├── state.rs      (1319)  # AppState, Project, Session, ChatMessage, ApiProvider,
-│   │   │                           SecretString, DesignSettings, TodoItem, embedded manifest
-│   │   ├── helpers.rs    (1402)  # ID gen, token estimation (heuristic + tiktoken + regex),
+│   ├── autocode/          — binary entry (446 lines)
+│   │   ├── main.rs         (40)    # entry point, rustls init, eframe::run_native
+│   │   ├── app.rs         (401)   # AutocodeApp (eframe::App), frame loop, state wiring
+│   │   └── build.rs        (4)    # embed Windows icon resource
+│   ├── core/               — core types, utilities, infrastructure (4,331 lines)
+│   │   ├── state.rs      (1174)  # AppState, Project, Session, ChatMessage, ApiProvider,
+│   │   │                           SecretString, DesignSettings (72 fields), TodoItem, manifest
+│   │   ├── helpers.rs    (1310)  # ID gen, token estimation (heuristic + tiktoken + regex),
 │   │   │                           path resolution + traversal guard, tiny regex engine, panic_msg
-│   │   ├── fsutil.rs      (138)   # exe_dir, \\?\ extended paths, atomic read/write, TEMP_FILES
-│   │   ├── theme.rs      (218)   # dark Visuals+Style, Palette (20 colors), font/corner config
-│   │   ├── extract.rs     (327)   # HTML scraping (scraper), DuckDuckGo results, search cache
-│   │   ├── sysinfo.rs     (742)   # OS/CPU/GPU/RAM/shell/tool detection, has_opengl
-│   │   ├── session_storage.rs (451) # JSON/JSONL persistence, atomic writes, orphan scavenge
+│   │   ├── fsutil.rs      (128)   # exe_dir, \\?\ extended paths, atomic read/write, TEMP_FILES
+│   │   ├── theme.rs      (182)   # dark Visuals+Style, Palette (20 colors), hash-based project_accent
+│   │   ├── extract.rs     (298)   # HTML scraping (scraper), DuckDuckGo results, domain blacklist
+│   │   ├── sysinfo.rs     (683)   # OS/CPU/GPU/RAM/shell/tool detection, has_opengl
+│   │   ├── session_storage.rs (449) # JSON/JSONL persistence, atomic writes, orphan scavenge,
+│   │   │                           load_messages_before, truncate_messages_after
 │   │   └── tokenizer/
-│   │       └── mod.rs      (99)    # Tokenizer trait, TiktokenTokenizer, HeuristicTokenizer
-│   ├── ai/                 — AI provider client + chat orchestration (6,267 lines)
-│   │   ├── chat.rs       (3514)  # orchestration: send_message, SSE polling, 17 tool handlers,
-│   │   │                           retry/backoff, auto-continuation, handoff, session auto-naming
-│   │   ├── provider.rs   (1666)  # raw TCP+rustls HTTP client, SSE parsing, 17 tool definitions,
-│   │   │                           model list fetch, counting API, rotating browser profiles
-│   │   ├── session.rs    (176)   # system prompt seeding + sysinfo, message prep, session delete
-│   │   └── helpers.rs    (898)   # fuzzy find-replace (6 strategies), Levenshtein/Jaro-Winkler/
+│   │       └── mod.rs      (90)    # Tokenizer trait, TiktokenTokenizer, HeuristicTokenizer
+│   ├── ai/                 — AI provider client + chat orchestration (5,555 lines)
+│   │   ├── chat.rs       (3057)  # orchestration: send_message, SSE polling, 18 tool handlers,
+│   │   │                           retry/backoff, auto-continuation, handoff, session auto-naming,
+│   │   │                           replay, partial-response recovery, live shell streaming
+│   │   ├── provider.rs   (1479)  # raw TCP+rustls HTTP client, SSE parsing, 18 tool definitions,
+│   │   │                           model list fetch, counting API, rotating browser profiles (8)
+│   │   ├── session.rs    (160)   # system prompt seeding + sysinfo, message prep with dedup,
+│   │   │                           orphan-tool stripping, cache_control, full-history estimate
+│   │   └── helpers.rs    (847)   # fuzzy find-replace (6 strategies), Levenshtein/Jaro-Winkler/
 │   │                             token-set similarity, todo parsing, line-number stripping
-│   ├── fs/                 — filesystem tools (809 lines)
-│   │   ├── shell.rs       (182)   # background shell via channels (cmd/sh), temp script cleanup
-│   │   ├── explorer.rs    (457)   # gitignore-aware list_dir/glob/grep, find_project_root,
-│   │   │                           recursive grep with size/binary limits
-│   │   └── helpers.rs    (161)   # file extraction from code fences, glob matching (*/**/?)
-│   └── ui/                 — egui UI panels (6,283 lines)
-│       ├── ui_chat.rs    (2613)  # chat panel: tabs, bubbles, markdown, diff, streaming, shell,
-│       │                           per-project tab colors, terminal rendering
-│       ├── ui_settings.rs(1637)  # 7-tab settings window (Providers/Projects/Prompt/Session/
+│   ├── fs/                 — filesystem tools (733 lines)
+│   │   ├── shell.rs       (165)   # background shell via channels (cmd/sh), temp script cleanup
+│   │   ├── explorer.rs    (409)   # gitignore-aware list_dir/glob/grep/find_project_root,
+│   │   │                           recursive grep with size/binary limits, case-insensitive
+│   │   └── helpers.rs    (151)   # file extraction from code fences, glob matching (*/**/?)
+│   └── ui/                 — egui UI panels (5,938 lines)
+│       ├── ui_chat.rs    (2516)  # chat panel: tabs, bubbles, markdown, diff, streaming, shell,
+│       │                           structured tool cards, per-project tab colors, replay button
+│       ├── ui_settings.rs(1535)  # 7-tab settings window (Providers/Projects/Prompt/Session/
 │       │                           Timeouts/Design/About)
-│       ├── ui_explorer.rs (913)  # file tree (all files shown), preview (text+image), rename/delete
-│       ├── ui_toolbar.rs  (363)  # project/session/provider pickers, budget meter, blink-dot
-│       ├── ui_todo.rs     (290)  # floating task list, progress bar, priority dots, auto-close
-│       └── helpers.rs     (454)  # time formatting, tool result parsing, markdown, LayoutJob,
+│       ├── ui_explorer.rs (852)  # file tree (all files shown), preview (text+image with edit/
+│       │                           save), rename/delete context menu, gutter line numbers
+│       ├── ui_toolbar.rs  (330)  # project/session/provider/model pickers, budget meter, blink-dot
+│       ├── ui_todo.rs     (271)  # floating task list, progress bar, priority dots, auto-close
+│       └── helpers.rs     (422)  # time formatting, tool result parsing, markdown, LayoutJob,
 │                                 screen pixel sampling (Windows FFI)
 ```
 
-**Total: ~18,550 lines of Rust/Cargo/config/doc source across 28 source files.**
+**Total: 17,003 lines of Rust source across 29 files.**
 
 ### Key Architecture Decisions
 
 - **No async runtime** — all I/O is blocking on spawned threads; UI polls for results via channels
 - **Immediate-mode GUI** — egui rebuilds the entire UI every frame, simplifying state management
 - **Disk as source of truth** — message history always written to JSONL immediately; RAM only holds a display window; full history loaded from disk for API requests
-- **Custom tool definitions** — all 17 tool definitions hand-written in `provider.rs` for token efficiency
+- **Custom tool definitions** — all 18 tool definitions hand-written in `provider.rs` for token efficiency
 - **Three-tier token estimation** — API counting endpoint → tiktoken offline (model-aware) → heuristic fallback
 - **6-strategy fuzzy patch matching** — exact → CRLF-normalized → whitespace-normalized → tabs-normalized → anchored line matching → Myers DP sequence alignment
 - **Transient/permanent error classification** — transient errors (rate limits, timeouts, 5xx, 400) get exponential backoff retry (up to 3 retries, 900s max wait); permanent errors (auth, quota, content filter) are surfaced immediately
@@ -96,7 +101,7 @@ Cargo.toml                               # workspace root, resolver = "2"
 1. **Startup** — `main.rs` installs rustls crypto, loads persisted state from `app.ron`, launches native window (1400×900)
 2. **User input** — message typed in chat panel; toolbar provides project/session/provider selection
 3. **Chat orchestration** — `chat.rs::send_message()` loads history from disk, prepares request with optional prompt caching, builds API POST with tool definitions, parses SSE stream, dispatches tool calls to handler functions
-4. **Tool execution** — 17 tool handlers execute autonomously (filesystem, shell, search, web, task tracking, session management)
+4. **Tool execution** — 18 tool handlers execute autonomously (filesystem, shell, search, web, task tracking, session management, line-number-based patching)
 5. **Session persistence** — metadata written to JSON, messages appended to JSONL, atomic writes (temp file + rename), rate-limited disk writes
 6. **Auto-continuation** — when approaching context limits, generates RESUME.md and calls handoff into a new session
 
@@ -182,7 +187,7 @@ AutoCode persists its state (API keys, provider settings, projects, prompts, ses
 
 ## Tools
 
-AutoCode provides 17 tools to the AI agent:
+AutoCode provides 18 tools to the AI agent:
 
 | Tool | Description |
 |------|-------------|
@@ -192,6 +197,7 @@ AutoCode provides 17 tools to the AI agent:
 | `read_entire_file` | Read an entire file without truncation |
 | `write_file` | Create/overwrite files with parent directory creation |
 | `patch_file` | Surgical find-and-replace with 6-strategy fuzzy matching |
+| `patch_lines` | Replace a range of lines by line number (more reliable for multi-line) |
 | `list_dir` | Directory listing (gitignore-aware) |
 | `create_dir` | Create directories (mkdir -p) |
 | `delete_file` | Delete files or empty directories |
