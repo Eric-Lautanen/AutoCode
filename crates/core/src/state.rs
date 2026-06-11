@@ -271,8 +271,9 @@ pub struct ApiProvider {
     pub base_url: String,
     pub model: String,
     pub enabled: bool,
-    /// Always populated from providers.json. Not persisted in app.ron.
-    #[serde(skip)]
+    /// Max context window in tokens. Set from providers.json on first load;
+    /// user can override in settings. Persisted across restarts.
+    #[serde(default)]
     pub max_context_tokens: u32,
     #[serde(default = "crate::helpers::default_handoff_percent")]
     pub handoff_percent: u8,
@@ -289,16 +290,20 @@ pub struct ApiProvider {
     #[serde(default = "crate::helpers::default_reasoning_effort")]
     pub reasoning_effort: String,
 
-    /// Always populated from providers.json. Not persisted in app.ron.
-    #[serde(skip)]
+    /// Thinking API mode. Set from providers.json on first load;
+    /// user can override in settings. Persisted across restarts.
+    #[serde(default)]
     pub thinking_api: ThinkingApi,
 
-    /// Always populated from providers.json. Not persisted in app.ron.
-    #[serde(skip)]
+    /// Max output tokens. Set from providers.json on first load;
+    /// user can override in settings. Persisted across restarts.
+    #[serde(default)]
     pub max_output_tokens: u32,
 
-    /// Always populated from providers.json. Not persisted in app.ron.
-    #[serde(skip)]
+    /// Max output tokens when thinking is enabled.
+    /// Set from providers.json on first load; user can override in settings.
+    /// Persisted across restarts.
+    #[serde(default)]
     pub max_output_tokens_thinking: u32,
 
     /// Max API requests allowed per hour (0 or None = unlimited).
@@ -375,15 +380,9 @@ impl ApiProvider {
     /// based on the current `kind` and `model`. These fields are skipped
     /// from serialization so that app.ron never stores stale values.
     pub fn fill_from_manifest(&mut self) {
-        let defs = model_or_safe(&self.kind, &self.model);
-        self.max_context_tokens = defs.context_window;
-        self.max_output_tokens = defs.max_output_tokens;
-        self.max_output_tokens_thinking = defs
-            .max_output_tokens_thinking
-            .unwrap_or(defs.max_output_tokens * 2);
-        self.thinking_api = parse_thinking_api(&defs.thinking_api);
-        // requests_per_hour is NOT set here — it persists across restarts
-        // via app.ron and should not be overwritten on reload.
+        // max_context_tokens, max_output_tokens, max_output_tokens_thinking,
+        // thinking_api, and requests_per_hour are NOT set here — they persist
+        // across restarts via app.ron and should not be overwritten on reload.
     }
 
     pub fn reset_defaults(&mut self) {
@@ -397,6 +396,10 @@ impl ApiProvider {
         self.requests_per_hour = defaults.requests_per_hour;
         self.models_list_url = String::new();
         self.saved_models = Vec::new();
+        self.max_context_tokens = defaults.max_context_tokens;
+        self.thinking_api = defaults.thinking_api;
+        self.max_output_tokens = defaults.max_output_tokens;
+        self.max_output_tokens_thinking = defaults.max_output_tokens_thinking;
         self.fill_from_manifest();
     }
 }
@@ -1091,10 +1094,18 @@ impl AppState {
                 .entry(label)
                 .or_insert_with(|| ApiProvider::new(kind));
         }
-        // Populate provider-spec fields from manifest (they are skipped from
-        // serialization so stale values in app.ron are never used).
+        // Fill manifest-derived fields for providers where they are still zero
+        // (e.g. migrated from an old app.ron that used #[serde(skip)]).
         for p in state.providers.values_mut() {
-            p.fill_from_manifest();
+            if p.max_context_tokens == 0 {
+                let defs = model_or_safe(&p.kind, &p.model);
+                p.max_context_tokens = defs.context_window;
+                p.max_output_tokens = defs.max_output_tokens;
+                p.max_output_tokens_thinking = defs
+                    .max_output_tokens_thinking
+                    .unwrap_or(defs.max_output_tokens * 2);
+                p.thinking_api = parse_thinking_api(&defs.thinking_api);
+            }
         }
 
         // Prune stale entries whose keys don't match any known label

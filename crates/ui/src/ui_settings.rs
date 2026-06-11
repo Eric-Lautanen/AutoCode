@@ -4,7 +4,7 @@
 use crate::helpers;
 use autocode_ai::provider;
 use autocode_core::{
-    state::{AppState, Project, Session},
+    state::{AppState, Project, Session, ThinkingApi},
     theme::{Palette, ROUND_MD, ROUND_SM},
 };
 use egui::{
@@ -534,17 +534,45 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                             });
                             ui.end_row();
 
-                            // Context window (from providers.json, read-only).
+                            // Context window.
                             ui.label(helpers::field_label("Context Window"));
-                            ui.colored_label(
-                                Palette::TEXT_MUTED,
-                                format!("{} tokens", p.max_context_tokens),
-                            );
+                            ui.horizontal(|ui| {
+                                let mut val = p.max_context_tokens as i32;
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(&mut val)
+                                            .speed(1000)
+                                            .range(1024..=2_000_000)
+                                            .suffix(" tokens"),
+                                    )
+                                    .changed()
+                                {
+                                    p.max_context_tokens = val.max(1024) as u32;
+                                }
+                            });
                             ui.end_row();
 
-                            // Thinking API (from providers.json, read-only).
+                            // Thinking API.
                             ui.label(helpers::field_label("Thinking API"));
-                            ui.colored_label(Palette::TEXT_MUTED, p.thinking_api.label());
+                            ui.horizontal(|ui| {
+                                let current = p.thinking_api.label();
+                                egui::ComboBox::from_id_salt(format!("thinking_api_{}", key))
+                                    .selected_text(current)
+                                    .width(ui.available_width())
+                                    .show_ui(ui, |ui| {
+                                        for variant in ThinkingApi::variants() {
+                                            if ui
+                                                .selectable_label(
+                                                    p.thinking_api == *variant,
+                                                    variant.label(),
+                                                )
+                                                .clicked()
+                                            {
+                                                p.thinking_api = variant.clone();
+                                            }
+                                        }
+                                    });
+                            });
                             ui.end_row();
 
                             // Handoff percentage.
@@ -615,20 +643,40 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                             });
                             ui.end_row();
 
-                            // Max output tokens (from providers.json, read-only).
+                            // Max output tokens.
                             ui.label(helpers::field_label("Max Output"));
-                            ui.colored_label(
-                                Palette::TEXT_MUTED,
-                                format!("{} tokens", p.max_output_tokens),
-                            );
+                            ui.horizontal(|ui| {
+                                let mut val = p.max_output_tokens as i32;
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(&mut val)
+                                            .speed(1000)
+                                            .range(256..=2_000_000)
+                                            .suffix(" tokens"),
+                                    )
+                                    .changed()
+                                {
+                                    p.max_output_tokens = val.max(256) as u32;
+                                }
+                            });
                             ui.end_row();
 
-                            // Max output tokens when thinking is enabled (from providers.json, read-only).
+                            // Max output tokens when thinking is enabled.
                             ui.label(helpers::field_label("Max Output (Thinking)"));
-                            ui.colored_label(
-                                Palette::TEXT_MUTED,
-                                format!("{} tokens", p.max_output_tokens_thinking),
-                            );
+                            ui.horizontal(|ui| {
+                                let mut val = p.max_output_tokens_thinking as i32;
+                                if ui
+                                    .add(
+                                        egui::DragValue::new(&mut val)
+                                            .speed(1000)
+                                            .range(256..=2_000_000)
+                                            .suffix(" tokens"),
+                                    )
+                                    .changed()
+                                {
+                                    p.max_output_tokens_thinking = val.max(256) as u32;
+                                }
+                            });
                             ui.end_row();
 
                             // Requests per hour rate limit.
