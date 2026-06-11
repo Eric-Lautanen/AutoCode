@@ -396,13 +396,61 @@ impl ApiMessage {
     }
 }
 
+fn sanitize_tool_calls_for_api(tool_calls: &mut Option<serde_json::Value>) {
+    let Some(arr) = tool_calls.as_mut().and_then(|v| v.as_array_mut()) else {
+        return;
+    };
+    let mut i = 0;
+    while i < arr.len() {
+        let args_str = match arr[i]["function"]["arguments"].as_str() {
+            Some(s) if !s.is_empty() => s.to_string(),
+            _ => { i += 1; continue; }
+        };
+        if serde_json::from_str::<serde_json::Value>(&args_str).is_ok() {
+            i += 1;
+            continue;
+        }
+        // Attempt repair: try to quote-escape and re-parse the raw string.
+        if let Ok(repaired) = serde_json::from_str::<String>(&format!("\"{}\"", args_str)) {
+            if serde_json::from_str::<serde_json::Value>(&repaired).is_ok() {
+                arr[i]["function"]["arguments"] = serde_json::Value::String(repaired);
+                i += 1;
+                continue;
+            }
+        }
+        // Last resort: find the longest valid JSON prefix.
+        let mut end = args_str.len();
+        let mut fixed = false;
+        for _ in 0..args_str.len().min(256) {
+            if end <= 2 {
+                break;
+            }
+            end = args_str.floor_char_boundary(end - 1);
+            if serde_json::from_str::<serde_json::Value>(&args_str[..end]).is_ok() {
+                arr[i]["function"]["arguments"] = serde_json::Value::String(args_str[..end].to_string());
+                fixed = true;
+                i += 1;
+                break;
+            }
+            if let Some(prev_quote) = args_str[..end].rfind('"') {
+                end = prev_quote + 1;
+            }
+        }
+        if !fixed {
+            arr.remove(i);
+        }
+    }
+}
+
 impl From<&ChatMessage> for ApiMessage {
     fn from(m: &ChatMessage) -> Self {
+        let mut tool_calls = m.tool_calls.clone();
+        sanitize_tool_calls_for_api(&mut tool_calls);
         Self {
             role: m.role.label().to_string(),
             content: m.content.clone(),
             tool_call_id: m.tool_call_id.clone(),
-            tool_calls: m.tool_calls.clone(),
+            tool_calls,
             cache_control: false,
             reasoning_content: m.reasoning_content.clone(),
         }
@@ -468,7 +516,7 @@ pub fn tool_definitions() -> serde_json::Value {
         {"type":"function","function":{"name":"fetch_url","strict":true,"description":"Fetch URL text content. HTML auto-stripped.","parameters":{"type":"object","properties":{"url":{"type":"string","description":"Full URL."},"max_bytes":{"type":"integer","description":"Max bytes (default 32768, max 131072)."}},"required":["url"],"additionalProperties":false}}},
         {"type":"function","function":{"name":"todo_list","strict":true,"description":"Track multi-step tasks. Send full list on every update.","parameters":{"type":"object","properties":{"title":{"type":"string","description":"Short title (max 35 chars)."},"items":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string","description":"Stable id e.g. '1'."},"content":{"type":"string","description":"Task description."},"status":{"type":"string","enum":["pending","in_progress","completed","cancelled"],"description":"Status."},"priority":{"type":"string","enum":["high","medium","low"],"description":"Priority (default medium)."}},"required":["id","content","status"],"additionalProperties":false},"description":"All items."}},"required":["title","items"],"additionalProperties":false}}},
         {"type":"function","function":{"name":"glob","strict":true,"description":"Find files by glob pattern. Returns sorted relative paths.","parameters":{"type":"object","properties":{"pattern":{"type":"string","description":"Glob pattern (*, **, ?). e.g. '**/*.rs'."},"path":{"type":"string","description":"Search dir (default: project root)."}},"required":["pattern"],"additionalProperties":false}}},
-        {"type":"function","function":{"name":"handoff","strict":true,"description":"End this session, resume in a fresh one. Save RESUME.md first.","parameters":{"type":"object","properties":{"reason":{"type":"string","description":"Why handoff is needed (e.g. 'context nearing limit')."}},"required":["reason"],"additionalProperties":false}}},
+        {"type":"function","function":{"name":"handoff","strict":true,"description":"End session & resume fresh. Save RESUME.md. next_prompt instructs the next session.","parameters":{"type":"object","properties":{"reason":{"type":"string","description":"Why handoff is needed (e.g. 'context nearing limit')."},"next_prompt":{"type":"string","description":"What the next session should continue working on, and how."}},"required":["reason","next_prompt"],"additionalProperties":false}}},
         {"type":"function","function":{"name":"name_session","strict":true,"description":"Set a descriptive label for this session. Call first in every session.","parameters":{"type":"object","properties":{"name":{"type":"string","description":"Short name e.g. 'fixing_build'."}},"required":["name"],"additionalProperties":false}}},
     ])
 }
@@ -970,6 +1018,37 @@ fn parse_sse_stream_from_reader<R: BufRead>(
     let mut line_count = 0u32;
     let mut last_log = std::time::Instant::now();
 
+    // Validate tool call arguments as valid JSON; repair if possible.
+    fn fix_args(args: &mut String) -> bool {
+        if serde_json::from_str::<serde_json::Value>(args).is_ok() {
+            return true;
+        }
+        // Try to quote-escape and re-parse the args as a JSON string.
+        if let Ok(repaired) = serde_json::from_str::<String>(&format!("\"{}\"", args)) {
+            if serde_json::from_str::<serde_json::Value>(&repaired).is_ok() {
+                *args = repaired;
+                return true;
+            }
+        }
+        // Find the longest valid JSON prefix.
+        let max_steps = args.len().min(256);
+        let mut end = args.len();
+        for _ in 0..max_steps {
+            if end <= 2 {
+                break;
+            }
+            end = args.floor_char_boundary(end - 1);
+            if serde_json::from_str::<serde_json::Value>(&args[..end]).is_ok() {
+                args.truncate(end);
+                return true;
+            }
+            if let Some(prev_quote) = args[..end].rfind('"') {
+                end = prev_quote + 1;
+            }
+        }
+        false
+    }
+
     for line in &mut lines {
         let line = match line {
             Ok(l) => l,
@@ -1063,16 +1142,20 @@ fn parse_sse_stream_from_reader<R: BufRead>(
                 let mut indices: Vec<usize> = tool_acc.keys().cloned().collect();
                 indices.sort();
                 for idx in indices {
-                    if let Some((id, name, args)) = tool_acc.remove(&idx)
-                        && tx
+                    if let Some((id, name, mut args)) = tool_acc.remove(&idx) {
+                        if !fix_args(&mut args) {
+                            continue;
+                        }
+                        if tx
                             .send(ProviderEvent::ToolCall(ToolCall {
                                 id,
                                 name,
                                 arguments: args,
                             }))
                             .is_err()
-                    {
-                        return Err("channel closed".into());
+                        {
+                            return Err("channel closed".into());
+                        }
                     }
                 }
             }
@@ -1093,16 +1176,20 @@ fn parse_sse_stream_from_reader<R: BufRead>(
         let mut indices: Vec<usize> = tool_acc.keys().cloned().collect();
         indices.sort();
         for idx in indices {
-            if let Some((id, name, args)) = tool_acc.remove(&idx)
-                && tx
+            if let Some((id, name, mut args)) = tool_acc.remove(&idx) {
+                if !fix_args(&mut args) {
+                    continue;
+                }
+                if tx
                     .send(ProviderEvent::ToolCall(ToolCall {
                         id,
                         name,
                         arguments: args,
                     }))
                     .is_err()
-            {
-                return Err("channel closed".into());
+                {
+                    return Err("channel closed".into());
+                }
             }
         }
     }

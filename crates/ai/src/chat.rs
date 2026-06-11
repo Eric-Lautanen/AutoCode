@@ -371,6 +371,9 @@ pub struct ChatRuntime {
     /// Set when the handoff trigger prompt has been sent to the model
     /// to prevent re-sending on subsequent frames.
     pub handoff_trigger_sent: bool,
+    /// The AI-generated next_prompt from the handoff tool call,
+    /// used as the first user message in the fresh session.
+    pub handoff_next_prompt: Option<String>,
     /// Orphaned tool-call retry counter to prevent infinite loops.
     pub orphaned_retry_count: u8,
 }
@@ -407,6 +410,7 @@ impl Default for ChatRuntime {
             next_completion_allowed: None,
             handoff_in_progress: false,
             handoff_trigger_sent: false,
+            handoff_next_prompt: None,
             orphaned_retry_count: 0,
         }
     }
@@ -448,6 +452,7 @@ impl ChatRuntime {
         self.continuation_chain = 0;
         self.handoff_in_progress = false;
         self.handoff_trigger_sent = false;
+        self.handoff_next_prompt = None;
         self.retry_after = None;
 
         // Force deallocation of large buffers
@@ -1239,6 +1244,20 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 }
                 start_completion(state, runtime);
             } else if is_transient_error(&err_msg) {
+                // Cap retries for JSON parse errors — the data was already
+                // sanitized on the first retry; further retries won't help.
+                if err_msg.contains("unterminated string")
+                    && runtime.retry_count >= 1
+                {
+                    runtime.retry_count = 0;
+                    runtime.partial_response_backup.clear();
+                    runtime.stream_drop_retries = 0;
+                    push_error(state, runtime, format!(
+                        "Provider error: {} — data was sanitized but provider still rejects it",
+                        err_msg,
+                    ));
+                    return true;
+                }
                 // Forever retry: exponential backoff 5s → 180s cap, never gives up.
                 let backoff_secs = (5u64 << runtime.retry_count.min(6)).min(180);
                 runtime.retry_count = runtime.retry_count.saturating_add(1);
@@ -1665,6 +1684,12 @@ fn poll_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 let has_handoff = results.iter().any(|r| r.content.starts_with("HANDOFF:"));
 
                 if has_handoff && state.handoff_enabled && !runtime.handoff_in_progress {
+                    // Extract the AI-generated next_prompt from the handoff tool call args.
+                    if let Some(tr) = results.iter().find(|r| r.content.starts_with("HANDOFF:")) {
+                        if let Ok(args) = serde_json::from_str::<serde_json::Value>(&tr.tool_call.arguments) {
+                            runtime.handoff_next_prompt = args.get("next_prompt").and_then(|v| v.as_str().map(String::from));
+                        }
+                    }
                     push_tool_results_to_state(state, runtime, &results);
                     handle_handoff(state, runtime);
                 } else if has_handoff && !state.handoff_enabled {
@@ -1914,6 +1939,12 @@ fn commit_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) {
 
         if has_handoff && state.handoff_enabled && !runtime.handoff_in_progress {
             let results = std::mem::take(&mut runtime.pending_tool_results);
+            // Extract the AI-generated next_prompt from the handoff tool call args.
+            if let Some(tr) = results.iter().find(|r| r.content.starts_with("HANDOFF:")) {
+                if let Ok(args) = serde_json::from_str::<serde_json::Value>(&tr.tool_call.arguments) {
+                    runtime.handoff_next_prompt = args.get("next_prompt").and_then(|v| v.as_str().map(String::from));
+                }
+            }
             let count = results.len();
             push_tool_results_to_state(state, runtime, &results);
             runtime.status = format!("{} tool(s) complete.", count);
@@ -2013,8 +2044,11 @@ fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     let sys = ChatMessage::new(Role::System, sys_prompt);
     push_runtime(state, runtime, sys);
 
-    // Use the user-configured handoff prompt.
-    let handoff_msg = state.handoff_prompt.clone();
+    // Use the AI-generated next_prompt as the first user message in the fresh session.
+    // Falls back to a generic instruction if the model didn't provide one (e.g. auto-handoff).
+    let handoff_msg = runtime.handoff_next_prompt.take().unwrap_or_else(|| {
+        "Continue the previous work. Read RESUME.md for context if available.".to_string()
+    });
     let msg = ChatMessage::new(Role::User, handoff_msg);
     push_runtime(state, runtime, msg);
 
@@ -3097,7 +3131,8 @@ fn execute_tool_with_cache(
 
         "handoff" => {
             let reason = args["reason"].as_str().unwrap_or("no reason given");
-            format!("HANDOFF:{}", reason)
+            let next_prompt = args["next_prompt"].as_str().unwrap_or("");
+            format!("HANDOFF:{}|||NEXT:{}", reason, next_prompt)
         }
 
         other => {

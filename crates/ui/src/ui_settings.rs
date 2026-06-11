@@ -1038,40 +1038,6 @@ fn show_prompt(ui: &mut egui::Ui, state: &mut AppState) {
     ui.separator();
     ui.add_space(8.0);
 
-    // -- Handoff prompt -------------------------------------------------
-    ui.label(
-        RichText::new("Handoff Prompt")
-            .size(14.0)
-            .strong()
-            .color(Palette::TEXT_PRIMARY),
-    );
-    ui.add_space(4.0);
-    ui.label(
-        RichText::new(
-            "Sent as the first user message in a fresh session after a handoff. Instructs the agent to read RESUME.md and continue work.",
-        )
-        .size(11.0)
-        .color(Palette::TEXT_MUTED),
-    );
-    ui.add_space(8.0);
-
-    ui.add(
-        TextEdit::multiline(&mut state.handoff_prompt)
-            .desired_rows(6)
-            .desired_width(f32::INFINITY)
-            .font(egui::TextStyle::Monospace)
-            .text_color(Palette::TEXT_PRIMARY),
-    );
-
-    ui.add_space(8.0);
-    if ui.button("Reset to Default").clicked() {
-        state.handoff_prompt = autocode_core::state::DEFAULT_HANDOFF_PROMPT.to_string();
-    }
-
-    ui.add_space(10.0);
-    ui.separator();
-    ui.add_space(8.0);
-
     // -- Handoff trigger prompt ------------------------------------------
     ui.label(
         RichText::new("Handoff Trigger Prompt")

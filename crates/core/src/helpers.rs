@@ -563,9 +563,6 @@ pub fn default_context_tokens() -> u32 {
 pub fn default_handoff_percent() -> u8 {
     80
 }
-pub fn default_handoff_prompt_string() -> String {
-    crate::state::DEFAULT_HANDOFF_PROMPT.to_string()
-}
 pub fn default_handoff_trigger_prompt_string() -> String {
     crate::state::DEFAULT_HANDOFF_TRIGGER_PROMPT.to_string()
 }

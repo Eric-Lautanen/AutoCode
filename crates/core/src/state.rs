@@ -934,9 +934,6 @@ pub struct AppState {
 
     pub system_prompt: String,
 
-    #[serde(default = "crate::helpers::default_handoff_prompt_string")]
-    pub handoff_prompt: String,
-
     #[serde(default = "crate::helpers::default_handoff_trigger_prompt_string")]
     pub handoff_trigger_prompt: String,
 
@@ -1065,7 +1062,6 @@ impl Default for AppState {
             sessions: Vec::new(),
             active_session_id: None,
             system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
-            handoff_prompt: DEFAULT_HANDOFF_PROMPT.to_string(),
             handoff_trigger_prompt: DEFAULT_HANDOFF_TRIGGER_PROMPT.to_string(),
             handoff_enabled: false,
             shell_tasks: Vec::new(),
@@ -1372,10 +1368,6 @@ usage (e.g. '45K/128K (35%)') for handoff timing.
 - After edits: git add -A && git commit (feat:/fix:/perf:/chore:). Push.
 - After each task, state what was done and what remains.
 ";
-
-pub const DEFAULT_HANDOFF_PROMPT: &str = "\
-Read RESUME.md in the project root for previous session progress and task list. \
-If not found, review git log and open files to determine prior work, then continue.";
 
 pub const DEFAULT_HANDOFF_TRIGGER_PROMPT: &str = "\
 ⚠️ CONTEXT WARNING: The context window is near its limit.
