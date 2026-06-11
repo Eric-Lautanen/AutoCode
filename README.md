@@ -214,14 +214,16 @@ AutoCode provides 18 tools to the AI agent:
 | `handoff` | Signal context limit and continue in new session |
 | `name_session` | Auto-label the current session |
 
-## Supported Providers
+## Bootstrapped Providers
 
-| Provider | Type | Default Model |
-|----------|------|---------------|
-| OpenRouter | API gateway | deepseek/deepseek-v4-flash |
-| NVIDIA NIM | API gateway | z-ai/glm-5.1 |
-| OpenAI-Compatible | Direct endpoint | gpt-5.5 |
-| OpenCode Go | Direct endpoint | glm-5.1 |
+The app ships with four built-in provider configurations. You can also add any OpenAI-compatible provider via Settings — just set the Base URL, API key, and model name.
+
+| Provider | Default Model |
+|----------|---------------|
+| OpenRouter | deepseek/deepseek-v4-flash |
+| NVIDIA NIM | z-ai/glm-5.1 |
+| OpenAI-Compatible | gpt-5.5 |
+| OpenCode Go | glm-5.1 |
 
 ## Related Documents
 
