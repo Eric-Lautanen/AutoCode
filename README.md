@@ -6,6 +6,8 @@
 
 Write code, run commands, edit files, search your codebase, and iterate — all through a chat interface where the AI operates as your autonomous agent. Not a harness or scaffold — a single self-contained binary.
 
+![Screenshot](assets/screenshot.png)
+
 ## Features
 
 - **AI-Powered Autonomous Coding** — The AI can read, write, edit (with 6-strategy fuzzy patch matching), search, and execute code across your projects using 18 built-in tools
