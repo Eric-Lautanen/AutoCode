@@ -2191,40 +2191,22 @@ fn show_input_row(
         })
         .show(ui, |ui| {
             ui.push_id(format!("input_row_{}", sid), |ui| {
-                ui.horizontal(|ui| {
+                // right_to_left: buttons placed from right edge,
+                // textarea takes remaining space — no manual width calc needed.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let active_sid = state.active_session_id.clone();
                     let busy = active_sid.as_ref().is_some_and(|sid| {
                         runtimes
                             .get(sid)
                             .is_some_and(|r| r.is_busy() || r.retry_after.is_some())
                     });
-                    let input_w = (ui.available_width() - 240.0).max(0.0);
                     let send_enabled = !panel_state.input.trim().is_empty() && !busy;
-
-                    let te = TextEdit::multiline(&mut panel_state.input)
-                        .id(egui::Id::new(format!("chat_input_{}", sid)))
-                        .hint_text("Describe a task... Shift+Enter for newline")
-                        .desired_width(input_w)
-                        .font(egui::TextStyle::Body)
-                        .text_color(theme().text_primary);
-
-                    let resp = ui.add_sized(egui::vec2(input_w, 60.0), te);
-
-                    // Enter sends, Shift+Enter inserts a newline.
-                    // Ctrl+Enter is a no-op (not a send shortcut).
                     let enter_pressed = ui.input(|i| i.key_pressed(Key::Enter))
                         && !ui.input(|i| i.modifiers.shift)
                         && !ui.input(|i| i.modifiers.ctrl);
                     let send_shortcut = enter_pressed && send_enabled && !busy;
 
-                    // Focus management: only focus the input when the user clicks it.
-                    if resp.clicked() {
-                        ui.ctx().memory_mut(|mem| {
-                            mem.request_focus(egui::Id::new(format!("chat_input_{}", sid)))
-                        });
-                    }
-
-                    // Thinking mode toggle + reasoning effort between input and action buttons.
+                    // Provider info for sub-buttons.
                     let provider_key = state.active_provider.clone();
                     let (thinking, effort, thinking_supported, provider_kind, model) = state
                         .active_provider()
@@ -2241,17 +2223,14 @@ fn show_input_row(
                             false,
                             "high".into(),
                             false,
-                            // No active provider ? dead path, buttons stay greyed.
-                            // Fallback kind is irrelevant here.
                             autocode_core::state::ProviderKind::new("openrouter"),
                             String::new(),
                         ));
 
-                    // Changed from ui.vertical to ui.horizontal with center alignment
-                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    // -- Buttons (right side, placed first in right_to_left) --
+                    ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 6.0;
 
-                        // Send / Stop button
                         if busy {
                             let stop_btn = egui::Button::new(
                                 RichText::new("Stop").size(12.5).color(Color32::WHITE),
@@ -2293,7 +2272,6 @@ fn show_input_row(
                             }
                         }
 
-                        // Thinking toggle button (always visible, greyed if unsupported)
                         let th_enabled = thinking_supported;
                         if ui
                             .add_enabled(
@@ -2331,7 +2309,6 @@ fn show_input_row(
                             p.thinking_mode = !p.thinking_mode;
                         }
 
-                        // Reasoning effort selector (always visible, greyed if unsupported/off)
                         let effort_enabled = thinking_supported && thinking;
                         let effort_label = {
                             let mut c = effort.clone();
@@ -2449,6 +2426,21 @@ fn show_input_row(
                             state.show_project_tasks = !state.show_project_tasks;
                         }
                     });
+
+                    // -- Textarea (left side, takes remaining space) --
+                    let te = TextEdit::multiline(&mut panel_state.input)
+                        .id(egui::Id::new(format!("chat_input_{}", sid)))
+                        .hint_text("Describe a task... Shift+Enter for newline")
+                        .font(egui::TextStyle::Body)
+                        .text_color(theme().text_primary);
+
+                    let resp = ui.add_sized(egui::vec2(ui.available_width(), 60.0), te);
+
+                    if resp.clicked() {
+                        ui.ctx().memory_mut(|mem| {
+                            mem.request_focus(egui::Id::new(format!("chat_input_{}", sid)))
+                        });
+                    }
                 });
             });
         });
