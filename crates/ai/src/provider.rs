@@ -603,6 +603,8 @@ fn run_request(
 
     let (host, path, port, use_tls) = parse_url(&url)?;
 
+    let extra_headers = auth_headers_from_manifest(&provider);
+
     let timeouts = TimeoutConfig {
         request: req.request_timeout_secs,
         stream_idle: req.stream_idle_timeout_secs,
@@ -621,6 +623,7 @@ fn run_request(
             &req.model,
             tx,
             &timeouts,
+            &extra_headers,
         )
     } else {
         let conn = HttpConn {
@@ -636,6 +639,7 @@ fn run_request(
             &req.model,
             tx,
             &timeouts,
+            &extra_headers,
         )
     }
 }
@@ -813,12 +817,17 @@ fn send_http(
     model: &str,
     tx: Sender<ProviderEvent>,
     timeouts: &TimeoutConfig,
+    extra_headers: &[(String, String)],
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let _t0 = std::time::Instant::now();
     let mut stream_conn = connect_tcp(conn.host, conn.port, timeouts.request)?;
     apply_timeouts(&stream_conn, stream, timeouts)?;
 
-    let request = build_http_request(conn.host, conn.path, api_key, body);
+    let extra_refs: Vec<(&str, &str)> = extra_headers
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let request = build_http_request(conn.host, conn.path, api_key, body, &extra_refs);
     let _t1 = std::time::Instant::now();
     stream_conn.write_all(request.as_bytes())?;
     stream_conn.flush()?;
@@ -834,6 +843,7 @@ fn send_https(
     model: &str,
     tx: Sender<ProviderEvent>,
     timeouts: &TimeoutConfig,
+    extra_headers: &[(String, String)],
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let _t0 = std::time::Instant::now();
     let stream = connect_tcp(conn.host, conn.port, timeouts.request)?;
@@ -846,7 +856,11 @@ fn send_https(
     let client = rustls::ClientConnection::new(config, server_name)?;
     let _t1 = std::time::Instant::now();
     let mut tls_stream = rustls::StreamOwned::new(client, stream);
-    let request = build_http_request(conn.host, conn.path, api_key, body);
+    let extra_refs: Vec<(&str, &str)> = extra_headers
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let request = build_http_request(conn.host, conn.path, api_key, body, &extra_refs);
     let _t2 = std::time::Instant::now();
     tls_stream.write_all(request.as_bytes())?;
     tls_stream.flush()?;
@@ -854,22 +868,52 @@ fn send_https(
     process_http_response(&mut reader, is_stream, model, tx)
 }
 
-fn build_http_request(host: &str, path: &str, api_key: &str, body: &str) -> String {
-    format!(
+/// Read auth headers from the provider manifest (e.g. x-api-key for Anthropic-style).
+fn auth_headers_from_manifest(provider: &ApiProvider) -> Vec<(String, String)> {
+    let mut headers = Vec::new();
+    if let Some(prov) = autocode_core::state::provider_manifest(&provider.kind) {
+        if prov.auth_type.as_deref() == Some("x-api-key") {
+            headers.push(("x-api-key".into(), provider.api_key.as_str().to_string()));
+        }
+        if let Some(ver) = &prov.anthropic_version {
+            headers.push(("anthropic-version".into(), ver.clone()));
+        }
+    }
+    headers
+}
+
+fn build_http_request(
+    host: &str,
+    path: &str,
+    api_key: &str,
+    body: &str,
+    extra_headers: &[(&str, &str)],
+) -> String {
+    let has_bearer = extra_headers
+        .iter()
+        .any(|(k, _)| k.eq_ignore_ascii_case("Authorization"));
+    let has_xapikey = extra_headers
+        .iter()
+        .any(|(k, _)| k.eq_ignore_ascii_case("x-api-key"));
+
+    let mut header_str = format!(
         "POST {path} HTTP/1.1\r\n\
         Host: {host}\r\n\
-        Authorization: Bearer {api_key}\r\n\
         Content-Type: application/json\r\n\
-        Content-Length: {len}\r\n\
-        Connection: close\r\n\
-        \r\n\
-        {body}",
+        Content-Length: {len}\r\n",
         path = path,
         host = host,
-        api_key = api_key,
         len = body.len(),
-        body = body
-    )
+    );
+    if !has_bearer && !has_xapikey {
+        header_str.push_str(&format!("Authorization: Bearer {}\r\n", api_key));
+    }
+    for (key, value) in extra_headers {
+        header_str.push_str(&format!("{}: {}\r\n", key, value));
+    }
+    header_str.push_str("Connection: close\r\n\r\n");
+    header_str.push_str(body);
+    header_str
 }
 
 /// Redact common API key patterns from a string for safe debug logging.

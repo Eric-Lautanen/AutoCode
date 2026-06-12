@@ -1887,9 +1887,14 @@ fn show_input_row(
                             false,
                             "high".into(),
                             false,
-                            // No active provider ? dead path, buttons stay greyed.
-                            // Fallback kind is irrelevant here.
-                            autocode_core::state::ProviderKind::new("openrouter"),
+                            // No active provider — dead path, buttons stay greyed.
+                            // Use first manifest key as a placeholder fallback.
+                            autocode_core::state::ProviderKind::new(
+                                autocode_core::state::provider_ids()
+                                    .first()
+                                    .map(|s| s.as_str())
+                                    .unwrap_or("openai-compatible"),
+                            ),
                             String::new(),
                         ));
 

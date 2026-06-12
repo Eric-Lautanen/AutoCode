@@ -101,6 +101,13 @@ pub fn model_or_safe(kind: &ProviderKind, model: &str) -> ModelManifest {
         .unwrap_or_else(safe_model_defaults)
 }
 
+/// Returns all provider manifest IDs from providers.json, sorted alphabetically.
+pub fn provider_ids() -> Vec<String> {
+    let mut ids: Vec<String> = manifest().providers.keys().cloned().collect();
+    ids.sort();
+    ids
+}
+
 /// Parse thinking_api string from a model manifest into the enum.
 pub fn parse_thinking_api(s: &str) -> ThinkingApi {
     match s {
@@ -190,43 +197,53 @@ pub struct Project {
 
 // -- API providers / keys -----------------------------------------------------
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub enum ProviderKind {
-    OpenRouter,
-    NvidiaNim,
-    OpenAiCompatible,
-    OpenCodeGo,
+/// Provider identifier backed by the providers.json manifest.
+/// The inner string is the manifest key (e.g. "openrouter", "nvidia-nim").
+/// Adding a new entry to providers.json is sufficient to register a new provider
+/// — no enum variant or code change is required.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
+pub struct ProviderKind(String);
+
+/// Custom deserializer that maps old enum variant names (e.g. "OpenRouter")
+/// to manifest keys (e.g. "openrouter") for backward compatibility.
+impl<'de> Deserialize<'de> for ProviderKind {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(Self::new(&s))
+    }
 }
 
 impl ProviderKind {
+    /// Look up a manifest key by label or raw key.
+    /// Falls back to the raw string so custom (user-added) providers work too.
     pub fn new(s: &str) -> Self {
-        match s {
-            "openrouter" | "OpenRouter" => Self::OpenRouter,
-            "nvidia-nim" | "NVIDIA NIM" => Self::NvidiaNim,
-            "openai-compatible" | "OpenAI-Compatible" => Self::OpenAiCompatible,
-            "opencode-go" | "OpenCode Go" => Self::OpenCodeGo,
-            _ => Self::OpenRouter,
+        // First try matching by label or manifest key.
+        for (key, prov) in &manifest().providers {
+            if prov.label == s || key == s {
+                return Self(key.clone());
+            }
         }
+        // Old serde enum variant names (backward compat with app.ron < dynamic providers).
+        match s {
+            "NvidiaNim" => return Self("nvidia-nim".into()),
+            "OpenAiCompatible" => return Self("openai-compatible".into()),
+            "OpenCodeGo" => return Self("opencode-go".into()),
+            _ => {}
+        }
+        Self(s.to_string())
     }
 
-    pub fn manifest_id(&self) -> &'static str {
-        match self {
-            Self::OpenRouter => "openrouter",
-            Self::NvidiaNim => "nvidia-nim",
-            Self::OpenAiCompatible => "openai-compatible",
-            Self::OpenCodeGo => "opencode-go",
-        }
+    pub fn manifest_id(&self) -> &str {
+        &self.0
     }
 
     pub fn label(&self) -> String {
         provider_manifest(self)
             .map(|m| m.label.clone())
-            .unwrap_or_else(|| match self {
-                Self::OpenRouter => "OpenRouter".into(),
-                Self::NvidiaNim => "NVIDIA NIM".into(),
-                Self::OpenAiCompatible => "OpenAI-Compatible".into(),
-                Self::OpenCodeGo => "OpenCode Go".into(),
-            })
+            .unwrap_or_else(|| self.0.clone())
     }
 
     pub fn supports_cache_control(&self) -> bool {
@@ -1030,25 +1047,29 @@ pub struct AppState {
     pub pending_writes: PendingWrites,
 }
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 impl Default for AppState {
     fn default() -> Self {
+        let mut provider_keys: Vec<&String> = manifest().providers.keys().collect();
+        provider_keys.sort();
+
         let mut providers = HashMap::new();
-        for kind in [
-            ProviderKind::OpenRouter,
-            ProviderKind::NvidiaNim,
-            ProviderKind::OpenAiCompatible,
-            ProviderKind::OpenCodeGo,
-        ] {
-            let p = ApiProvider::new(kind.clone());
+        for key in &provider_keys {
+            let kind = ProviderKind((*key).clone());
+            let p = ApiProvider::new(kind);
             providers.insert(p.kind.label().to_string(), p);
         }
+
+        let default_active = provider_keys
+            .first()
+            .map(|k| ProviderKind((*k).clone()).label().to_string())
+            .unwrap_or_default();
 
         Self {
             projects: Vec::new(),
             active_project_id: None,
             providers,
-            active_provider: ProviderKind::OpenRouter.label().to_string(),
+            active_provider: default_active,
             sessions: Vec::new(),
             active_session_id: None,
             system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
@@ -1088,14 +1109,12 @@ impl Default for AppState {
 impl AppState {
     pub fn load(storage: &dyn eframe::Storage) -> Self {
         let mut state: Self = eframe::get_value(storage, "app_state").unwrap_or_default();
-        // Migration: insert any ProviderKind entries missing from saved state.
+        // Migration: insert any providers missing from saved state.
         // Existing installs won't have providers added after their first run.
-        for kind in [
-            ProviderKind::OpenRouter,
-            ProviderKind::NvidiaNim,
-            ProviderKind::OpenAiCompatible,
-            ProviderKind::OpenCodeGo,
-        ] {
+        let mut manifest_keys: Vec<&String> = manifest().providers.keys().collect();
+        manifest_keys.sort();
+        for key in &manifest_keys {
+            let kind = ProviderKind((*key).clone());
             let label = kind.label().to_string();
             state
                 .providers
@@ -1116,20 +1135,17 @@ impl AppState {
             }
         }
 
-        // Prune stale entries whose keys don't match any known label
-        // (e.g. "Unknown" from a dev build before the manifest was finalised).
-        let valid: HashSet<String> = [
-            ProviderKind::OpenRouter,
-            ProviderKind::NvidiaNim,
-            ProviderKind::OpenAiCompatible,
-            ProviderKind::OpenCodeGo,
-        ]
-        .iter()
-        .map(|k| k.label().to_string())
-        .collect();
-        state.providers.retain(|k, _| valid.contains(k));
+        // Prune stale entries whose kind doesn't resolve to a manifest entry.
+        // This keeps built-in providers and user-added clones alike.
+        state.providers.retain(|_, p| provider_manifest(&p.kind).is_some());
         if !state.providers.contains_key(&state.active_provider) {
-            state.active_provider = ProviderKind::OpenRouter.label().to_string();
+            let mut fallback_keys: Vec<&String> = manifest().providers.keys().collect();
+            fallback_keys.sort();
+            let first = fallback_keys
+                .first()
+                .map(|k| ProviderKind((*k).clone()).label().to_string())
+                .unwrap_or_default();
+            state.active_provider = first;
         }
 
         // Migrate projects that lack data_dir_name.
@@ -1237,7 +1253,6 @@ impl AppState {
             self.show_todo = false;
             self.todo_user_dismissed = false;
             self.handoff_enabled = false;
-            self.settings_open = false;
         } else if self.active_session_id.is_some()
             && !self
                 .sessions

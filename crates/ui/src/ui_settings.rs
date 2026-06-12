@@ -234,7 +234,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
     ui.add_space(4.0);
     if ui.button("+ Add Provider").clicked() {
         let kind = autocode_core::state::ProviderKind::new("openai-compatible");
-        let base = kind.label().to_string();
+        let base = kind.label();
         let mut key = base.clone();
         let mut n = 2;
         while state.providers.contains_key(&key) {
@@ -1251,19 +1251,14 @@ fn show_about(ui: &mut egui::Ui, state: &mut AppState) {
     );
     ui.add_space(14.0);
 
-    let providers_str = [
-        "openrouter",
-        "nvidia-nim",
-        "openai-compatible",
-        "opencode-go",
-    ]
-    .iter()
-    .filter_map(|id| {
-        autocode_core::state::provider_manifest(&autocode_core::state::ProviderKind::new(id))
-            .map(|m| m.label.as_str())
-    })
-    .collect::<Vec<&str>>()
-    .join(" | ");
+    let providers_str = autocode_core::state::provider_ids()
+        .iter()
+        .filter_map(|id| {
+            autocode_core::state::provider_manifest(&autocode_core::state::ProviderKind::new(id))
+                .map(|m| m.label.as_str())
+        })
+        .collect::<Vec<&str>>()
+        .join(" | ");
     let info = [
         ("Version", "0.1.0"),
         ("UI", "egui 0.34 / eframe 0.34"),
