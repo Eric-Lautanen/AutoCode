@@ -930,6 +930,21 @@ pub fn project_context_string(state: &AppState) -> String {
             ctx.push('\n');
         }
     }
+    // Include project task list so the AI knows what tasks exist across sessions.
+    let ptl = &state.project_task_list;
+    if !ptl.is_empty() {
+        ctx.push_str("\n\nPROJECT TASKS\n");
+        for item in &ptl.items {
+            let status_mark = match item.status {
+                TodoStatus::Completed => "[x]",
+                TodoStatus::InProgress => "[>]",
+                TodoStatus::Cancelled => "[-]",
+                TodoStatus::Pending => "[ ]",
+            };
+            ctx.push_str(&format!("  {} {} (priority: {})\n", status_mark, item.content, item.priority));
+        }
+        ctx.push_str("Use `project_task_list` tool to update these tasks.\n");
+    }
     ctx.truncate(ctx.trim_end().len());
     ctx
 }
