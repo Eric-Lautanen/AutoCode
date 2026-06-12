@@ -2,7 +2,6 @@
 // Session tab bar + message bubbles + markdown renderer with syntax
 // highlighting + collapsible tool cards with diff views.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -16,20 +15,8 @@ use autocode_ai::chat::{self, ChatRuntime};
 use autocode_ai::provider;
 use autocode_core::{
     state::{AppState, ChatMessage, DesignSettings, Role, ToolMeta},
-    theme::{Palette, ROUND_LG, ROUND_MD, ROUND_SM, project_accent},
+    theme::{Palette, ROUND_MD, ROUND_SM, project_accent},
 };
-
-thread_local! {
-    static CURRENT_DESIGN: RefCell<Option<DesignSettings>> = const { RefCell::new(None) };
-}
-
-pub fn set_design(d: &DesignSettings) {
-    CURRENT_DESIGN.set(Some(d.clone()));
-}
-
-pub fn design() -> DesignSettings {
-    CURRENT_DESIGN.with(|c| c.borrow().clone().unwrap_or_default())
-}
 
 // -- Live theme colors from design settings ------------------------------------
 
@@ -60,14 +47,6 @@ pub struct ThemeColors {
     pub system_badge: Color32,
     pub user_bubble_fill: Color32,
     pub user_bubble_stroke: Color32,
-    pub tool_bubble_fill: Color32,
-    pub tool_bubble_stroke: Color32,
-    pub assist_bubble_fill: Color32,
-    pub assist_bubble_stroke: Color32,
-    pub system_pill_fill: Color32,
-    pub system_pill_stroke: Color32,
-    pub error_notice_fill: Color32,
-    pub error_notice_stroke: Color32,
     pub terminal_bg: Color32,
     pub terminal_text: Color32,
     pub terminal_border: Color32,
@@ -110,14 +89,6 @@ impl ThemeColors {
             system_badge: rgb(d.system_badge),
             user_bubble_fill: rgb(d.user_bubble_fill),
             user_bubble_stroke: rgb(d.user_bubble_stroke),
-            tool_bubble_fill: rgb(d.tool_bubble_fill),
-            tool_bubble_stroke: rgb(d.tool_bubble_stroke),
-            assist_bubble_fill: rgb(d.assist_bubble_fill),
-            assist_bubble_stroke: rgb(d.assist_bubble_stroke),
-            system_pill_fill: rgb(d.system_pill_fill),
-            system_pill_stroke: rgb(d.system_pill_stroke),
-            error_notice_fill: rgb(d.error_notice_fill),
-            error_notice_stroke: rgb(d.error_notice_stroke),
             terminal_bg: rgb(d.terminal_bg),
             terminal_text: rgb(d.terminal_text),
             terminal_border: rgb(d.terminal_border),
@@ -136,7 +107,7 @@ impl ThemeColors {
 }
 
 fn theme() -> ThemeColors {
-    ThemeColors::from_design(&design())
+    ThemeColors::from_design(&DesignSettings::default())
 }
 
 // -- Panel state ---------------------------------------------------------------
@@ -361,24 +332,22 @@ pub fn show(
                         ui.push_id(
                             ("chat_messages", active_sid.as_deref().unwrap_or("")),
                             |ui| {
+                                let show_reasoning = state.show_reasoning_inline;
+                                let sid = active_sid.as_deref().unwrap_or("");
                                 for (i, msg) in panel_state.display_buffer.iter().enumerate() {
-                                    if msg.role == Role::System {
-                                        show_system_pill(ui, msg);
-                                    } else if msg.role == Role::Error {
-                                        continue;
-                                    } else if msg.role == Role::Assistant
-                                        && msg.content.trim().is_empty()
-                                        && msg.tool_calls.is_some()
-                                    {
-                                    } else {
-                                        show_bubble(
-                                            ui,
-                                            msg,
-                                            i,
-                                            chat_w,
-                                            false,
-                                            active_sid.as_deref().unwrap_or(""),
-                                        );
+                                    match msg.role {
+                                        Role::User => {
+                                            show_user_bubble(ui, msg, chat_w);
+                                        }
+                                        Role::Assistant => {
+                                            show_assistant_content(ui, msg, i, sid, show_reasoning);
+                                        }
+                                        Role::Tool => {
+                                            ui.push_id((msg.timestamp, sid), |ui| {
+                                                render_tool_result(ui, msg, i, sid);
+                                            });
+                                        }
+                                        Role::System | Role::Error => {}
                                     }
                                     ui.add_space(8.0);
                                 }
@@ -394,32 +363,36 @@ pub fn show(
                             !r.pending_response.is_empty() || !r.live_shell_buf.is_empty();
 
                         if (r.is_busy() && !has_streaming) || r.retry_after.is_some() {
-                            show_waiting_bubble(ui, &r.status, chat_w);
+                            ui.add_space(8.0);
+                            ui.label(
+                                RichText::new(&r.status)
+                                    .size(12.0)
+                                    .color(theme().text_muted),
+                            );
                             ui.add_space(8.0);
                         } else {
-                            if !r.reasoning_buf.is_empty() {
-                                show_reasoning_bubble(
-                                    ui,
-                                    &r.reasoning_buf,
-                                    chat_w,
-                                    true,
-                                    active_sid.as_deref().unwrap_or(""),
-                                );
+                            if state.show_reasoning_inline && !r.reasoning_buf.is_empty() {
+                                show_live_reasoning(ui, &r.reasoning_buf);
+                                ui.add_space(6.0);
                             }
                             if !r.pending_response.is_empty() {
-                                show_streaming_bubble(ui, &r.pending_response, chat_w);
+                                ui.add_space(8.0);
+                                ui.separator();
+                                ui.add_space(4.0);
+                                render_markdown_streaming(ui, &r.pending_response, true);
+                                ui.label(RichText::new("|").color(theme().accent).size(13.0));
                             } else if !r.live_shell_buf.is_empty() {
-                                show_live_shell_bubble(ui, &r.live_shell_buf, chat_w);
+                                render_shell_terminal(ui, &r.live_shell_buf, active_sid.as_deref().unwrap_or(""));
                             }
                         }
                     }
 
-                    // Render error notices at the very bottom.
+                    // Render error notices at the bottom.
                     if let Some(sess) = state.active_session() {
                         for msg in sess.messages.iter().rev() {
                             if msg.role == Role::Error {
                                 show_error_notice(ui, msg);
-                                ui.add_space(8.0);
+                                ui.add_space(4.0);
                             }
                         }
                     }
@@ -835,219 +808,46 @@ fn empty_state(ui: &mut egui::Ui, state: &AppState) {
 
 // -- Message bubbles -----------------------------------------------------------
 
-fn show_bubble(
-    ui: &mut egui::Ui,
-    msg: &ChatMessage,
-    idx: usize,
-    panel_w: f32,
-    suppress_ts: bool,
-    sid: &str,
-) {
-    // Every widget inside a bubble — including nested ScrollAreas — gets a
-    // unique parent ID derived from this message's timestamp + index.
-    // This prevents scroll state from leaking between messages.
-    ui.push_id((msg.timestamp, sid), |ui| {
-        let is_user = msg.role == Role::User;
-        let is_tool = msg.role == Role::Tool;
-        let max_bubble_w = (panel_w * 0.72).max(240.0);
-
-        if is_user {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                ui.add_space(8.0);
-                ui.vertical(|ui| {
-                    ui.set_max_width(max_bubble_w);
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 4.0;
-                        ui.label(
-                            RichText::new("You")
-                                .size(10.0)
-                                .color(theme().user_badge)
-                                .strong(),
-                        );
-                        if !suppress_ts {
-                            ui.label(
-                                RichText::new(helpers::format_time(msg.timestamp))
-                                    .size(9.0)
-                                    .color(theme().text_muted),
-                            );
-                        }
-                        let copy_src = msg
-                            .full_content
-                            .as_deref()
-                            .unwrap_or(&msg.content)
-                            .to_string();
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    RichText::new("Copy").size(9.0).color(theme().text_muted),
-                                )
-                                .fill(Color32::TRANSPARENT)
-                                .stroke(Stroke::NONE),
-                            )
-                            .on_hover_text("Copy message")
-                            .clicked()
-                        {
-                            ui.ctx().copy_text(copy_src);
-                        }
-                        if is_user && !sid.is_empty() {
-                            if ui
-                                .add(
-                                    egui::Button::new(
-                                        RichText::new("↺").size(10.0).color(theme().warning),
-                                    )
-                                    .fill(Color32::TRANSPARENT)
-                                    .stroke(Stroke::NONE),
-                                )
-                                .on_hover_text("Replay from this message")
-                                .clicked()
-                            {
-                                ui.data_mut(|d| {
-                                    d.insert_temp(
-                                        egui::Id::new("replay_action"),
-                                        Some((sid.to_string(), msg.id)),
-                                    );
-                                });
-                            }
-                        }
-                    });
-                    Frame::NONE
-                        .fill(theme().user_bubble_fill)
-                        .corner_radius(ROUND_MD)
-                        .stroke(Stroke::new(1.0, theme().user_bubble_stroke))
-                        .inner_margin(Margin {
-                            left: 12,
-                            right: 12,
-                            top: 8,
-                            bottom: 8,
-                        })
-                        .show(ui, |ui| {
-                            render_markdown(ui, &msg.content, true);
-                        });
-                });
-            });
-        } else {
+fn show_user_bubble(ui: &mut egui::Ui, msg: &ChatMessage, panel_w: f32) {
+    let max_w = (panel_w * DesignSettings::default().user_bubble_max_width_pct).max(240.0);
+    ui.push_id(msg.timestamp, |ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
             ui.add_space(8.0);
             ui.vertical(|ui| {
-                ui.set_max_width(max_bubble_w);
-                let (badge_color, badge_label) = match msg.role {
-                    Role::Assistant => (theme().assist_badge, "AutoCode"),
-                    Role::Tool => (theme().tool_badge, "Tool"),
-                    _ => (theme().system_badge, "System"),
-                };
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    ui.label(
-                        RichText::new(badge_label)
-                            .size(10.0)
-                            .color(badge_color)
-                            .strong(),
-                    );
-                    if !suppress_ts {
-                        ui.label(
-                            RichText::new(helpers::format_time(msg.timestamp))
-                                .size(9.0)
-                                .color(theme().text_muted),
-                        );
-                    }
-                    if msg.token_count > 0 {
-                        ui.label(
-                            RichText::new(format!("{} tokens", msg.token_count))
-                                .size(9.0)
-                                .color(theme().text_muted),
-                        );
-                    }
-                    if let Some(meta) = &msg.tool_meta
-                        && let Some(dur) = meta.duration_ms
-                    {
-                        ui.label(
-                            RichText::new(format!("{}ms", dur))
-                                .size(9.0)
-                                .color(theme().text_muted),
-                        );
-                    }
-                    let copy_src = msg
-                        .full_content
-                        .as_deref()
-                        .unwrap_or(&msg.content)
-                        .to_string();
-                    if ui
-                        .add(
-                            egui::Button::new(
-                                RichText::new("Copy").size(9.0).color(theme().text_muted),
-                            )
-                            .fill(Color32::TRANSPARENT)
-                            .stroke(Stroke::NONE),
-                        )
-                        .on_hover_text("Copy message")
-                        .clicked()
-                    {
-                        ui.ctx().copy_text(copy_src);
-                    }
-                });
-
-                let (bubble_fill, bubble_stroke) = if is_tool {
-                    (
-                        theme().tool_bubble_fill,
-                        Stroke::new(1.0, theme().tool_bubble_stroke),
-                    )
-                } else if is_user {
-                    (
-                        theme().user_bubble_fill,
-                        Stroke::new(1.0, theme().user_bubble_stroke),
-                    )
-                } else {
-                    (
-                        theme().assist_bubble_fill,
-                        Stroke::new(1.0, theme().assist_bubble_stroke),
-                    )
-                };
-
+                ui.set_max_width(max_w);
                 Frame::NONE
-                    .fill(bubble_fill)
+                    .fill(theme().user_bubble_fill)
                     .corner_radius(ROUND_MD)
-                    .stroke(bubble_stroke)
-                    .inner_margin(Margin {
-                        left: 12,
-                        right: 12,
-                        top: 8,
-                        bottom: 8,
-                    })
+                    .stroke(Stroke::new(1.0, theme().user_bubble_stroke))
+                    .inner_margin(Margin::symmetric(12, 8))
                     .show(ui, |ui| {
-                        if is_tool {
-                            render_tool_result(ui, msg, idx, sid);
-                        } else {
-                            if let Some(reasoning) = &msg.reasoning_content
-                                && !reasoning.is_empty()
-                            {
-                                CollapsingHeader::new(
-                                    RichText::new("Thinking")
-                                        .size(11.0)
-                                        .color(theme().accent)
-                                        .strong(),
-                                )
-                                .id_salt(format!(
-                                    "reasoning_saved_{}_{}_{}",
-                                    idx, msg.timestamp, sid
-                                ))
-                                .default_open(false)
-                                .show(ui, |ui| {
-                                    Frame::NONE
-                                        .fill(theme().reason_bg)
-                                        .corner_radius(ROUND_SM)
-                                        .stroke(Stroke::new(1.0, theme().reason_border))
-                                        .inner_margin(Margin::same(8))
-                                        .show(ui, |ui| {
-                                            render_markdown(ui, reasoning, true);
-                                        });
-                                });
-                                ui.add_space(6.0);
-                            }
-                            render_markdown(ui, &msg.content, true);
-                        }
+                        render_markdown(ui, &msg.content, true);
                     });
             });
+        });
+    });
+}
+
+fn show_assistant_content(ui: &mut egui::Ui, msg: &ChatMessage, _idx: usize, sid: &str, show_reasoning: bool) {
+    ui.push_id((msg.timestamp, sid), |ui| {
+        if show_reasoning {
+            if let Some(reasoning) = &msg.reasoning_content
+                && !reasoning.is_empty()
+            {
+                ui.add_space(4.0);
+                Frame::NONE
+                    .fill(theme().reason_bg)
+                    .corner_radius(ROUND_SM)
+                    .stroke(Stroke::new(1.0, theme().reason_border))
+                    .inner_margin(Margin::same(8))
+                    .show(ui, |ui| {
+                        render_markdown(ui, reasoning, true);
+                    });
+                ui.add_space(6.0);
+            }
         }
-    }); // end push_id
+        render_markdown(ui, &msg.content, true);
+    });
 }
 
 // -- Tool result rendering with collapsible cards + diff views -----------------
@@ -1752,172 +1552,18 @@ fn simple_diff_lines<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<DiffLine<'a>> 
     result
 }
 
-// -- Waiting and streaming bubbles ---------------------------------------------
+// -- Live streaming content (no bubble wrappers) --------------------------------
 
-fn show_waiting_bubble(ui: &mut egui::Ui, status: &str, panel_w: f32) {
-    let max_w = (panel_w * 0.72).max(240.0);
-    ui.add_space(8.0);
-    ui.vertical(|ui| {
-        ui.set_max_width(max_w);
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
-            ui.label(
-                RichText::new("AutoCode")
-                    .size(10.0)
-                    .color(theme().assist_badge)
-                    .strong(),
-            );
-            ui.label(RichText::new(status).size(10.0).color(theme().warning));
-        });
-        Frame::NONE
-            .fill(theme().bg_surface)
-            .corner_radius(ROUND_MD)
-            .stroke(Stroke::new(1.0, theme().border))
-            .inner_margin(Margin::same(10))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 4.0;
-                    ui.spinner();
-                    ui.label(
-                        RichText::new("Working...")
-                            .size(12.0)
-                            .color(theme().text_muted),
-                    );
-                });
-            });
-    });
-}
-
-fn show_reasoning_bubble(ui: &mut egui::Ui, text: &str, panel_w: f32, live: bool, sid: &str) {
-    let max_w = (panel_w * 0.72).max(240.0);
+fn show_live_reasoning(ui: &mut egui::Ui, text: &str) {
     ui.add_space(4.0);
-    ui.vertical(|ui| {
-        ui.set_max_width(max_w);
-        let label = if live { "Thinking..." } else { "Thinking" };
-        ui.push_id(format!("reasoning_live_{}", sid), |ui| {
-            CollapsingHeader::new(
-                RichText::new(label)
-                    .size(11.0)
-                    .color(theme().accent)
-                    .strong(),
-            )
-            .id_salt(format!("reasoning_live_header_{}", sid))
-            .default_open(live)
-            .show(ui, |ui| {
-                ui.set_max_height(f32::INFINITY);
-                ScrollArea::vertical()
-                    .max_height(400.0)
-                    .min_scrolled_height(0.0)
-                    .max_width(ui.available_width())
-                    .show(ui, |ui| {
-                        ui.set_min_width(ui.available_width());
-                        Frame::NONE
-                            .fill(theme().code_frame_bg)
-                            .corner_radius(ROUND_SM)
-                            .stroke(Stroke::new(1.0, theme().border))
-                            .inner_margin(Margin::same(8))
-                            .show(ui, |ui| {
-                                if live {
-                                    render_markdown_streaming(ui, text, false);
-                                } else {
-                                    render_markdown(ui, text, false);
-                                }
-                            });
-                    });
-            });
+    Frame::NONE
+        .fill(theme().reason_bg)
+        .corner_radius(ROUND_SM)
+        .stroke(Stroke::new(1.0, theme().reason_border))
+        .inner_margin(Margin::same(8))
+        .show(ui, |ui| {
+            render_markdown_streaming(ui, text, false);
         });
-    });
-}
-
-fn show_streaming_bubble(ui: &mut egui::Ui, text: &str, panel_w: f32) {
-    let max_w = (panel_w * 0.72).max(240.0);
-    ui.add_space(8.0);
-    ui.vertical(|ui| {
-        ui.set_max_width(max_w);
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
-            ui.label(
-                RichText::new("AutoCode")
-                    .size(10.0)
-                    .color(theme().assist_badge)
-                    .strong(),
-            );
-            ui.label(
-                RichText::new("generating...")
-                    .size(10.0)
-                    .color(theme().text_muted),
-            );
-        });
-        Frame::NONE
-            .fill(theme().bg_surface)
-            .corner_radius(ROUND_MD)
-            .stroke(Stroke::new(1.0, theme().accent_dim))
-            .inner_margin(Margin::same(10))
-            .show(ui, |ui| {
-                render_markdown_streaming(ui, text, true);
-                ui.label(RichText::new("|").color(theme().accent).size(13.0));
-            });
-    });
-}
-
-fn show_live_shell_bubble(ui: &mut egui::Ui, text: &str, panel_w: f32) {
-    let max_w = (panel_w * 0.72).max(240.0);
-    ui.add_space(8.0);
-    ui.vertical(|ui| {
-        ui.set_max_width(max_w);
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
-            ui.label(
-                RichText::new("Tool")
-                    .size(10.0)
-                    .color(theme().tool_badge)
-                    .strong(),
-            );
-            ui.label(
-                RichText::new("running shell...")
-                    .size(10.0)
-                    .color(theme().warning),
-            );
-            ui.spinner();
-        });
-        Frame::NONE
-            .fill(theme().live_terminal_bg)
-            .corner_radius(ROUND_SM)
-            .stroke(Stroke::new(1.0, theme().live_terminal_border))
-            .inner_margin(Margin::same(10))
-            .show(ui, |ui| {
-                ui.set_max_width(ui.available_width());
-                let mut job = egui::text::LayoutJob {
-                    wrap: egui::text::TextWrapping {
-                        max_rows: usize::MAX,
-                        max_width: ui.available_width(),
-                        break_anywhere: true,
-                        overflow_character: Some('\u{23CE}'),
-                    },
-                    ..Default::default()
-                };
-                job.append(
-                    text,
-                    0.0,
-                    TextFormat {
-                        font_id: FontId::monospace(11.5),
-                        color: theme().text_code,
-                        ..Default::default()
-                    },
-                );
-                ui.set_max_height(f32::INFINITY);
-                ScrollArea::vertical()
-                    .max_height(400.0)
-                    .min_scrolled_height(0.0)
-                    .max_width(ui.available_width())
-                    .stick_to_bottom(true)
-                    .show(ui, |ui| {
-                        ui.set_max_width(ui.available_width());
-                        ui.set_min_width(ui.available_width());
-                        ui.label(job);
-                    });
-            });
-    });
 }
 
 const CODE_DISPLAY_MAX_LINES: usize = 5000;
@@ -2455,54 +2101,13 @@ fn show_input_row(
 }
 
 fn show_error_notice(ui: &mut egui::Ui, msg: &ChatMessage) {
-    ui.add_space(8.0);
-    Frame::NONE
-        .fill(theme().error_notice_fill)
-        .corner_radius(ROUND_MD)
-        .stroke(Stroke::new(1.5, theme().error_notice_stroke))
-        .inner_margin(Margin {
-            left: 12,
-            right: 12,
-            top: 8,
-            bottom: 8,
-        })
-        .show(ui, |ui| {
-            ui.label(
-                RichText::new(format!("\u{26a0} {}", msg.content))
-                    .size(12.5)
-                    .color(theme().error)
-                    .strong(),
-            );
-        });
-}
-
-fn show_system_pill(ui: &mut egui::Ui, msg: &ChatMessage) {
-    ui.add_space(24.0);
-    Frame::NONE
-        .fill(theme().system_pill_fill)
-        .corner_radius(ROUND_LG)
-        .stroke(Stroke::new(1.0, theme().system_pill_stroke))
-        .inner_margin(Margin {
-            left: 12,
-            right: 12,
-            top: 3,
-            bottom: 3,
-        })
-        .show(ui, |ui| {
-            let preview: String = msg
-                .content
-                .lines()
-                .next()
-                .unwrap_or("")
-                .chars()
-                .take(80)
-                .collect();
-            ui.label(
-                RichText::new(format!("System: {}", preview))
-                    .size(11.0)
-                    .color(Palette::PURPLE),
-            );
-        });
+    ui.add_space(4.0);
+    ui.label(
+        RichText::new(&msg.content)
+            .size(12.5)
+            .color(theme().error)
+            .strong(),
+    );
 }
 
 // -- Markdown-lite renderer with bold, italic, inline code, tables -------------

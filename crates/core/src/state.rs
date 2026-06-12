@@ -672,40 +672,12 @@ pub struct ShellTask {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DesignSettings {
-    // Bubble heights
-    pub code_max_height: f32,
-    pub terminal_max_height: f32,
-    pub diff_max_height: f32,
-    pub reasoning_height: f32,
-    pub bubble_max_width_pct: f32,
-    pub input_height: f32,
+    // User bubble width
+    pub user_bubble_max_width_pct: f32,
 
-    // Font sizes
-    pub code_font_size: f32,
-    pub terminal_font_size: f32,
-    pub body_font_size: f32,
-    pub label_font_size: f32,
-    pub tiny_font_size: f32,
-    pub badge_font_size: f32,
-    pub heading_font_size: f32,
-    pub header_font_size: f32,
-    pub thinking_font_size: f32,
-    pub cursor_font_size: f32,
-
-    // Line heights
-    pub line_h: f32,
-
-    // Bubble colors (stored as f32 0.0-1.0 values for egui color picker compatibility)
+    // User bubble colors
     pub user_bubble_fill: [f32; 3],
     pub user_bubble_stroke: [f32; 3],
-    pub tool_bubble_fill: [f32; 3],
-    pub tool_bubble_stroke: [f32; 3],
-    pub assist_bubble_fill: [f32; 3],
-    pub assist_bubble_stroke: [f32; 3],
-    pub system_pill_fill: [f32; 3],
-    pub system_pill_stroke: [f32; 3],
-    pub error_notice_fill: [f32; 3],
-    pub error_notice_stroke: [f32; 3],
 
     // Terminal colors
     pub terminal_bg: [f32; 3],
@@ -731,21 +703,12 @@ pub struct DesignSettings {
     pub diff_num_color: [f32; 3],
     pub diff_label_color: [f32; 3],
 
-    // Reasoning bubble colors
+    // Reasoning collapse colors
     pub reason_bg: [f32; 3],
     pub reason_border: [f32; 3],
     pub reason_header: [f32; 3],
 
-    // Waiting bubble
-    pub waiting_fill: [f32; 3],
-    pub waiting_stroke: [f32; 3],
-
-    // Streaming bubble
-    pub stream_fill: [f32; 3],
-    pub stream_stroke: [f32; 3],
-    pub stream_cursor: [f32; 3],
-
-    // Badge colors
+    // Badge / label colors
     pub assist_badge: [f32; 3],
     pub tool_badge: [f32; 3],
     pub user_badge: [f32; 3],
@@ -759,46 +722,14 @@ pub struct DesignSettings {
     pub muted_color: [f32; 3],
     pub text_primary: [f32; 3],
     pub text_secondary: [f32; 3],
-
-    // Margins
-    pub bubble_margin: f32,
-    pub bubble_inner_x: f32,
-    pub bubble_inner_y: f32,
-    pub frame_margin_x: f32,
-    pub frame_margin_y: f32,
-    pub message_gap: f32,
 }
 
 impl Default for DesignSettings {
     fn default() -> Self {
         Self {
-            code_max_height: 500.0,
-            terminal_max_height: 300.0,
-            diff_max_height: 500.0,
-            reasoning_height: 300.0,
-            bubble_max_width_pct: 0.72,
-            input_height: 90.0,
-            code_font_size: 12.0,
-            terminal_font_size: 12.0,
-            body_font_size: 13.0,
-            label_font_size: 9.5,
-            tiny_font_size: 9.0,
-            badge_font_size: 10.0,
-            heading_font_size: 12.0,
-            header_font_size: 13.0,
-            thinking_font_size: 11.0,
-            cursor_font_size: 13.0,
-            line_h: 15.5,
+            user_bubble_max_width_pct: 0.72,
             user_bubble_fill: [0.11, 0.16, 0.29],
             user_bubble_stroke: [0.18, 0.25, 0.43],
-            tool_bubble_fill: [0.09, 0.14, 0.09],
-            tool_bubble_stroke: [0.16, 0.27, 0.16],
-            assist_bubble_fill: [0.11, 0.12, 0.15],
-            assist_bubble_stroke: [0.16, 0.19, 0.24],
-            system_pill_fill: [0.31, 0.24, 0.51],
-            system_pill_stroke: [0.63, 0.47, 0.86],
-            error_notice_fill: [0.47, 0.12, 0.12],
-            error_notice_stroke: [0.82, 0.31, 0.31],
             terminal_bg: [0.05, 0.05, 0.07],
             terminal_text: [0.67, 0.78, 0.65],
             terminal_border: [0.14, 0.18, 0.14],
@@ -820,11 +751,6 @@ impl Default for DesignSettings {
             reason_bg: [0.07, 0.08, 0.10],
             reason_border: [0.16, 0.19, 0.24],
             reason_header: [0.39, 0.61, 0.92],
-            waiting_fill: [0.11, 0.12, 0.15],
-            waiting_stroke: [0.16, 0.19, 0.24],
-            stream_fill: [0.11, 0.12, 0.15],
-            stream_stroke: [0.24, 0.39, 0.67],
-            stream_cursor: [0.39, 0.61, 0.92],
             assist_badge: [0.31, 0.71, 0.47],
             tool_badge: [0.82, 0.63, 0.24],
             user_badge: [0.39, 0.61, 0.92],
@@ -836,12 +762,6 @@ impl Default for DesignSettings {
             muted_color: [0.35, 0.39, 0.46],
             text_primary: [0.86, 0.88, 0.91],
             text_secondary: [0.63, 0.66, 0.73],
-            bubble_margin: 8.0,
-            bubble_inner_x: 12.0,
-            bubble_inner_y: 8.0,
-            frame_margin_x: 10.0,
-            frame_margin_y: 6.0,
-            message_gap: 8.0,
         }
     }
 }
@@ -863,6 +783,7 @@ pub struct TodoItem {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct TodoList {
     pub title: String,
     pub items: Vec<TodoItem>,
@@ -902,6 +823,7 @@ impl TodoList {
 // -- Project-level task list --------------------------------------------------
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct ProjectTaskList {
     pub title: String,
     pub items: Vec<TodoItem>,
@@ -1012,7 +934,8 @@ pub struct AppState {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub expanded_dirs: Vec<String>,
 
-    #[serde(default)]
+    /// Working copy of the session todo list. Source of truth is SessionMeta on disk.
+    #[serde(default, skip)]
     pub todo_list: TodoList,
 
     #[serde(default)]
@@ -1023,11 +946,16 @@ pub struct AppState {
     #[serde(default)]
     pub todo_user_dismissed: bool,
 
-    #[serde(default)]
+    /// Working copy of the project task list. Source of truth is ProjectMeta on disk.
+    #[serde(default, skip)]
     pub project_task_list: ProjectTaskList,
 
     #[serde(default)]
     pub show_project_tasks: bool,
+
+    /// When true, reasoning/thinking content is shown inline in the chat.
+    #[serde(default)]
+    pub show_reasoning_inline: bool,
 
     /// Whether the settings window is open. Per-session, stored globally as working copy.
     #[serde(default)]
@@ -1041,13 +969,6 @@ pub struct AppState {
     pub debug_mode: bool,
     #[serde(default)]
     pub inspection_open: bool,
-
-    /// Transient: when set, the next click samples a screen pixel into this design field.
-    #[serde(skip)]
-    pub sampling_target: Option<String>,
-    /// Frame ID when sampling was activated — avoids self-click.
-    #[serde(skip)]
-    pub sampling_activated_frame: u64,
 
     #[serde(default)]
     pub design: DesignSettings,
@@ -1142,12 +1063,11 @@ impl Default for AppState {
             todo_user_dismissed: false,
             project_task_list: ProjectTaskList::default(),
             show_project_tasks: false,
+            show_reasoning_inline: false,
             settings_open: false,
             sysinfo: crate::sysinfo::SysInfo::default(),
             debug_mode: false,
             inspection_open: false,
-            sampling_target: None,
-            sampling_activated_frame: 0,
             design: DesignSettings::default(),
             stream_idle_timeout_secs: crate::helpers::default_stream_idle_timeout(),
             request_timeout_secs: crate::helpers::default_request_timeout(),

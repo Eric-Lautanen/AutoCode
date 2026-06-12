@@ -1,9 +1,10 @@
 //! UI panels and widgets for AutoCode.
 //!
-//! Implements the egui-based user interface: chat panel with message bubbles
-//! (markdown, diffs, reasoning, streaming, live shell output), settings window
-//! (7 tabs), file explorer tree with preview, floating task list, toolbar
-//! with project/session/provider pickers, and various UI helpers.
+//! Implements the egui-based user interface: chat panel with user message
+//! bubbles and inline assistant/tool content (markdown, diffs, code blocks,
+//! terminal output), settings window (6 tabs), file explorer tree with preview,
+//! floating task list, toolbar with project/session/provider pickers,
+//! and various UI helpers.
 
 pub mod helpers;
 pub mod ui_chat;

@@ -1,7 +1,10 @@
 use egui::{Color32, CornerRadius, Frame, Margin, RichText, Stroke, Vec2};
 
 use crate::helpers;
-use autocode_core::state::{AppState, TodoItem, TodoStatus};
+use autocode_core::{
+    session_storage,
+    state::{AppState, ProjectMeta, TodoItem, TodoStatus},
+};
 use autocode_core::theme::Palette;
 
 pub fn show_window(ctx: &egui::Context, state: &mut AppState) {
@@ -80,6 +83,29 @@ pub fn show_window(ctx: &egui::Context, state: &mut AppState) {
                                 .clicked()
                             {
                                 state.show_project_tasks = false;
+                            }
+                            ui.add_space(4.0);
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        RichText::new("Clear").size(11.0).color(Palette::WARNING),
+                                    )
+                                    .fill(Color32::TRANSPARENT)
+                                    .stroke(Stroke::NONE)
+                                    .min_size(Vec2::new(36.0, 20.0)),
+                                )
+                                .on_hover_text("Clear project tasks")
+                                .clicked()
+                            {
+                                state.project_task_list.clear();
+                                // Persist cleared list to project meta.
+                                if let Some(proj) = state.active_project_mut() {
+                                    let meta = ProjectMeta {
+                                        version: 1,
+                                        project_task_list: Default::default(),
+                                    };
+                                    let _ = session_storage::save_project_meta(proj, &meta);
+                                }
                             }
                         });
                     });

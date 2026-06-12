@@ -238,6 +238,14 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
 
                     // Handoff toggle (lights up when enabled).
                     show_handoff_toggle(ui, state);
+
+                    // Reasoning visibility toggle.
+                    if lit_btn(ui, "Reasoning", state.show_reasoning_inline)
+                        .on_hover_text("Show/hide AI reasoning in chat")
+                        .clicked()
+                    {
+                        state.show_reasoning_inline = !state.show_reasoning_inline;
+                    }
                 });
             });
         });

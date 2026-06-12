@@ -277,21 +277,6 @@ impl eframe::App for AutocodeApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        ui_chat::set_design(&self.state.design);
-
-        // Screen pixel sampling (eyedropper) — fires 2 frames after activation.
-        if self.state.sampling_target.is_some() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-            self.state.sampling_activated_frame += 1;
-            if self.state.sampling_activated_frame > 2 && ui.input(|i| i.pointer.any_click()) {
-                let color = autocode_ui::helpers::sample_screen_pixel();
-                let field = self.state.sampling_target.take();
-                self.state.sampling_activated_frame = 0;
-                if let (Some(f), Some(c)) = (field, color) {
-                    autocode_ui::ui_settings::apply_sampled_color(&mut self.state.design, &f, c);
-                }
-            }
-        }
 
         // Native folder picker (New Project) --------------------------------
         let wants_picker = ctx.data_mut(|d| {
