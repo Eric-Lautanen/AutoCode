@@ -2228,7 +2228,7 @@ fn show_input_row(
                         ));
 
                     // -- Buttons (right side, placed first in right_to_left) --
-                    ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.x = 6.0;
 
                         if busy {
