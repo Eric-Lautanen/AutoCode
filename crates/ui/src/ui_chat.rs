@@ -2198,10 +2198,7 @@ fn show_input_row(
                             .get(sid)
                             .is_some_and(|r| r.is_busy() || r.retry_after.is_some())
                     });
-                    // Buttons: Send(72) + gap(6) + TH(36) + gap(6) + Effort(44) + gap(6) + [=](28) + gap(6) + [~](28) = 232
-                    // Plus item_spacing before button group in this horizontal (default ~6) = 238
-                    // Small buffer for padding = 240
-                    let input_w = (ui.available_width() - 240.0).max(120.0);
+                    let input_w = (ui.available_width() - 240.0).max(0.0);
                     let send_enabled = !panel_state.input.trim().is_empty() && !busy;
 
                     let te = TextEdit::multiline(&mut panel_state.input)
