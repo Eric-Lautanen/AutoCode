@@ -267,6 +267,21 @@ fn push_tool_results_to_state(state: &mut AppState, runtime: &ChatRuntime, resul
                 state.todo_user_dismissed = sess.todo_user_dismissed;
             }
         }
+        if let Some((title, items)) = &tr.project_todo_update {
+            state
+                .project_task_list
+                .set_items(title.clone(), items.clone());
+            state.show_project_tasks = true;
+            // Persist to disk immediately.
+            let ptl = state.project_task_list.clone();
+            if let Some(proj) = state.active_project_mut() {
+                let meta = autocode_core::state::ProjectMeta {
+                    version: 1,
+                    project_task_list: ptl,
+                };
+                let _ = autocode_core::session_storage::save_project_meta(proj, &meta);
+            }
+        }
     }
 }
 
@@ -275,6 +290,7 @@ struct ToolResult {
     content: String,
     meta: ToolMeta,
     todo_update: Option<(String, Vec<TodoItem>)>,
+    project_todo_update: Option<(String, Vec<TodoItem>)>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1246,16 +1262,18 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
             } else if is_transient_error(&err_msg) {
                 // Cap retries for JSON parse errors — the data was already
                 // sanitized on the first retry; further retries won't help.
-                if err_msg.contains("unterminated string")
-                    && runtime.retry_count >= 1
-                {
+                if err_msg.contains("unterminated string") && runtime.retry_count >= 1 {
                     runtime.retry_count = 0;
                     runtime.partial_response_backup.clear();
                     runtime.stream_drop_retries = 0;
-                    push_error(state, runtime, format!(
-                        "Provider error: {} — data was sanitized but provider still rejects it",
-                        err_msg,
-                    ));
+                    push_error(
+                        state,
+                        runtime,
+                        format!(
+                            "Provider error: {} — data was sanitized but provider still rejects it",
+                            err_msg,
+                        ),
+                    );
                     return true;
                 }
                 // Forever retry: exponential backoff 5s → 180s cap, never gives up.
@@ -1586,11 +1604,19 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                         } else {
                             None
                         };
+                        let project_todo_update = if tc.name == "project_task_list" {
+                            let args: serde_json::Value = serde_json::from_str(&tc.arguments)
+                                .unwrap_or(serde_json::Value::Null);
+                            helpers::parse_project_task_from_tool_args(&args)
+                        } else {
+                            None
+                        };
                         results.push(ToolResult {
                             tool_call: tc.clone(),
                             content: result.to_string(),
                             meta,
                             todo_update,
+                            project_todo_update,
                         });
 
                         std::thread::yield_now();
@@ -1686,8 +1712,12 @@ fn poll_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 if has_handoff && state.handoff_enabled && !runtime.handoff_in_progress {
                     // Extract the AI-generated next_prompt from the handoff tool call args.
                     if let Some(tr) = results.iter().find(|r| r.content.starts_with("HANDOFF:")) {
-                        if let Ok(args) = serde_json::from_str::<serde_json::Value>(&tr.tool_call.arguments) {
-                            runtime.handoff_next_prompt = args.get("next_prompt").and_then(|v| v.as_str().map(String::from));
+                        if let Ok(args) =
+                            serde_json::from_str::<serde_json::Value>(&tr.tool_call.arguments)
+                        {
+                            runtime.handoff_next_prompt = args
+                                .get("next_prompt")
+                                .and_then(|v| v.as_str().map(String::from));
                         }
                     }
                     push_tool_results_to_state(state, runtime, &results);
@@ -1753,6 +1783,7 @@ fn start_next_live_shell(runtime: &mut ChatRuntime, project_root: &str) {
                         ..Default::default()
                     },
                     todo_update: None,
+                    project_todo_update: None,
                 });
                 runtime.pending_tool_remaining.remove(0);
                 continue;
@@ -1817,6 +1848,7 @@ fn poll_live_shell(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 ..Default::default()
             },
             todo_update: None,
+            project_todo_update: None,
         };
         runtime.pending_tool_results.push(result);
 
@@ -1887,6 +1919,7 @@ fn poll_live_shell(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
             content,
             meta,
             todo_update: None,
+            project_todo_update: None,
         };
         runtime.pending_tool_results.push(result);
         runtime.live_shell_buf.clear();
@@ -1941,8 +1974,11 @@ fn commit_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) {
             let results = std::mem::take(&mut runtime.pending_tool_results);
             // Extract the AI-generated next_prompt from the handoff tool call args.
             if let Some(tr) = results.iter().find(|r| r.content.starts_with("HANDOFF:")) {
-                if let Ok(args) = serde_json::from_str::<serde_json::Value>(&tr.tool_call.arguments) {
-                    runtime.handoff_next_prompt = args.get("next_prompt").and_then(|v| v.as_str().map(String::from));
+                if let Ok(args) = serde_json::from_str::<serde_json::Value>(&tr.tool_call.arguments)
+                {
+                    runtime.handoff_next_prompt = args
+                        .get("next_prompt")
+                        .and_then(|v| v.as_str().map(String::from));
                 }
             }
             let count = results.len();
@@ -2185,7 +2221,16 @@ fn generate_resume_content(sess: &autocode_core::state::Session) -> String {
 }
 
 fn auto_continue(state: &mut AppState, runtime: &mut ChatRuntime, response: &str) {
-    if runtime.handoff_in_progress || !helpers::is_incomplete_task_response(response) {
+    if runtime.handoff_in_progress {
+        return;
+    }
+    let has_todo_incomplete = state.todo_list.has_incomplete();
+    let has_project_tasks_incomplete =
+        state.project_task_list.has_incomplete() && !state.todo_list.has_incomplete();
+    if !has_todo_incomplete
+        && !has_project_tasks_incomplete
+        && !helpers::is_incomplete_task_response(response)
+    {
         return;
     }
     let max_chain = state.max_retries.max(5);
@@ -2383,6 +2428,27 @@ fn build_tool_meta(tc: &ToolCall, result: &str, duration_ms: u64) -> ToolMeta {
                 .unwrap_or(0);
             ToolMeta {
                 tool_name: "todo_list".into(),
+                line_count: Some(total),
+                byte_count: Some(done),
+                is_error,
+                duration_ms: Some(duration_ms),
+                ..Default::default()
+            }
+        }
+        "project_task_list" => {
+            let args: serde_json::Value =
+                serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
+            let total = args["items"].as_array().map(|a| a.len()).unwrap_or(0);
+            let done = args["items"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter(|v| v["status"].as_str() == Some("completed"))
+                        .count()
+                })
+                .unwrap_or(0);
+            ToolMeta {
+                tool_name: "project_task_list".into(),
                 line_count: Some(total),
                 byte_count: Some(done),
                 is_error,
@@ -3095,6 +3161,53 @@ fn execute_tool_with_cache(
                 (ctx_used * 100 / ctx_max.max(1)).min(100),
                 max_output,
                 name_hint,
+            )
+        }
+
+        "project_task_list" => {
+            let title = args["title"]
+                .as_str()
+                .unwrap_or("Project Tasks")
+                .to_string();
+            let items_val = match args["items"].as_array() {
+                Some(a) => a,
+                None => return "Error: missing 'items' array".to_string(),
+            };
+            let items: Vec<TodoItem> = items_val
+                .iter()
+                .filter_map(|v| {
+                    let id = v["id"].as_str()?.to_string();
+                    let content = v["content"].as_str()?.to_string();
+                    let status_str = v["status"].as_str().unwrap_or("pending");
+                    let status = match status_str {
+                        "completed" => TodoStatus::Completed,
+                        "in_progress" => TodoStatus::InProgress,
+                        "cancelled" => TodoStatus::Cancelled,
+                        _ => TodoStatus::Pending,
+                    };
+                    let priority = v["priority"].as_str().unwrap_or("medium").to_string();
+                    Some(TodoItem {
+                        id,
+                        content,
+                        status,
+                        priority,
+                    })
+                })
+                .collect();
+            let done = items
+                .iter()
+                .filter(|i| i.status == TodoStatus::Completed)
+                .count();
+            let total = items.len();
+            format!(
+                "Project tasks updated: \"{}\" -- {}/{} complete | Context: {}/{} tokens ({}%) | Max output: {}",
+                title,
+                done,
+                total,
+                ctx_used,
+                ctx_max,
+                (ctx_used * 100 / ctx_max.max(1)).min(100),
+                max_output,
             )
         }
 

@@ -891,6 +891,69 @@ impl TodoList {
         self.title = title;
         self.items = items;
     }
+
+    pub fn has_incomplete(&self) -> bool {
+        self.items
+            .iter()
+            .any(|i| i.status == TodoStatus::Pending || i.status == TodoStatus::InProgress)
+    }
+}
+
+// -- Project-level task list --------------------------------------------------
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct ProjectTaskList {
+    pub title: String,
+    pub items: Vec<TodoItem>,
+}
+
+impl ProjectTaskList {
+    pub fn progress(&self) -> (usize, usize) {
+        let done = self
+            .items
+            .iter()
+            .filter(|i| i.status == TodoStatus::Completed)
+            .count();
+        (done, self.items.len())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.title.clear();
+        self.items.clear();
+    }
+
+    pub fn set_items(&mut self, title: String, items: Vec<TodoItem>) {
+        self.title = title;
+        self.items = items;
+    }
+
+    pub fn has_incomplete(&self) -> bool {
+        self.items
+            .iter()
+            .any(|i| i.status == TodoStatus::Pending || i.status == TodoStatus::InProgress)
+    }
+}
+
+/// Disk-persisted project metadata stored alongside the sessions folder.
+/// Version field enables future schema evolution.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProjectMeta {
+    pub version: u32,
+    #[serde(default)]
+    pub project_task_list: ProjectTaskList,
+}
+
+impl Default for ProjectMeta {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            project_task_list: ProjectTaskList::default(),
+        }
+    }
 }
 
 // -- Rate-limited disk writer for message persistence -------------------------
@@ -959,6 +1022,12 @@ pub struct AppState {
     /// Reset to false when a brand-new task list is created.
     #[serde(default)]
     pub todo_user_dismissed: bool,
+
+    #[serde(default)]
+    pub project_task_list: ProjectTaskList,
+
+    #[serde(default)]
+    pub show_project_tasks: bool,
 
     /// Whether the settings window is open. Per-session, stored globally as working copy.
     #[serde(default)]
@@ -1071,6 +1140,8 @@ impl Default for AppState {
             todo_list: TodoList::default(),
             show_todo: false,
             todo_user_dismissed: false,
+            project_task_list: ProjectTaskList::default(),
+            show_project_tasks: false,
             settings_open: false,
             sysinfo: crate::sysinfo::SysInfo::default(),
             debug_mode: false,
@@ -1284,6 +1355,11 @@ impl AppState {
     pub fn active_project(&self) -> Option<&Project> {
         let id = self.active_project_id.as_ref()?;
         self.projects.iter().find(|p| p.id == *id)
+    }
+
+    pub fn active_project_mut(&mut self) -> Option<&mut Project> {
+        let id = self.active_project_id.clone()?;
+        self.projects.iter_mut().find(|p| p.id == id)
     }
 
     /// Maximum number of sessions kept in memory. Oldest sessions are pruned

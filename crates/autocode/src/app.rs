@@ -14,6 +14,7 @@ use autocode_core::{state::AppState, theme};
 use autocode_ui::{
     ui_chat::{self, ChatPanelState},
     ui_explorer::{self, ExplorerPanelState},
+    ui_project_tasks,
     ui_settings::{self, SettingsState},
     ui_todo, ui_toolbar,
 };
@@ -88,6 +89,10 @@ impl AutocodeApp {
             state.handoff_enabled = sess.handoff_enabled;
             state.show_explorer = sess.show_explorer;
             state.settings_open = sess.settings_open;
+            // Load project-level tasks from disk.
+            if let Some(meta) = autocode_core::session_storage::load_project_meta(proj) {
+                state.project_task_list = meta.project_task_list;
+            }
         }
         let restore_provider = state.active_session().and_then(|s| {
             if !s.provider_label.is_empty() {
@@ -311,6 +316,7 @@ impl eframe::App for AutocodeApp {
         ui_settings::show_window(&ctx, &mut self.state, &mut self.settings);
         ui_explorer::show_file_viewer(&ctx, &mut self.explorer_panel);
         ui_todo::show_window(&ctx, &mut self.state);
+        ui_project_tasks::show_window(&ctx, &mut self.state);
 
         // Toolbar -- top.
         Panel::top("toolbar")
@@ -385,6 +391,15 @@ impl eframe::App for AutocodeApp {
                 sess.settings_open = settings_open;
             }
         }
+        // Persist project metadata to disk.
+        let ptl = self.state.project_task_list.clone();
+        if let Some(proj) = self.state.active_project_mut() {
+            let meta = autocode_core::state::ProjectMeta {
+                version: 1,
+                project_task_list: ptl,
+            };
+            let _ = autocode_core::session_storage::save_project_meta(proj, &meta);
+        }
         self.save_sessions();
         self.state.save(storage);
     }
@@ -413,6 +428,15 @@ impl eframe::App for AutocodeApp {
                 sess.provider_label = prov_label;
                 sess.model = model;
             }
+        }
+        // Persist project metadata to disk before shutdown.
+        let ptl = self.state.project_task_list.clone();
+        if let Some(proj) = self.state.active_project_mut() {
+            let meta = autocode_core::state::ProjectMeta {
+                version: 1,
+                project_task_list: ptl,
+            };
+            let _ = autocode_core::session_storage::save_project_meta(proj, &meta);
         }
         self.save_sessions();
 

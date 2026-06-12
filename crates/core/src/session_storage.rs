@@ -49,7 +49,10 @@ fn sanitize_tool_calls(tool_calls: &mut Option<serde_json::Value>) -> bool {
     while i < arr.len() {
         let args_str = match arr[i]["function"]["arguments"].as_str() {
             Some(s) if !s.is_empty() => s.to_string(),
-            _ => { i += 1; continue; }
+            _ => {
+                i += 1;
+                continue;
+            }
         };
         if serde_json::from_str::<serde_json::Value>(&args_str).is_ok() {
             i += 1;
@@ -57,12 +60,12 @@ fn sanitize_tool_calls(tool_calls: &mut Option<serde_json::Value>) -> bool {
         }
         changed = true;
         // Attempt repair: try to re-escape content by parsing raw bytes as JSON string.
-        if let Ok(repaired) = serde_json::from_str::<String>(&format!("\"{}\"", args_str)) {
-            if serde_json::from_str::<serde_json::Value>(&repaired).is_ok() {
-                arr[i]["function"]["arguments"] = serde_json::Value::String(repaired);
-                i += 1;
-                continue;
-            }
+        if let Ok(repaired) = serde_json::from_str::<String>(&format!("\"{}\"", args_str))
+            && serde_json::from_str::<serde_json::Value>(&repaired).is_ok()
+        {
+            arr[i]["function"]["arguments"] = serde_json::Value::String(repaired);
+            i += 1;
+            continue;
         }
         // Last resort: find the longest valid JSON prefix.
         let mut end = args_str.len();
@@ -73,7 +76,8 @@ fn sanitize_tool_calls(tool_calls: &mut Option<serde_json::Value>) -> bool {
             }
             end = args_str.floor_char_boundary(end - 1);
             if serde_json::from_str::<serde_json::Value>(&args_str[..end]).is_ok() {
-                arr[i]["function"]["arguments"] = serde_json::Value::String(args_str[..end].to_string());
+                arr[i]["function"]["arguments"] =
+                    serde_json::Value::String(args_str[..end].to_string());
                 fixed = true;
                 i += 1;
                 break;
@@ -153,6 +157,45 @@ pub fn switch_to_project(state: &mut AppState, project_id: &str) {
     // The user picks a session from the dropdown or clicks "+ Session".
     state.active_project_id = Some(project_id.to_string());
     state.active_session_id = None;
+    // Load project metadata from disk.
+    if let Some(proj) = state.active_project() {
+        if let Some(meta) = load_project_meta(proj) {
+            state.project_task_list = meta.project_task_list;
+        } else {
+            state.project_task_list.clear();
+            state.show_project_tasks = false;
+        }
+    }
+}
+
+pub fn project_meta_path(project: &Project) -> PathBuf {
+    fsutil::exe_dir()
+        .join("AutoCode_data")
+        .join("projects")
+        .join(&project.data_dir_name)
+        .join("meta.json")
+}
+
+pub fn save_project_meta(
+    project: &Project,
+    meta: &crate::state::ProjectMeta,
+) -> std::io::Result<()> {
+    let path = project_meta_path(project);
+    if let Some(parent) = path.parent() {
+        fsutil::create_dir_all(parent)?;
+    }
+    atomic_write_json(&path, meta)
+}
+
+pub fn load_project_meta(project: &Project) -> Option<crate::state::ProjectMeta> {
+    let path = project_meta_path(project);
+    if !path.exists() {
+        return None;
+    }
+    match fsutil::read_to_string(&path) {
+        Ok(json) => serde_json::from_str(&json).ok(),
+        Err(_) => None,
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -219,7 +262,8 @@ fn read_jsonl_messages(path: &Path) -> Vec<ChatMessage> {
             Ok(mut msg) => {
                 if sanitize_tool_calls(&mut msg.tool_calls) {
                     needs_rewrite = true;
-                    fixed_lines.push(serde_json::to_string(&msg).unwrap_or_else(|_| line.to_string()));
+                    fixed_lines
+                        .push(serde_json::to_string(&msg).unwrap_or_else(|_| line.to_string()));
                 } else {
                     fixed_lines.push(line.to_string());
                 }
@@ -227,17 +271,18 @@ fn read_jsonl_messages(path: &Path) -> Vec<ChatMessage> {
             }
             Err(_) => {
                 // Try to repair truncated/corrupt lines.
-                if let Some(repaired) = repair_truncated_jsonl_line(line) {
-                    if let Ok(mut msg) = serde_json::from_str::<ChatMessage>(&repaired) {
-                        let changed = sanitize_tool_calls(&mut msg.tool_calls);
-                        if changed {
-                            fixed_lines.push(serde_json::to_string(&msg).unwrap_or_else(|_| repaired.clone()));
-                        } else {
-                            fixed_lines.push(repaired);
-                        }
-                        result.push(msg);
-                        needs_rewrite = true;
+                if let Some(repaired) = repair_truncated_jsonl_line(line)
+                    && let Ok(mut msg) = serde_json::from_str::<ChatMessage>(&repaired)
+                {
+                    let changed = sanitize_tool_calls(&mut msg.tool_calls);
+                    if changed {
+                        fixed_lines
+                            .push(serde_json::to_string(&msg).unwrap_or_else(|_| repaired.clone()));
+                    } else {
+                        fixed_lines.push(repaired);
                     }
+                    result.push(msg);
+                    needs_rewrite = true;
                 }
             }
         }

@@ -2198,10 +2198,10 @@ fn show_input_row(
                             .get(sid)
                             .is_some_and(|r| r.is_busy() || r.retry_after.is_some())
                     });
-                    // Buttons: Send(72) + gap(6) + TH(36) + gap(6) + Effort(44) + gap(6) + [=](28) = 198
-                    // Plus item_spacing before button group in this horizontal (default ~6) = 204
-                    // Small buffer for padding = 206
-                    let input_w = (ui.available_width() - 206.0).max(120.0);
+                    // Buttons: Send(72) + gap(6) + TH(36) + gap(6) + Effort(44) + gap(6) + [=](28) + gap(6) + [~](28) = 232
+                    // Plus item_spacing before button group in this horizontal (default ~6) = 238
+                    // Small buffer for padding = 240
+                    let input_w = (ui.available_width() - 240.0).max(120.0);
                     let send_enabled = !panel_state.input.trim().is_empty() && !busy;
 
                     let te = TextEdit::multiline(&mut panel_state.input)
@@ -2414,13 +2414,42 @@ fn show_input_row(
                                         theme().border
                                     },
                                 ))
-                                // Increased height slightly to aesthetically match the 36.0px high Send button
                                 .min_size(Vec2::new(28.0, 36.0)),
                             )
                             .on_hover_text("Toggle task list panel")
                             .clicked()
                         {
                             state.show_todo = !state.show_todo;
+                        }
+
+                        let project_todo_icon = "[~]";
+                        let project_todo_color = if state.show_project_tasks {
+                            theme().accent
+                        } else {
+                            theme().text_muted
+                        };
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new(project_todo_icon)
+                                        .size(12.0)
+                                        .color(project_todo_color),
+                                )
+                                .fill(Color32::TRANSPARENT)
+                                .stroke(Stroke::new(
+                                    1.0,
+                                    if state.show_project_tasks {
+                                        theme().accent
+                                    } else {
+                                        theme().border
+                                    },
+                                ))
+                                .min_size(Vec2::new(28.0, 36.0)),
+                            )
+                            .on_hover_text("Toggle project tasks panel")
+                            .clicked()
+                        {
+                            state.show_project_tasks = !state.show_project_tasks;
                         }
                     });
                 });
