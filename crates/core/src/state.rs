@@ -204,15 +204,32 @@ pub struct Project {
 #[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
 pub struct ProviderKind(String);
 
-/// Custom deserializer that maps old enum variant names (e.g. "OpenRouter")
-/// to manifest keys (e.g. "openrouter") for backward compatibility.
+/// Custom deserializer that handles both:
+/// - ron identifiers (old unit-variant format: `OpenRouter`)
+/// - quoted strings (new format: `"openrouter"`)
+/// Maps old enum variant names to manifest keys for backward compatibility.
 impl<'de> Deserialize<'de> for ProviderKind {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        let s = String::deserialize(deserializer)?;
-        Ok(Self::new(&s))
+        struct ProviderKindVisitor;
+        impl<'de> serde::de::Visitor<'de> for ProviderKindVisitor {
+            type Value = ProviderKind;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a provider kind string")
+            }
+            fn visit_str<E: serde::de::Error>(self, s: &str) -> Result<ProviderKind, E> {
+                Ok(ProviderKind::new(s))
+            }
+            fn visit_borrowed_str<E: serde::de::Error>(self, s: &'de str) -> Result<ProviderKind, E> {
+                Ok(ProviderKind::new(s))
+            }
+            fn visit_string<E: serde::de::Error>(self, s: String) -> Result<ProviderKind, E> {
+                Ok(ProviderKind::new(&s))
+            }
+        }
+        deserializer.deserialize_any(ProviderKindVisitor)
     }
 }
 
