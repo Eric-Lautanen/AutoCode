@@ -201,13 +201,30 @@ pub struct Project {
 /// The inner string is the manifest key (e.g. "openrouter", "nvidia-nim").
 /// Adding a new entry to providers.json is sufficient to register a new provider
 /// — no enum variant or code change is required.
-#[derive(Clone, Debug, Serialize, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ProviderKind(String);
 
-/// Custom deserializer that handles both:
-/// - ron identifiers (old unit-variant format: `OpenRouter`)
-/// - quoted strings (new format: `"openrouter"`)
-/// Maps old enum variant names to manifest keys for backward compatibility.
+/// Custom Serialize that writes the old enum variant name as a unit variant
+/// (e.g. `OpenRouter` in ron, `"OpenRouter"` in JSON) so that `deserialize_identifier`
+/// can read it back. This maintains backward compatibility with ron's identifier format.
+impl Serialize for ProviderKind {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self.manifest_id() {
+            "openrouter" => serializer.serialize_unit_variant("ProviderKind", 0, "OpenRouter"),
+            "nvidia-nim" => serializer.serialize_unit_variant("ProviderKind", 1, "NvidiaNim"),
+            "openai-compatible" => serializer.serialize_unit_variant("ProviderKind", 2, "OpenAiCompatible"),
+            "opencode-go" => serializer.serialize_unit_variant("ProviderKind", 3, "OpenCodeGo"),
+            other => serializer.collect_str(other),
+        }
+    }
+}
+
+/// Custom deserializer that reads the old unit-variant identifier format
+/// (`OpenRouter` in ron, `"OpenRouter"` in JSON) via `deserialize_identifier`,
+/// which also accepts quoted strings in JSON.
 impl<'de> Deserialize<'de> for ProviderKind {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -217,7 +234,7 @@ impl<'de> Deserialize<'de> for ProviderKind {
         impl<'de> serde::de::Visitor<'de> for ProviderKindVisitor {
             type Value = ProviderKind;
             fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str("a provider kind string")
+                f.write_str("a provider kind")
             }
             fn visit_str<E: serde::de::Error>(self, s: &str) -> Result<ProviderKind, E> {
                 Ok(ProviderKind::new(s))
@@ -229,8 +246,8 @@ impl<'de> Deserialize<'de> for ProviderKind {
                 Ok(ProviderKind::new(&s))
             }
         }
-        // Use deserialize_identifier which handles both ron identifiers (old unit-variant
-        // format like `OpenRouter`) and quoted strings (JSON/ron new format like `"openrouter"`).
+        // deserialize_identifier reads ron identifiers (old `OpenRouter`)
+        // and delegates to deserialize_str for JSON quoted strings.
         deserializer.deserialize_identifier(ProviderKindVisitor)
     }
 }
