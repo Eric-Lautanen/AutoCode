@@ -434,7 +434,10 @@ impl Default for ChatRuntime {
 
 impl ChatRuntime {
     pub fn is_busy(&self) -> bool {
-        self.stream_rx.is_some() || self.tool_rx.is_some() || self.live_shell_rx.is_some()
+        self.stream_rx.is_some()
+            || self.tool_rx.is_some()
+            || self.live_shell_rx.is_some()
+            || self.retry_after.is_some()
     }
 
     pub fn drain(&mut self) {
@@ -470,6 +473,8 @@ impl ChatRuntime {
         self.handoff_trigger_sent = false;
         self.handoff_next_prompt = None;
         self.retry_after = None;
+        self.next_completion_allowed = None;
+        crate::provider::api_rate_limit_reset();
 
         // Force deallocation of large buffers
         self.pending_response.clear();
@@ -635,15 +640,14 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
     // Sync web rate limit from state so provider uses the latest value.
     crate::provider::set_web_rate_limit_ms(state.web_rate_limit_ms);
     // Rate limit: enforce minimum delay between completion starts.
-    // If we're called before the delay has elapsed, sleep the remainder
-    // so rapid tool-call loops are naturally paced.
+    // If we're called before the delay has elapsed, use the non-blocking
+    // retry_after timer so the UI doesn't freeze.
     if state.disk_read_delay_ms > 0 {
         if let Some(allowed) = runtime.next_completion_allowed {
             let now = std::time::Instant::now();
             if now < allowed {
-                let sleep_ms = (allowed - now).as_millis();
-                if sleep_ms > 50 {}
-                std::thread::sleep(allowed - now);
+                runtime.retry_after = Some(allowed);
+                return;
             }
         }
         runtime.next_completion_allowed = Some(

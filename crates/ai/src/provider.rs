@@ -324,6 +324,13 @@ pub fn api_rate_limit_wait_ms(provider: &ApiProvider, label: &str) -> u64 {
     0
 }
 
+/// Reset the API rate limit timer so the next request won't be delayed.
+pub fn api_rate_limit_reset() {
+    if let Ok(mut guard) = LAST_API_REQUEST.lock() {
+        *guard = None;
+    }
+}
+
 /// Record that a request was made (updates the last-request timestamp).
 pub fn api_rate_limit_record(provider: &ApiProvider, label: &str) {
     let mut last_requests = match LAST_API_REQUEST.lock() {
