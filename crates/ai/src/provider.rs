@@ -1291,10 +1291,13 @@ fn parse_sse_stream_from_reader<R: BufRead>(
 // -- Model list fetcher --------------------------------------------------------
 
 pub fn fetch_models(provider: &ApiProvider) -> Vec<String> {
+    let base = provider.base_url.trim_end_matches('/');
     let url = if !provider.models_list_url.is_empty() {
-        provider.models_list_url.clone()
+        provider
+            .models_list_url
+            .replace("{base_url}", base)
     } else {
-        format!("{}/models", provider.base_url.trim_end_matches('/'))
+        format!("{}/models", base)
     };
     let (host, path, port, use_tls) = match parse_url(&url) {
         Ok(p) => p,
@@ -1307,13 +1310,20 @@ pub fn fetch_models(provider: &ApiProvider) -> Vec<String> {
         stream.set_read_timeout(Some(Duration::from_secs(15)))?;
 
         let mut buffer = Vec::new();
+        let auth_type = autocode_core::state::provider_manifest(&provider.kind)
+            .and_then(|m| m.auth_type.as_deref())
+            .unwrap_or("Bearer");
+        let auth_header = match auth_type {
+            "x-api-key" => format!("x-api-key: {}", provider.api_key.as_str()),
+            _ => format!("Authorization: Bearer {}", provider.api_key.as_str()),
+        };
         let request = format!(
             "GET {path} HTTP/1.1\r\n\
              Host: {host}\r\n\
-             Authorization: Bearer {api_key}\r\n\
+             {auth}\r\n\
              Connection: close\r\n\
              \r\n",
-            api_key = provider.api_key.as_str(),
+            auth = auth_header,
         );
 
         if use_tls {
