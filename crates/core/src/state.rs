@@ -229,7 +229,9 @@ impl<'de> Deserialize<'de> for ProviderKind {
                 Ok(ProviderKind::new(&s))
             }
         }
-        deserializer.deserialize_any(ProviderKindVisitor)
+        // Use deserialize_identifier which handles both ron identifiers (old unit-variant
+        // format like `OpenRouter`) and quoted strings (JSON/ron new format like `"openrouter"`).
+        deserializer.deserialize_identifier(ProviderKindVisitor)
     }
 }
 
