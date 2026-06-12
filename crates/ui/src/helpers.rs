@@ -3,7 +3,7 @@
 
 use egui::{Color32, FontId, RichText, TextFormat};
 
-use autocode_core::state::ChatMessage;
+use autocode_core::state::{ChatMessage, TodoItem};
 use autocode_core::theme::Palette;
 
 // -- Time formatting -----------------------------------------------------------
@@ -451,4 +451,28 @@ pub fn sample_screen_pixel() -> Option<[f32; 3]> {
     }
     #[cfg(not(windows))]
     None
+}
+
+pub fn todo_scroll_area(
+    ui: &mut egui::Ui,
+    items: &[TodoItem],
+    full_w: f32,
+    render_item: impl Fn(&mut egui::Ui, &TodoItem, f32),
+    render_empty: impl FnOnce(&mut egui::Ui),
+) {
+    egui::ScrollArea::vertical()
+        .stick_to_bottom(true)
+        .max_height(500.0)
+        .show(ui, |ui: &mut egui::Ui| {
+            ui.set_min_width(full_w);
+            if items.is_empty() {
+                render_empty(ui);
+            } else {
+                let item_w = full_w - 16.0;
+                for item in items {
+                    render_item(ui, item, item_w);
+                    ui.add_space(3.0);
+                }
+            }
+        });
 }

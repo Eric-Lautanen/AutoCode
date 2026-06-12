@@ -15,12 +15,12 @@ Write code, run commands, edit files, search your codebase, and iterate — all 
 - **AI-Powered Autonomous Coding** — The AI can read, write, edit (with 6-strategy fuzzy patch matching), search, and execute code across your projects using 18 built-in tools
 - **Multi-Provider Support** — OpenRouter, NVIDIA NIM, OpenAI-Compatible, or OpenCode Go API endpoints, with per-model manifests for context windows, output limits, thinking API support, reasoning efforts, and per-provider rate limits (`requests_per_hour`) editable in Settings
 - **File Editing** — Surgical find-and-replace with 6-strategy fuzzy matching (exact → CRLF-normalized → whitespace-normalized → tabs-normalized → anchored line matching → Myers DP sequence alignment), plus `patch_lines` for line-number-based replacement and full `write_file`/`read_entire_file` support
-- **Streaming Responses** — Real-time SSE streaming with automatic recovery and retry logic (transient vs permanent error classification with exponential backoff, up to 3 retries)
+- **Streaming Responses** — Real-time SSE streaming with automatic recovery and retry logic (transient vs permanent error classification with exponential backoff, up to 3 retries). Auto-continues on stream drop when session or project tasks are incomplete
 - **Session Management** — Multiple named sessions per project (up to 50), full history via JSONL-backed storage, atomic writes, orphan message scavenging, lazy-load display buffering, per-project tab colors
 - **Token Budgeting** — Three-tier token counting (API endpoint → tiktoken offline → heuristic fallback), automatic handoff when approaching context limits (with configurable threshold percentage and trigger prompt), configurable display window and scroll paging
 - **Session Auto-Naming** — AI-captured session names are sanitized using a comprehensive stop-word list, keeping up to 3 meaningful words
 - **File Explorer** — Browse your projects with gitignore-aware tree view (shows all files including hidden), file preview (text with syntax highlighting + images), inline rename/delete with context menu, horizontal scrollbar
-- **Task Tracking** — Built-in floating todo list with progress bar, priority indicators (colored dots), and auto-close on completion
+- **Task Tracking** — Session-level floating todo list with progress bar, priority indicators (colored dots), and auto-close on completion. **Project-level task list** persists across sessions via disk-backed metadata, with auto-recovery when stream drops mid-task
 - **Session Handoff** — Automatic session continuation when context limits are reached, with trigger prompt warning, summarization prompt support, and RESUME.md generation
 - **System Info Detection** — Automatic OS, CPU, GPU, RAM, shell, and tool availability detection (Windows via Win32 FFI, Unix via `/proc`/`sysctl`/`lspci`)
 - **Security Hardening** — API keys stored with heap-zeroing `SecretString`, path traversal detection with cached resolver, shell commands scoped to project directory, temporary file tracking and cleanup on exit, atomic session file writes, `#[must_use]` on security-critical functions
@@ -44,7 +44,7 @@ Cargo.toml                               # workspace root, resolver = "2"
 ├── crates/
 │   ├── autocode/          — binary entry (446 lines)
 │   │   ├── main.rs         (40)    # entry point, rustls init, eframe::run_native
-│   │   ├── app.rs         (401)   # AutocodeApp (eframe::App), frame loop, state wiring
+│   │   ├── app.rs         (458)   # AutocodeApp (eframe::App), frame loop, state wiring
 │   │   └── build.rs        (4)    # embed Windows icon resource
 │   ├── core/               — core types, utilities, infrastructure (4,331 lines)
 │   │   ├── state.rs      (1174)  # AppState, Project, Session, ChatMessage, ApiProvider,
@@ -60,21 +60,22 @@ Cargo.toml                               # workspace root, resolver = "2"
 │   │   └── tokenizer/
 │   │       └── mod.rs      (90)    # Tokenizer trait, TiktokenTokenizer, HeuristicTokenizer
 │   ├── ai/                 — AI provider client + chat orchestration (5,555 lines)
-│   │   ├── chat.rs       (3057)  # orchestration: send_message, SSE polling, 18 tool handlers,
+│   │   ├── chat.rs       (3381)  # orchestration: send_message, SSE polling, 19 tool handlers,
 │   │   │                           retry/backoff, auto-continuation, handoff, session auto-naming,
 │   │   │                           replay, partial-response recovery, live shell streaming
-│   │   ├── provider.rs   (1479)  # raw TCP+rustls HTTP client, SSE parsing, 18 tool definitions,
+│   │   ├── provider.rs   (1697)  # raw TCP+rustls HTTP client, SSE parsing, 19 tool definitions,
 │   │   │                           model list fetch, counting API, rotating browser profiles (8)
 │   │   ├── session.rs    (160)   # system prompt seeding + sysinfo, message prep with dedup,
 │   │   │                           orphan-tool stripping, cache_control, full-history estimate
-│   │   └── helpers.rs    (847)   # fuzzy find-replace (6 strategies), Levenshtein/Jaro-Winkler/
-│   │                             token-set similarity, todo parsing, line-number stripping
+│   │   └── helpers.rs    (966)   # fuzzy find-replace (6 strategies), Levenshtein/Jaro-Winkler/
+│   │                             token-set similarity, todo parsing, line-number stripping,
+│   │                             project task parsing
 │   ├── fs/                 — filesystem tools (733 lines)
 │   │   ├── shell.rs       (165)   # background shell via channels (cmd/sh), temp script cleanup
 │   │   ├── explorer.rs    (409)   # gitignore-aware list_dir/glob/grep/find_project_root,
 │   │   │                           recursive grep with size/binary limits, case-insensitive
 │   │   └── helpers.rs    (151)   # file extraction from code fences, glob matching (*/**/?)
-│   └── ui/                 — egui UI panels (5,938 lines)
+│   └── ui/                 — egui UI panels (6,500 lines)
 │       ├── ui_chat.rs    (2516)  # chat panel: tabs, bubbles, markdown, diff, streaming, shell,
 │       │                           structured tool cards, per-project tab colors, replay button
 │       ├── ui_settings.rs(1535)  # 7-tab settings window (Providers/Projects/Prompt/Session/
@@ -82,12 +83,13 @@ Cargo.toml                               # workspace root, resolver = "2"
 │       ├── ui_explorer.rs (852)  # file tree (all files shown), preview (text+image with edit/
 │       │                           save), rename/delete context menu, gutter line numbers
 │       ├── ui_toolbar.rs  (330)  # project/session/provider/model pickers, budget meter, blink-dot
-│       ├── ui_todo.rs     (271)  # floating task list, progress bar, priority dots, auto-close
-│       └── helpers.rs     (422)  # time formatting, tool result parsing, markdown, LayoutJob,
-│                                 screen pixel sampling (Windows FFI)
+│       ├── ui_todo.rs     (277)  # floating session task list, progress bar, priority dots, auto-close
+│       ├── ui_project_tasks.rs (287)  # floating project task list, progress bar, auto-close, disk persist
+│       └── helpers.rs     (478)  # time formatting, tool result parsing, markdown, LayoutJob,
+│                                 screen pixel sampling (Windows FFI), todo_scroll_area
 ```
 
-**Total: ~17,000 lines of Rust source across 29 files.**
+**Total: ~17,500 lines of Rust source across 30 files.**
 
 ### Key Architecture Decisions
 
@@ -165,6 +167,7 @@ AutoCode persists its state (API keys, provider settings, projects, prompts, ses
     ├── app.ron               # eframe persistence state
     └── projects/
         └── <project_name>/
+            ├── meta.json           # project-level metadata (task lists, versioned for future schema)
             ├── sessions/
             │   ├── <short_id>_<sanitized_label>.json    # session metadata
             │   ├── <short_id>_<sanitized_label>.jsonl   # message history (append-only)
@@ -191,7 +194,7 @@ AutoCode persists its state (API keys, provider settings, projects, prompts, ses
 
 ## Tools
 
-AutoCode provides 18 tools to the AI agent:
+AutoCode provides 19 tools to the AI agent:
 
 | Tool | Description |
 |------|-------------|
@@ -210,7 +213,8 @@ AutoCode provides 18 tools to the AI agent:
 | `glob` | Find files matching a glob pattern (`*`/`**`/`?`) |
 | `web_search` | Search the web (DuckDuckGo) with cached results |
 | `fetch_url` | Fetch a URL's text content with HTML extraction |
-| `todo_list` | Create/update visible task list with priorities |
+| `todo_list` | Create/update session-level task list with priorities |
+| `project_task_list` | Create/update project-level task list that persists across sessions |
 | `handoff` | Signal context limit and continue in new session |
 | `name_session` | Auto-label the current session |
 

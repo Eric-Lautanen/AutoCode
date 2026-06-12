@@ -1,5 +1,6 @@
 use egui::{Color32, CornerRadius, Frame, Margin, RichText, Stroke, Vec2};
 
+use crate::helpers;
 use autocode_core::state::{AppState, TodoItem, TodoStatus};
 use autocode_core::theme::Palette;
 
@@ -149,21 +150,7 @@ pub fn show_window(ctx: &egui::Context, state: &mut AppState) {
 
             ui.add_space(4.0);
 
-            // Task list -- no scroll area; window grows to fit content.
-            Frame::NONE
-                .inner_margin(Margin::symmetric(8, 0))
-                .show(ui, |ui| {
-                    ui.set_min_width(full_w);
-                    if state.todo_list.items.is_empty() {
-                        empty_state(ui);
-                    } else {
-                        let item_w = full_w - 16.0;
-                        for item in &state.todo_list.items {
-                            render_item(ui, item, item_w);
-                            ui.add_space(3.0);
-                        }
-                    }
-                });
+            helpers::todo_scroll_area(ui, &state.todo_list.items, full_w, render_item, empty_state);
 
             ui.add_space(4.0);
         });
