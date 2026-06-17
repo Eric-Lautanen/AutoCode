@@ -873,7 +873,7 @@ pub fn is_incomplete_task_response(text: &str) -> bool {
 
 pub fn parse_todo_from_tool_args(args: &serde_json::Value) -> Option<(String, Vec<TodoItem>)> {
     let title = args["title"].as_str().unwrap_or("Task List").to_string();
-    let items_val = args["items"].as_array()?;
+    let items_val = args["task_items"].as_array()?;
     let items: Vec<TodoItem> = items_val
         .iter()
         .filter_map(|v| {
@@ -956,7 +956,7 @@ pub fn parse_project_task_from_tool_args(
         .as_str()
         .unwrap_or("Project Tasks")
         .to_string();
-    let items_val = args["items"].as_array()?;
+    let items_val = args["task_items"].as_array()?;
     let items: Vec<TodoItem> = items_val
         .iter()
         .filter_map(|v| {

@@ -357,6 +357,9 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                 )
                                 .changed()
                             {
+                                if !key_buf.is_empty() && !p.enabled {
+                                    p.enabled = true;
+                                }
                                 p.api_key = autocode_core::state::SecretString::new(key_buf);
                             }
                             ui.end_row();

@@ -637,18 +637,9 @@ pub fn matches_pattern(pattern: &str, text: &str, anchored: bool) -> bool {
         } else {
             text.contains(pattern)
         }
-    } else if pattern.starts_with('^') || pattern.ends_with('$') {
-        // Explicitly anchored — use regex engine.
-        match_simple_regex(pattern, text, anchored)
     } else {
-        // Has regex metacharacters but no anchors — treat as literal.
-        // This avoids false regex matches on common patterns like
-        // filenames containing dots (e.g. "file.txt").
-        if anchored {
-            text.starts_with(pattern)
-        } else {
-            text.contains(pattern)
-        }
+        // Pattern has regex metacharacters — use the regex engine.
+        match_simple_regex(pattern, text, anchored)
     }
 }
 

@@ -1320,7 +1320,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 if tc.name.is_empty()
                     && let Ok(args) = serde_json::from_str::<serde_json::Value>(&tc.arguments)
                 {
-                    if args.get("items").is_some() && args.get("title").is_some() {
+                    if args.get("task_items").is_some() && args.get("title").is_some() {
                         tc.name = "todo_list".into();
                     } else if args.get("command").and_then(|v| v.as_str()).is_some() {
                         tc.name = "run_shell".into();
@@ -2421,8 +2421,8 @@ fn build_tool_meta(tc: &ToolCall, result: &str, duration_ms: u64) -> ToolMeta {
         "todo_list" => {
             let args: serde_json::Value =
                 serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
-            let total = args["items"].as_array().map(|a| a.len()).unwrap_or(0);
-            let done = args["items"]
+            let total = args["task_items"].as_array().map(|a| a.len()).unwrap_or(0);
+            let done = args["task_items"]
                 .as_array()
                 .map(|a| {
                     a.iter()
@@ -2442,8 +2442,8 @@ fn build_tool_meta(tc: &ToolCall, result: &str, duration_ms: u64) -> ToolMeta {
         "project_task_list" => {
             let args: serde_json::Value =
                 serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
-            let total = args["items"].as_array().map(|a| a.len()).unwrap_or(0);
-            let done = args["items"]
+            let total = args["task_items"].as_array().map(|a| a.len()).unwrap_or(0);
+            let done = args["task_items"]
                 .as_array()
                 .map(|a| {
                     a.iter()
@@ -3120,9 +3120,9 @@ fn execute_tool_with_cache(
 
         "todo_list" => {
             let title = args["title"].as_str().unwrap_or("Task List").to_string();
-            let items_val = match args["items"].as_array() {
+            let items_val = match args["task_items"].as_array() {
                 Some(a) => a,
-                None => return "Error: missing 'items' array".to_string(),
+                None => return "Error: missing 'task_items' array".to_string(),
             };
             let items: Vec<TodoItem> = items_val
                 .iter()
@@ -3173,9 +3173,9 @@ fn execute_tool_with_cache(
                 .as_str()
                 .unwrap_or("Project Tasks")
                 .to_string();
-            let items_val = match args["items"].as_array() {
+            let items_val = match args["task_items"].as_array() {
                 Some(a) => a,
-                None => return "Error: missing 'items' array".to_string(),
+                None => return "Error: missing 'task_items' array".to_string(),
             };
             let items: Vec<TodoItem> = items_val
                 .iter()

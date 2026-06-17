@@ -133,17 +133,12 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                             .color(Palette::TEXT_MUTED),
                     )
                     .show_ui(ui, |ui| {
-                        let any_enabled = state.providers.values().any(|p| p.enabled);
-                        let keys: Vec<String> = if any_enabled {
-                            state
-                                .providers
-                                .iter()
-                                .filter(|(_, p)| p.enabled)
-                                .map(|(k, _)| k.clone())
-                                .collect()
-                        } else {
-                            state.providers.keys().cloned().collect()
-                        };
+                        let keys: Vec<String> = state
+                            .providers
+                            .iter()
+                            .filter(|(_, p)| p.enabled)
+                            .map(|(k, _)| k.clone())
+                            .collect();
                         for key in keys {
                             ui.push_id(("prov_sel", key.clone()), |ui| {
                                 let sel = state.active_provider == key;
