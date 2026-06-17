@@ -387,15 +387,7 @@ pub fn show(
                         }
                     }
 
-                    // Render error notices at the bottom.
-                    if let Some(sess) = state.active_session() {
-                        for msg in sess.messages.iter().rev() {
-                            if msg.role == Role::Error {
-                                show_error_notice(ui, msg);
-                                ui.add_space(4.0);
-                            }
-                        }
-                    }
+
                 });
             }); // end ScrollArea
 
@@ -2103,16 +2095,6 @@ fn show_input_row(
                 });
             });
         });
-}
-
-fn show_error_notice(ui: &mut egui::Ui, msg: &ChatMessage) {
-    ui.add_space(4.0);
-    ui.label(
-        RichText::new(&msg.content)
-            .size(12.5)
-            .color(theme().error)
-            .strong(),
-    );
 }
 
 // -- Markdown-lite renderer with bold, italic, inline code, tables -------------
