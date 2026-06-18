@@ -450,13 +450,24 @@ impl ApiProvider {
             .unwrap_or_else(|| format!("{}/chat/completions", base))
     }
 
-    /// Populate provider-spec fields from the providers.json manifest
-    /// based on the current `kind` and `model`. These fields are skipped
-    /// from serialization so that app.ron never stores stale values.
+    /// Populate model-specific fields from the providers.json manifest
+    /// based on the current `kind` and `model`. Called when the user
+    /// switches models so the context window, output limits, thinking
+    /// API mode, and rate limits reflect the newly selected model.
+    /// Does not preserve previous overrides since each model has its own
+    /// capabilities; user can re-adjust in settings afterward.
     pub fn fill_from_manifest(&mut self) {
-        // max_context_tokens, max_output_tokens, max_output_tokens_thinking,
-        // thinking_api, and requests_per_hour are NOT set here — they persist
-        // across restarts via app.ron and should not be overwritten on reload.
+        let defs = model_or_safe(&self.kind, &self.model);
+        self.max_context_tokens = defs.context_window;
+        self.max_output_tokens = defs.max_output_tokens;
+        self.max_output_tokens_thinking = defs
+            .max_output_tokens_thinking
+            .unwrap_or(defs.max_output_tokens * 2);
+        self.thinking_api = parse_thinking_api(&defs.thinking_api);
+        self.requests_per_hour = defs.requests_per_hour;
+        if let Some(effort) = defs.reasoning_efforts.first() {
+            self.reasoning_effort.clone_from(effort);
+        }
     }
 
     pub fn reset_defaults(&mut self) {

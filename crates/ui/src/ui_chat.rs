@@ -1188,6 +1188,23 @@ fn render_structured_tool_result(
                 });
             }
         }
+        "project_tree" => {
+            let count = meta.line_count.unwrap_or(0);
+            let path = meta.file_path.as_deref().unwrap_or("root");
+            let header = format!("[tree] Project tree from {} — {} entries", path, count);
+            ui.label(
+                RichText::new(header)
+                    .size(12.0)
+                    .color(theme().accent)
+                    .strong(),
+            );
+            if count > 0 {
+                let body = helpers::get_tool_body(msg);
+                ui.push_id(format!("tree_{}", msg.timestamp), |ui| {
+                    render_code_block(ui, "tree", &body);
+                });
+            }
+        }
         _ => {
             render_markdown(ui, &msg.content, false);
         }

@@ -12,9 +12,9 @@ Write code, run commands, edit files, search your codebase, and iterate — all 
 
 ## Features
 
-- **AI-Powered Autonomous Coding** — The AI can read, write, edit (with 6-strategy fuzzy patch matching), search, and execute code across your projects using 19 built-in tools
+- **AI-Powered Autonomous Coding** — The AI can read, write, edit (with 7-strategy fuzzy patch matching), search, and execute code across your projects using 20 built-in tools
 - **Multi-Provider Support** — OpenRouter, NVIDIA NIM, OpenAI-Compatible, or OpenCode Go API endpoints, with per-model manifests for context windows, output limits, thinking API support, reasoning efforts, and per-provider rate limits (`requests_per_hour`) editable in Settings
-- **File Editing** — Surgical find-and-replace with 6-strategy fuzzy matching (exact → CRLF-normalized → whitespace-normalized → tabs-normalized → anchored line matching → Myers DP sequence alignment), plus `patch_lines` for line-number-based replacement and full `write_file`/`read_entire_file` support
+- **File Editing** — Surgical find-and-replace with 7-strategy fuzzy matching (exact → CRLF-normalized → whitespace-normalized → tabs-normalized → anchored line matching → Myers DP sequence alignment → single-line fuzzy fallback), plus `patch_lines` for line-number-based replacement and full `write_file`/`read_entire_file` support
 - **Streaming Responses** — Real-time SSE streaming with automatic recovery and retry logic (transient vs permanent error classification with exponential backoff, retries forever for transient errors). Auto-continues on stream drop when session or project tasks are incomplete
 - **Session Management** — Multiple named sessions per project (up to 50), full history via JSONL-backed storage, atomic writes, orphan message scavenging, lazy-load display buffering, per-project tab colors
 - **Token Budgeting** — Three-tier token counting (API endpoint → tiktoken offline → heuristic fallback), automatic handoff when approaching context limits (with configurable threshold percentage and trigger prompt), configurable display window and scroll paging
@@ -45,11 +45,12 @@ Cargo.toml                               # workspace root, resolver = "2"
 │   ├── autocode/          — binary entry (~494 lines)
 │   │   ├── main.rs         (46)    # entry point, rustls init, eframe::run_native
 │   │   ├── app.rs         (443)   # AutocodeApp (eframe::App), frame loop, state wiring
-│   │   └── build.rs        (4)    # embed Windows icon resource
-│   ├── core/               — core types, utilities, infrastructure (~5,019 lines)
-│   │   ├── state.rs      (1376)  # AppState, Project, Session, ChatMessage, ApiProvider,
+│   │   ├── build.rs        (4)    # embed Windows icon resource
+│   │   └── helpers.rs      (1)    # reserved
+│   ├── core/               — core types, utilities, infrastructure (~5,073 lines)
+│   │   ├── state.rs      (1438)  # AppState, Project, Session, ChatMessage, ApiProvider,
 │   │   │                           SecretString, DesignSettings (72 fields), TodoItem, manifest
-│   │   ├── helpers.rs    (1449)  # ID gen, token estimation (heuristic + tiktoken + regex),
+│   │   ├── helpers.rs    (1440)  # ID gen, token estimation (heuristic + tiktoken + regex),
 │   │   │                           path resolution + traversal guard, tiny regex engine, panic_msg
 │   │   ├── fsutil.rs      (138)   # exe_dir, \\?\ extended paths, atomic read/write, TEMP_FILES
 │   │   ├── theme.rs      (218)   # dark Visuals+Style, Palette (20 colors), hash-based project_accent
@@ -59,46 +60,46 @@ Cargo.toml                               # workspace root, resolver = "2"
 │   │   │                           load_messages_before, truncate_messages_after
 │   │   └── tokenizer/
 │   │       └── mod.rs     (107)    # Tokenizer trait, TiktokenTokenizer, HeuristicTokenizer
-│   ├── ai/                 — AI provider client + chat orchestration (~6,253 lines)
-│   │   ├── chat.rs       (3385)  # orchestration: send_message, SSE polling, 19 tool handlers,
+│   ├── ai/                 — AI provider client + chat orchestration (~6,347 lines)
+│   │   ├── chat.rs       (3423)  # orchestration: send_message, SSE polling, 20 tool handlers,
 │   │   │                           retry/backoff, auto-continuation, handoff, session auto-naming,
 │   │   │                           replay, partial-response recovery, live shell streaming
-│   │   ├── provider.rs   (1704)  # raw TCP+rustls HTTP client, SSE parsing, 19 tool definitions,
+│   │   ├── provider.rs   (1759)  # raw TCP+rustls HTTP client, SSE parsing, 20 tool definitions,
 │   │   │                           model list fetch, counting API, rotating browser profiles (8)
-│   │   ├── session.rs    (160)   # system prompt seeding + sysinfo, message prep with dedup,
+│   │   ├── session.rs    (171)   # system prompt seeding + sysinfo, message prep with dedup,
 │   │   │                           orphan-tool stripping, cache_control, full-history estimate
-│   │   └── helpers.rs    (981)   # fuzzy find-replace (6 strategies), Levenshtein/Jaro-Winkler/
+│   │   └── helpers.rs    (981)   # fuzzy find-replace (7 strategies), Levenshtein/Jaro-Winkler/
 │   │                             token-set similarity, todo parsing, line-number stripping,
 │   │                             project task parsing
-│   ├── fs/                 — filesystem tools (~860 lines)
+│   ├── fs/                 — filesystem tools (~910 lines)
 │   │   ├── shell.rs       (176)   # background shell via channels (cmd/sh), temp script cleanup
-│   │   ├── explorer.rs    (460)   # gitignore-aware list_dir/glob/grep/find_project_root,
-│   │   │                           recursive grep with size/binary limits, case-insensitive
+│   │   ├── explorer.rs    (509)   # gitignore-aware list_dir/glob/grep/find_project_root,
+│   │   │                           recursive grep with size/binary limits, case-insensitive,
+│   │   │                           project_tree implementation
 │   │   └── helpers.rs    (216)   # file extraction from code fences, glob matching (*/**/?)
 │   └── ui/                 — egui UI panels (~6,114 lines)
-│       ├── ui_chat.rs    (2266)  # chat panel: tabs, bubbles, markdown, diff, streaming, shell,
+│       ├── ui_chat.rs    (2270)  # chat panel: tabs, bubbles, markdown, diff, streaming, shell,
 │       │                           structured tool cards, per-project tab colors, replay button
-│       ├── ui_settings.rs(1450)  # 6-tab settings window (Providers/Projects/Prompt/Session/
+│       ├── ui_settings.rs(1448)  # 6-tab settings window (Providers/Projects/Prompt/Session/
 │       │                           Timeouts/About)
 │       ├── ui_explorer.rs (921)  # file tree (all files shown), preview (text+image with edit/
 │       │                           save), rename/delete context menu, gutter line numbers
-│       ├── ui_toolbar.rs  (371)  # project/session/provider/model pickers, budget meter, blink-dot
+│       ├── ui_toolbar.rs  (366)  # project/session/provider/model pickers, budget meter, blink-dot
 │       ├── ui_todo.rs     (303)  # floating session task list, progress bar, priority dots, auto-close
 │       ├── ui_project_tasks.rs (313)  # floating project task list, progress bar, auto-close, disk persist
 │       └── helpers.rs     (478)  # time formatting, tool result parsing, markdown, LayoutJob,
 │                                 screen pixel sampling (Windows FFI), todo_scroll_area
 ```
-
-**Total: ~18,740 lines of Rust source across 30 files.**
+**Total: ~18,940 lines of Rust source across 30 files.**
 
 ### Key Architecture Decisions
 
 - **No async runtime** — all I/O is blocking on spawned threads; UI polls for results via channels
 - **Immediate-mode GUI** — egui rebuilds the entire UI every frame, simplifying state management
 - **Disk as source of truth** — message history always written to JSONL immediately; RAM only holds a display window; full history loaded from disk for API requests
-- **Custom tool definitions** — all 19 tool definitions hand-written in `provider.rs` for token efficiency
+- **Custom tool definitions** — all 20 tool definitions hand-written in `provider.rs` for token efficiency
 - **Three-tier token estimation** — API counting endpoint → tiktoken offline (model-aware) → heuristic fallback
-- **6-strategy fuzzy patch matching** — exact → CRLF-normalized → whitespace-normalized → tabs-normalized → anchored line matching → Myers DP sequence alignment
+- **7-strategy fuzzy patch matching** — exact → CRLF-normalized → whitespace-normalized → tabs-normalized → anchored line matching → Myers DP sequence alignment → single-line fuzzy fallback
 - **Transient/permanent error classification** — transient errors (rate limits, timeouts, 5xx, 400) get exponential backoff retry (5s → 180s cap, retries forever); permanent errors (auth, quota, content filter) are surfaced immediately
 - **Connection: close** — HTTP connections use `Connection: close` to prevent read timeouts with certain providers
 
@@ -107,7 +108,7 @@ Cargo.toml                               # workspace root, resolver = "2"
 1. **Startup** — `main.rs` installs rustls crypto, loads persisted state from `app.ron`, launches native window (1400×900)
 2. **User input** — message typed in chat panel; toolbar provides project/session/provider selection
 3. **Chat orchestration** — `chat.rs::send_message()` loads history from disk, prepares request with optional prompt caching, builds API POST with tool definitions, parses SSE stream, dispatches tool calls to handler functions
-4. **Tool execution** — 19 tool handlers execute autonomously (filesystem, shell, search, web, task tracking, session management, line-number-based patching)
+4. **Tool execution** — 20 tool handlers execute autonomously (filesystem, shell, search, web, task tracking, session management, line-number-based patching)
 5. **Session persistence** — metadata written to JSON, messages appended to JSONL, atomic writes (temp file + rename), rate-limited disk writes
 6. **Auto-continuation** — when approaching context limits, generates RESUME.md and calls handoff into a new session
 
@@ -191,7 +192,7 @@ AutoCode persists its state (API keys, provider settings, projects, prompts, ses
 
 ## Tools
 
-AutoCode provides 19 tools to the AI agent:
+AutoCode provides 20 tools to the AI agent:
 
 | Tool | Description |
 |------|-------------|
@@ -200,9 +201,10 @@ AutoCode provides 19 tools to the AI agent:
 | `read_files` | Batch read multiple files at once |
 | `read_entire_file` | Read an entire file without truncation |
 | `write_file` | Create/overwrite files with parent directory creation |
-| `patch_file` | Surgical find-and-replace with 6-strategy fuzzy matching |
+| `patch_file` | Surgical find-and-replace with 7-strategy fuzzy matching |
 | `patch_lines` | Replace a range of lines by line number (more reliable for multi-line) |
 | `list_dir` | Directory listing (gitignore-aware) |
+| `project_tree` | Recursively list project tree, shows all files with trailing `/` for dirs |
 | `create_dir` | Create directories (mkdir -p) |
 | `delete_file` | Delete files or empty directories |
 | `rename_file` | Move/rename files or directories |

@@ -2491,6 +2491,18 @@ fn build_tool_meta(tc: &ToolCall, result: &str, duration_ms: u64) -> ToolMeta {
                 ..Default::default()
             }
         }
+        "project_tree" => {
+            let path = args["path"].as_str().unwrap_or("").to_string();
+            let entry_count = result.lines().count();
+            ToolMeta {
+                tool_name: "project_tree".into(),
+                file_path: Some(path),
+                line_count: Some(entry_count),
+                is_error,
+                duration_ms: Some(duration_ms),
+                ..Default::default()
+            }
+        }
         "delete_file" => {
             let path = args["path"].as_str().unwrap_or("").to_string();
             ToolMeta {
@@ -2771,6 +2783,32 @@ fn execute_tool_with_cache(
                 .collect();
             lines.sort();
             lines.join("\n")
+        }
+
+        "project_tree" => {
+            let raw_path = args["path"].as_str().unwrap_or(project_root);
+            let path =
+                core_helpers::resolve_path_cached(raw_path, project_root, path_cache, allow_escape);
+            if core_helpers::is_blocked_path(&path) {
+                return core_helpers::blocked_error(raw_path);
+            }
+            if !path.exists() {
+                return format!("Error: path does not exist: {}", path.display());
+            }
+            if path.is_file() {
+                return format!("Error: '{}' is a file, not a directory", path.display());
+            }
+            let entries = autocode_fs::explorer::project_tree(&path);
+            if entries.is_empty() {
+                if fsutil::read_dir(&path).is_err() {
+                    return helpers::tool_error(
+                        &format!("Error reading directory: {}", path.display()),
+                        "Check permissions; the directory exists but cannot be read",
+                    );
+                }
+                return format!("(empty tree)");
+            }
+            entries.join("\n")
         }
 
         "delete_file" => {
