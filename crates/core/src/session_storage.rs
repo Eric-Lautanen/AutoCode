@@ -1,40 +1,10 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use crate::chunked_jsonl;
 use crate::fsutil;
 use crate::helpers;
 use crate::state::{AppState, ChatMessage, Project, Role, Session};
-
-/// Try to salvage a truncated JSON line by finding the longest valid prefix.
-/// Always operates on UTF-8 char boundaries — never panics.
-/// Returns `Some(valid_json)` if a prefix parses, or `None` if nothing works.
-fn repair_truncated_jsonl_line(line: &str) -> Option<String> {
-    let line = line.trim();
-    if line.is_empty() {
-        return None;
-    }
-    // Quick check: if the line already parses, return it.
-    if serde_json::from_str::<serde_json::Value>(line).is_ok() {
-        return Some(line.to_string());
-    }
-    // Walk backward, trying suffixes at quote boundaries and regular positions.
-    // Limit iterations to avoid O(n²) on very long corrupt lines.
-    let max_steps = line.len().min(256);
-    let mut end = line.len();
-    for _ in 0..max_steps {
-        end = line.floor_char_boundary(end.saturating_sub(1));
-        if end == 0 {
-            break;
-        }
-        for suffix in &["", "}", "}]", "}}", "}]}", "}}]"] {
-            let candidate = format!("{}{}", &line[..end], suffix);
-            if serde_json::from_str::<serde_json::Value>(&candidate).is_ok() {
-                return Some(line[..end].to_string());
-            }
-        }
-    }
-    None
-}
 
 /// Validate and auto-fix tool_calls arguments that contain corrupt/non-JSON data.
 /// Modifies the tool_calls Value in place, removing any function call whose
@@ -93,38 +63,27 @@ fn sanitize_tool_calls(tool_calls: &mut Option<serde_json::Value>) -> bool {
     changed
 }
 
-/// Find a session metadata file on disk by its ID prefix.
-/// Tries `filename()` first, then scans for `{id}_` prefix.
+/// Find a session metadata file on disk by ID prefix.
+/// Looks for `{id}_{label}/session.json` inside the shared sessions dir.
+/// Falls back to scanning subdirectories by ID prefix.
 fn find_session_file(dir: &Path, session: &Session) -> Option<PathBuf> {
-    let candidate = dir.join(session.filename());
+    let dirname = session.filename().replace(".json", "");
+    let candidate = dir.join(&dirname).join("session.json");
     if candidate.exists() {
         return Some(candidate);
     }
     let prefix = format!("{}_", session.id);
     if let Ok(entries) = fsutil::read_dir(dir) {
         for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with(&prefix) && name.ends_with(".json") {
-                return Some(entry.path());
+            if !entry.path().is_dir() {
+                continue;
             }
-        }
-    }
-    None
-}
-
-/// Find a session messages file on disk.
-/// Tries `messages_filename()` first, then scans for `{id}_` prefix.
-fn find_messages_file(dir: &Path, session: &Session) -> Option<PathBuf> {
-    let candidate = dir.join(session.messages_filename());
-    if candidate.exists() {
-        return Some(candidate);
-    }
-    let prefix = format!("{}_", session.id);
-    if let Ok(entries) = fsutil::read_dir(dir) {
-        for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with(&prefix) && name.ends_with(".jsonl") {
-                return Some(entry.path());
+            if name.starts_with(&prefix) {
+                let meta = entry.path().join("session.json");
+                if meta.exists() {
+                    return Some(meta);
+                }
             }
         }
     }
@@ -145,10 +104,25 @@ pub fn project_sessions_dir(project: &Project) -> PathBuf {
         .join("sessions")
 }
 
+/// Directory for a specific session's chunked message files.
+/// Named `{id}_{safe_label}/` so users can identify sessions by folder name.
+pub fn session_messages_dir(project: &Project, session: &Session) -> PathBuf {
+    let dirname = session.filename().replace(".json", "");
+    project_sessions_dir(project).join(dirname)
+}
+
 pub fn ensure_project_dirs(project: &Project) -> std::io::Result<()> {
     let dir = project_sessions_dir(project);
     fsutil::create_dir_all(&dir)?;
     cleanup_orphan_temp_files(&dir, 3600);
+    // Also clean temp files in any session subdirectories.
+    if let Ok(entries) = fsutil::read_dir(&dir) {
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                cleanup_orphan_temp_files(&entry.path(), 3600);
+            }
+        }
+    }
     Ok(())
 }
 
@@ -198,10 +172,12 @@ pub fn load_project_meta(project: &Project) -> Option<crate::state::ProjectMeta>
     }
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
-struct SessionMeta {
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct SessionMeta {
     pub id: String,
     pub label: String,
+    #[serde(default)]
+    pub created_at: u64,
     #[serde(default)]
     pub next_message_id: u64,
     #[serde(default)]
@@ -209,21 +185,21 @@ struct SessionMeta {
     #[serde(default)]
     pub model: String,
     #[serde(default)]
-    todo_list: crate::state::TodoList,
+    pub todo_list: crate::state::TodoList,
     #[serde(default)]
-    show_todo: bool,
+    pub show_todo: bool,
     #[serde(default)]
-    todo_user_dismissed: bool,
+    pub todo_user_dismissed: bool,
     #[serde(default)]
-    handoff_enabled: bool,
+    pub handoff_enabled: bool,
     #[serde(default)]
-    session_named: bool,
+    pub session_named: bool,
     #[serde(default)]
-    show_explorer: bool,
+    pub show_explorer: bool,
     #[serde(default)]
-    settings_open: bool,
+    pub settings_open: bool,
     #[serde(default)]
-    actual_tokens_used: usize,
+    pub actual_tokens_used: usize,
 }
 
 fn atomic_write(path: &Path, contents: &str) -> std::io::Result<()> {
@@ -242,181 +218,52 @@ fn atomic_write(path: &Path, contents: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-fn atomic_write_json(path: &Path, value: &impl serde::Serialize) -> std::io::Result<()> {
+pub(crate) fn atomic_write_json(path: &Path, value: &impl serde::Serialize) -> std::io::Result<()> {
     let json = serde_json::to_string_pretty(value)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     atomic_write(path, &json)
 }
 
-fn read_jsonl_messages(path: &Path) -> Vec<ChatMessage> {
-    let Ok(content) = fsutil::read_to_string(path) else {
-        return Vec::new();
-    };
-    let lines: Vec<&str> = content.lines().filter(|l| !l.is_empty()).collect();
-    let mut result: Vec<ChatMessage> = Vec::with_capacity(lines.len());
-    let mut fixed_lines: Vec<String> = Vec::new();
-    let mut needs_rewrite = false;
-
-    for line in &lines {
-        match serde_json::from_str::<ChatMessage>(line) {
-            Ok(mut msg) => {
-                if sanitize_tool_calls(&mut msg.tool_calls) {
-                    needs_rewrite = true;
-                    fixed_lines
-                        .push(serde_json::to_string(&msg).unwrap_or_else(|_| line.to_string()));
-                } else {
-                    fixed_lines.push(line.to_string());
-                }
-                result.push(msg);
-            }
-            Err(_) => {
-                // Try to repair truncated/corrupt lines.
-                if let Some(repaired) = repair_truncated_jsonl_line(line)
-                    && let Ok(mut msg) = serde_json::from_str::<ChatMessage>(&repaired)
-                {
-                    let changed = sanitize_tool_calls(&mut msg.tool_calls);
-                    if changed {
-                        fixed_lines
-                            .push(serde_json::to_string(&msg).unwrap_or_else(|_| repaired.clone()));
-                    } else {
-                        fixed_lines.push(repaired);
-                    }
-                    result.push(msg);
-                    needs_rewrite = true;
-                }
-            }
-        }
-    }
-
-    // Persist fixed data back to disk so the corruption doesn't come back.
-    if needs_rewrite {
-        let mut serialized: String = fixed_lines
-            .iter()
-            .map(|l| l.as_str())
-            .collect::<Vec<&str>>()
-            .join("\n");
-        if !fixed_lines.is_empty() {
-            serialized.push('\n');
-        }
-        let _ = atomic_write(path, &serialized);
-    }
-
-    result
-}
-
-/// Truncate the session's JSONL file, keeping only messages with `id <= keep_up_to_id`.
-/// Rewrites the file atomically via a temp file + rename.
-pub fn truncate_messages_after(
-    project: &Project,
-    session: &Session,
-    keep_up_to_id: u64,
-) -> std::io::Result<()> {
-    let dir = project_sessions_dir(project);
-    let path =
-        find_messages_file(&dir, session).unwrap_or_else(|| dir.join(session.messages_filename()));
-    let ext_path = fsutil::extended_path(&path);
-
-    let all = read_jsonl_messages(&ext_path);
-    let keep: Vec<ChatMessage> = all.into_iter().filter(|m| m.id <= keep_up_to_id).collect();
-
-    let mut serialized: String = keep
-        .iter()
-        .map(serde_json::to_string)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?
-        .join("\n");
-    // Preserve trailing newline so future appends don't corrupt the last line.
-    if !keep.is_empty() {
-        serialized.push('\n');
-    }
-
-    let dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let pid = std::process::id();
-    let n = crate::helpers::ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let tmp = dir.join(format!(".tmp_{}_{}.jsonl", pid, n));
-    {
-        let ext_tmp = fsutil::extended_path(&tmp);
-        let mut file = std::fs::File::create(&ext_tmp)?;
-        file.write_all(serialized.as_bytes())?;
-        file.sync_all()?;
-    }
-    fsutil::rename(&tmp, &path)?;
-    Ok(())
-}
-
-/// Append messages to the session's JSONL file (fast path, append-only).
-/// The JSONL is the source of truth — never rewritten from RAM.
+/// Append messages to the session's chunked JSONL files.
+/// The chunked JSONL is the source of truth — never rewritten from RAM.
 pub fn append_messages_to_jsonl(
     project: &Project,
     session: &Session,
     messages: &[ChatMessage],
 ) -> std::io::Result<()> {
-    use std::io::Write;
-    let dir = project_sessions_dir(project);
+    let dir = session_messages_dir(project, session);
     if !dir.exists() {
         fsutil::create_dir_all(&dir)?;
     }
-    let path =
-        find_messages_file(&dir, session).unwrap_or_else(|| dir.join(session.messages_filename()));
-    let path = fsutil::extended_path(&path);
 
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)?;
+    // Sanitize messages before persisting.
+    let sanitized: Vec<ChatMessage> = messages
+        .iter()
+        .map(|m| {
+            let mut m = m.clone();
+            sanitize_tool_calls(&mut m.tool_calls);
+            m
+        })
+        .collect();
 
-    for msg in messages {
-        let mut sanitized = msg.clone();
-        sanitize_tool_calls(&mut sanitized.tool_calls);
-        let line = serde_json::to_string(&sanitized)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        writeln!(file, "{}", line)?;
-    }
-    file.sync_all()?;
-    Ok(())
+    chunked_jsonl::append_messages_chunked(
+        &dir,
+        &session.id,
+        &session.label,
+        &sanitized,
+    )
 }
 
-/// Save session metadata + clean up stale files (e.g. after a rename).
+/// Save session metadata inside the session's subdirectory.
 /// Does NOT touch the append-only messages JSONL — never rewrites from RAM.
 pub fn save_session(project: &Project, session: &Session) -> std::io::Result<()> {
-    let dir = project_sessions_dir(project);
-    if !dir.exists() {
-        fsutil::create_dir_all(&dir)?;
-    }
-
-    // Remove stale files for this session (different label, same id).
-    let prefix = format!("{}_", session.id);
-    if let Ok(entries) = fsutil::read_dir(&dir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let name_str = name.to_string_lossy();
-            let is_stale_json = name_str.starts_with(&prefix)
-                && name_str.ends_with(".json")
-                && name_str != session.filename();
-            let is_stale_jsonl = name_str.starts_with(&prefix)
-                && name_str.ends_with(".jsonl")
-                && name_str != session.messages_filename();
-            if is_stale_json || is_stale_jsonl {
-                let _ = fsutil::remove_file(&entry.path());
-            }
-        }
-    }
-    // Also remove id-only files (e.g., from prior format migration).
-    let id_only_json = dir.join(format!("{}.json", session.id));
-    if id_only_json != dir.join(session.filename()) {
-        let _ = fsutil::remove_file(&id_only_json);
-    }
-    let id_only_jsonl = dir.join(format!("{}.jsonl", session.id));
-    if id_only_jsonl != dir.join(session.messages_filename()) {
-        let _ = fsutil::remove_file(&id_only_jsonl);
-    }
-
-    // Only save metadata — the messages JSONL is append-only and never
-    // rewritten from RAM to avoid losing messages that were trimmed or
-    // not yet flushed. The append-only JSONL is the source of truth.
+    let dir = session_messages_dir(project, session);
+    fsutil::create_dir_all(&dir)?;
+    let meta_path = dir.join("session.json");
     let meta = SessionMeta {
         id: session.id.clone(),
         label: session.label.clone(),
+        created_at: session.created_at,
         next_message_id: session.next_message_id,
         provider_label: session.provider_label.clone(),
         model: session.model.clone(),
@@ -429,38 +276,32 @@ pub fn save_session(project: &Project, session: &Session) -> std::io::Result<()>
         settings_open: session.settings_open,
         actual_tokens_used: session.actual_tokens_used,
     };
-    let meta_path = dir.join(session.filename());
     atomic_write_json(&meta_path, &meta)
 }
 
 /// Save only session metadata (no messages) to disk.
-/// The JSONL message file is never touched — it's the source of truth managed
-/// by the rate-limited writer. Call this from auto-save to avoid overwriting
-/// the message file with a RAM-trimmed subset.
-/// Renames the JSONL message file and removes stale metadata files
-/// when the session label changes (e.g. after name_session).
+/// The chunked JSONL files are the source of truth — never rewritten from RAM.
+/// Renames the session subdirectory when the label changes (e.g. after name_session),
+/// keeping everything (metadata + message chunks) atomic in one folder.
 pub fn save_session_meta(project: &Project, session: &Session) -> std::io::Result<()> {
-    let dir = project_sessions_dir(project);
-    if !dir.exists() {
-        fsutil::create_dir_all(&dir)?;
+    let parent = project_sessions_dir(project);
+    let new_dirname = session.filename().replace(".json", "");
+
+    // Ensure the parent sessions directory exists.
+    if !parent.exists() {
+        fsutil::create_dir_all(&parent)?;
     }
 
-    // Rename JSONL and remove stale metadata when session label changes.
-    // The JSONL content is never rewritten — just the filename is updated.
+    // Scan for any stale subdirectory with this session's ID prefix and rename it.
     let prefix = format!("{}_", session.id);
-    if let Ok(entries) = fsutil::read_dir(&dir) {
+    if let Ok(entries) = fsutil::read_dir(&parent) {
         for entry in entries.flatten() {
-            let name = entry.file_name();
-            let name_str = name.to_string_lossy();
-            if !name_str.starts_with(&prefix) {
-                continue;
-            }
-            if name_str.ends_with(".json") && name_str != session.filename() {
-                let _ = fsutil::remove_file(&entry.path());
-            } else if name_str.ends_with(".jsonl") && name_str != session.messages_filename() {
-                let new_path = dir.join(session.messages_filename());
-                // Only rename if the destination doesn't exist — the file
-                // may already have been renamed by a prior call.
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if entry.path().is_dir()
+                && name.starts_with(&prefix)
+                && name != new_dirname
+            {
+                let new_path = parent.join(&new_dirname);
                 if !new_path.exists() {
                     let _ = fsutil::rename(&entry.path(), &new_path);
                 }
@@ -468,9 +309,14 @@ pub fn save_session_meta(project: &Project, session: &Session) -> std::io::Resul
         }
     }
 
+    // Write metadata inside the subdirectory.
+    let dir = parent.join(&new_dirname);
+    fsutil::create_dir_all(&dir)?;
+    let meta_path = dir.join("session.json");
     let meta = SessionMeta {
         id: session.id.clone(),
         label: session.label.clone(),
+        created_at: session.created_at,
         next_message_id: session.next_message_id,
         provider_label: session.provider_label.clone(),
         model: session.model.clone(),
@@ -483,7 +329,6 @@ pub fn save_session_meta(project: &Project, session: &Session) -> std::io::Resul
         settings_open: session.settings_open,
         actual_tokens_used: session.actual_tokens_used,
     };
-    let meta_path = dir.join(session.filename());
     atomic_write_json(&meta_path, &meta)
 }
 
@@ -502,7 +347,8 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
         Ok(json) => match serde_json::from_str::<SessionMeta>(&json) {
             Ok(meta) => {
                 session.label = meta.label;
-                session.messages = read_jsonl_messages_from_dir(&dir, session);
+                session.created_at = meta.created_at;
+                session.messages = read_jsonl_messages_from_dir(project, session);
                 // Strip display-only Error messages that leaked to disk.
                 session.messages.retain(|m| m.role != Role::Error);
                 session.next_message_id = if meta.next_message_id > 0 {
@@ -550,46 +396,40 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
 }
 
 pub fn load_all_messages(project: &Project, session: &Session) -> Vec<ChatMessage> {
-    let dir = project_sessions_dir(project);
-    match find_messages_file(&dir, session) {
-        Some(p) => read_jsonl_messages(&p),
-        None => Vec::new(),
-    }
+    let dir = session_messages_dir(project, session);
+    chunked_jsonl::read_all_messages_chunked(&dir)
 }
 
-fn read_jsonl_messages_from_dir(dir: &Path, session: &Session) -> Vec<ChatMessage> {
-    match find_messages_file(dir, session) {
-        Some(p) => read_jsonl_messages(&p),
-        None => Vec::new(),
-    }
+/// Truncate the session's chunked message files, keeping only messages
+/// with `id <= keep_up_to_id`.
+pub fn truncate_messages_after(
+    project: &Project,
+    session: &Session,
+    keep_up_to_id: u64,
+) -> std::io::Result<()> {
+    let dir = session_messages_dir(project, session);
+    chunked_jsonl::truncate_messages_chunked(&dir, keep_up_to_id)
+}
+
+fn read_jsonl_messages_from_dir(project: &Project, session: &Session) -> Vec<ChatMessage> {
+    let dir = session_messages_dir(project, session);
+    chunked_jsonl::read_all_messages_chunked(&dir)
 }
 
 pub fn delete_session_file(project: &Project, session: &Session) {
     let dir = project_sessions_dir(project);
-    // Remove ALL files with this session's id prefix (.json and .jsonl).
+    // Remove any subdirectory with this session's ID prefix.
+    // The subdirectory contains both session.json and chunked messages,
+    // so deleting it removes the entire session in one operation.
     let prefix = format!("{}_", session.id);
-    let id_len = session.id.len();
     if let Ok(entries) = fsutil::read_dir(&dir) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with(&prefix)
-                && name[id_len..].starts_with('_')
-                && (name.ends_with(".json") || name.ends_with(".jsonl"))
-            {
-                let _ = fsutil::remove_file(&entry.path());
+            if entry.path().is_dir() && name.starts_with(&prefix) {
+                let _ = fsutil::remove_dir(&entry.path());
             }
         }
     }
-    // Also try the exact filenames (backward compat).
-    let target = dir.join(session.filename());
-    let _ = fsutil::remove_file(&target);
-    let target_l = dir.join(session.messages_filename());
-    let _ = fsutil::remove_file(&target_l);
-    // Also remove id-only files (from prior format migration).
-    let id_only = dir.join(format!("{}.json", session.id));
-    let _ = fsutil::remove_file(&id_only);
-    let id_only_l = dir.join(format!("{}.jsonl", session.id));
-    let _ = fsutil::remove_file(&id_only_l);
 }
 
 /// Load messages from disk with IDs less than `before_id`.
@@ -600,18 +440,8 @@ pub fn load_messages_before(
     before_id: u64,
     count: usize,
 ) -> Vec<ChatMessage> {
-    let full = load_all_messages(project, session);
-    let end = full
-        .iter()
-        .position(|m| m.id >= before_id)
-        .unwrap_or(full.len());
-    if end == 0 {
-        return Vec::new();
-    }
-    let start = end.saturating_sub(count);
-    let loaded = full[start..end].to_vec();
-    let _loaded_ids: Vec<u64> = loaded.iter().map(|m| m.id).collect();
-    loaded
+    let dir = session_messages_dir(project, session);
+    chunked_jsonl::load_messages_chunked_before(&dir, before_id, count)
 }
 
 fn cleanup_orphan_temp_files(dir: &Path, max_age_secs: u64) {
@@ -642,4 +472,111 @@ fn cleanup_orphan_temp_files(dir: &Path, max_age_secs: u64) {
             }
         }
     }
+}
+
+// -- Disk discovery (projects & sessions) -------------------------------------
+
+/// Path to the project identity file on disk.
+fn project_identity_path(data_dir_name: &str) -> PathBuf {
+    fsutil::exe_dir()
+        .join("AutoCode_data")
+        .join("projects")
+        .join(data_dir_name)
+        .join("project.json")
+}
+
+/// Save project identity to disk as project.json.
+pub fn save_project_identity(project: &Project) -> std::io::Result<()> {
+    let path = project_identity_path(&project.data_dir_name);
+    if let Some(parent) = path.parent() {
+        fsutil::create_dir_all(parent)?;
+    }
+    atomic_write_json(&path, project)
+}
+
+/// Load project identity from disk.
+pub fn load_project_identity(data_dir_name: &str) -> Option<Project> {
+    let path = project_identity_path(data_dir_name);
+    if !path.exists() {
+        return None;
+    }
+    match fsutil::read_to_string(&path) {
+        Ok(json) => serde_json::from_str(&json).ok(),
+        Err(_) => None,
+    }
+}
+
+/// Discover projects from disk by scanning AutoCode_data/projects/.
+/// Only returns projects that have a valid project.json identity file.
+pub fn discover_projects_from_disk() -> Vec<Project> {
+    let proj_dir = fsutil::exe_dir()
+        .join("AutoCode_data")
+        .join("projects");
+    if !proj_dir.exists() {
+        return Vec::new();
+    }
+    let mut projects = Vec::new();
+    if let Ok(entries) = fsutil::read_dir(&proj_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let data_dir_name = entry.file_name().to_string_lossy().to_string();
+            if data_dir_name.starts_with('.') {
+                continue;
+            }
+            if let Some(project) = load_project_identity(&data_dir_name) {
+                projects.push(project);
+            }
+        }
+    }
+    projects.sort_by(|a, b| a.name.cmp(&b.name));
+    projects
+}
+
+/// Discover sessions from disk for the given project by scanning its sessions/
+/// directory for subdirectories containing session.json.
+/// Returns sessions in creation order (oldest first).
+pub fn discover_sessions_from_disk(project: &Project) -> Vec<Session> {
+    let dir = project_sessions_dir(project);
+    if !dir.exists() {
+        return Vec::new();
+    }
+    let mut sessions = Vec::new();
+    if let Ok(entries) = fsutil::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let meta_path = path.join("session.json");
+            if let Ok(content) = fsutil::read_to_string(&meta_path)
+                && let Ok(meta) = serde_json::from_str::<SessionMeta>(&content) {
+                    sessions.push(Session {
+                        id: meta.id,
+                        project_id: Some(project.id.clone()),
+                        messages: Vec::new(),
+                        next_message_id: meta.next_message_id,
+                        created_at: meta.created_at,
+                        label: meta.label,
+                        actual_tokens_used: meta.actual_tokens_used,
+                        provider_label: meta.provider_label,
+                        model: meta.model,
+                        todo_list: meta.todo_list,
+                        show_todo: meta.show_todo,
+                        todo_user_dismissed: meta.todo_user_dismissed,
+                        session_named: meta.session_named,
+                        handoff_enabled: meta.handoff_enabled,
+                        show_explorer: meta.show_explorer,
+                        settings_open: meta.settings_open,
+                        closed: true,
+                        estimated_full_tokens: 0,
+                        estimated_messages_tokens: 0,
+                    });
+                }
+        }
+    }
+    sessions.sort_by_key(|a| a.created_at);
+    sessions
 }

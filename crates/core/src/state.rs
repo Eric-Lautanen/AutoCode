@@ -58,6 +58,17 @@ pub struct ModelManifest {
 fn manifest() -> &'static Manifest {
     static MANIFEST: OnceLock<Manifest> = OnceLock::new();
     MANIFEST.get_or_init(|| {
+        // Prefer the user-editable disk copy in AutoCode_data.
+        let disk_path = crate::fsutil::exe_dir()
+            .join("AutoCode_data")
+            .join("providers.json");
+        if disk_path.exists()
+            && let Ok(json) = crate::fsutil::read_to_string(&disk_path)
+            && let Ok(manifest) = serde_json::from_str(&json)
+        {
+            return manifest;
+        }
+        // Fall back to the baked-in embedded asset.
         let json = include_str!("../../../assets/providers.json");
         serde_json::from_str(json).expect("Failed to parse providers.json")
     })
@@ -381,6 +392,11 @@ pub struct ApiProvider {
     /// Persisted across restarts alongside other provider settings.
     #[serde(default)]
     pub saved_models: Vec<String>,
+
+    /// Per-model configuration overrides (context window, max tokens, etc.).
+    /// Keyed by model ID. When absent, values from the baked-in manifest are used.
+    #[serde(default)]
+    pub models_config: Option<std::collections::HashMap<String, crate::provider_file::ModelEntry>>,
 }
 
 impl ApiProvider {
@@ -402,6 +418,31 @@ impl ApiProvider {
             .and_then(|m| m.models_endpoint.clone())
             .unwrap_or_else(|| format!("{}/models", base_url.trim_end_matches('/')));
 
+        let saved_models = provider_manifest(&kind)
+            .map(|m| {
+                let mut models: Vec<String> = m.models.keys().cloned().collect();
+                models.sort();
+                models
+            })
+            .unwrap_or_default();
+
+        let models_config: Option<std::collections::HashMap<String, crate::provider_file::ModelEntry>> =
+            Some(saved_models.iter().map(|id| {
+                let defs = model_or_safe(&kind, id);
+                let entry = crate::provider_file::ModelEntry {
+                    id: id.clone(),
+                    context_window: defs.context_window,
+                    max_output_tokens: defs.max_output_tokens,
+                    max_output_tokens_thinking: defs.max_output_tokens_thinking,
+                    thinking_api: defs.thinking_api.clone(),
+                    reasoning_efforts: defs.reasoning_efforts.clone(),
+                    supports_cache_control: defs.supports_cache_control,
+                    requests_per_hour: defs.requests_per_hour,
+                    handoff_percent: 80,
+                };
+                (id.clone(), entry)
+            }).collect());
+
         Self {
             kind,
             api_key: SecretString::new(String::new()),
@@ -420,7 +461,8 @@ impl ApiProvider {
                 .unwrap_or(defs.max_output_tokens * 2),
             requests_per_hour: defs.requests_per_hour,
             models_list_url: models_url,
-            saved_models: Vec::new(),
+            saved_models,
+            models_config,
         }
     }
 
@@ -468,6 +510,30 @@ impl ApiProvider {
         if let Some(effort) = defs.reasoning_efforts.first() {
             self.reasoning_effort.clone_from(effort);
         }
+    }
+
+    /// Fill model-specific fields from the stored per-model config,
+    /// falling back to the baked-in manifest if no saved config exists.
+    pub fn fill_from_config(&mut self) {
+        let model_id = self.model.clone();
+        let mc = self.models_config.as_ref()
+            .and_then(|m| m.get(&model_id))
+            .cloned();
+        if let Some(entry) = mc {
+            self.apply_model_entry(&entry);
+        } else {
+            self.fill_from_manifest();
+        }
+    }
+
+    fn apply_model_entry(&mut self, mc: &crate::provider_file::ModelEntry) {
+        self.max_context_tokens = mc.context_window;
+        self.max_output_tokens = mc.max_output_tokens;
+        self.max_output_tokens_thinking = mc.max_output_tokens_thinking.unwrap_or(mc.max_output_tokens * 2);
+        self.thinking_api = parse_thinking_api(&mc.thinking_api);
+        self.reasoning_effort = mc.reasoning_efforts.first().cloned().unwrap_or_else(|| "high".into());
+        self.requests_per_hour = mc.requests_per_hour;
+        self.handoff_percent = mc.handoff_percent;
     }
 
     pub fn reset_defaults(&mut self) {
@@ -972,12 +1038,18 @@ impl Default for PendingWrites {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AppState {
+    /// In-memory project list — loaded from disk on startup, not serialized to app.ron.
+    #[serde(skip)]
     pub projects: Vec<Project>,
     pub active_project_id: Option<String>,
 
+    /// Provider configs — loaded from providers.json, not serialized to app.ron.
+    #[serde(skip)]
     pub providers: HashMap<String, ApiProvider>,
     pub active_provider: String,
 
+    /// In-memory session list — loaded from disk on startup, not serialized to app.ron.
+    #[serde(skip)]
     pub sessions: Vec<Session>,
     pub active_session_id: Option<String>,
 
@@ -989,7 +1061,8 @@ pub struct AppState {
     #[serde(default = "crate::helpers::default_handoff_enabled")]
     pub handoff_enabled: bool,
 
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// In-memory shell task list — not persisted to app.ron.
+    #[serde(skip)]
     pub shell_tasks: Vec<ShellTask>,
 
     pub show_explorer: bool,
@@ -1156,35 +1229,46 @@ impl Default for AppState {
 impl AppState {
     pub fn load(storage: &dyn eframe::Storage) -> Self {
         let mut state: Self = eframe::get_value(storage, "app_state").unwrap_or_default();
-        // Migration: insert any providers missing from saved state.
-        // Existing installs won't have providers added after their first run.
-        let mut manifest_keys: Vec<&String> = manifest().providers.keys().collect();
-        manifest_keys.sort();
-        for key in &manifest_keys {
-            let kind = ProviderKind((*key).clone());
-            let label = kind.label().to_string();
-            state
-                .providers
-                .entry(label)
-                .or_insert_with(|| ApiProvider::new(kind));
-        }
-        // Fill manifest-derived fields for providers where they are still zero
-        // (e.g. migrated from an old app.ron that used #[serde(skip)]).
-        for p in state.providers.values_mut() {
-            if p.max_context_tokens == 0 {
-                let defs = model_or_safe(&p.kind, &p.model);
-                p.max_context_tokens = defs.context_window;
-                p.max_output_tokens = defs.max_output_tokens;
-                p.max_output_tokens_thinking = defs
-                    .max_output_tokens_thinking
-                    .unwrap_or(defs.max_output_tokens * 2);
-                p.thinking_api = parse_thinking_api(&defs.thinking_api);
+
+        // Discover projects and sessions from disk (source of truth).
+        let disk_projects = crate::session_storage::discover_projects_from_disk();
+        for dp in disk_projects {
+            if !state.projects.iter().any(|p| p.data_dir_name == dp.data_dir_name) {
+                let pid = dp.id.clone();
+                state.projects.push(dp);
+                if let Some(proj) = state.projects.iter().find(|p| p.id == pid) {
+                    for ds in crate::session_storage::discover_sessions_from_disk(proj) {
+                        if !state.sessions.iter().any(|s| s.id == ds.id) {
+                            state.sessions.push(ds);
+                        }
+                    }
+                }
             }
         }
 
-        // Prune stale entries whose kind doesn't resolve to a manifest entry.
-        // This keeps built-in providers and user-added clones alike.
-        state.providers.retain(|_, p| provider_manifest(&p.kind).is_some());
+        // Load providers from disk (providers.json is the source of truth).
+        if let Some(disk_providers) = crate::provider_file::load_providers_file() {
+            state.providers = disk_providers;
+        } else {
+            // First launch: seed providers from the baked-in manifest.
+            let mut manifest_keys: Vec<&String> = manifest().providers.keys().collect();
+            manifest_keys.sort();
+            for key in &manifest_keys {
+                let kind = ProviderKind((*key).clone());
+                let label = kind.label().to_string();
+                state.providers.entry(label).or_insert_with(|| ApiProvider::new(kind));
+            }
+            // Also create the default openai-compatible provider.
+            let compat_key = "OpenAI-Compatible";
+            if !state.providers.contains_key(compat_key) {
+                let kind = ProviderKind::new("openai-compatible");
+                state.providers.insert(compat_key.to_string(), ApiProvider::new(kind));
+            }
+            // Write the initial providers to disk.
+            let _ = crate::provider_file::save_providers_file(&state.providers);
+        }
+
+        // Ensure active_provider is valid.
         if !state.providers.contains_key(&state.active_provider) {
             let mut fallback_keys: Vec<&String> = manifest().providers.keys().collect();
             fallback_keys.sort();
@@ -1193,24 +1277,6 @@ impl AppState {
                 .map(|k| ProviderKind((*k).clone()).label().to_string())
                 .unwrap_or_default();
             state.active_provider = first;
-        }
-
-        // Migrate projects that lack data_dir_name.
-        let chosen_names: Vec<String> = state
-            .projects
-            .iter()
-            .map(|p| {
-                if p.data_dir_name.is_empty() {
-                    crate::helpers::unique_data_dir_name(&state.projects, &p.name)
-                } else {
-                    p.data_dir_name.clone()
-                }
-            })
-            .collect();
-        for (p, chosen) in state.projects.iter_mut().zip(chosen_names) {
-            if p.data_dir_name.is_empty() {
-                p.data_dir_name = chosen;
-            }
         }
 
         // If the saved global per-session state is orphaned (no active
@@ -1260,6 +1326,7 @@ impl AppState {
         });
 
         // 3. Remove sessions whose files are gone from disk.
+        // Session data lives in `{sessions_dir}/{id}_{label}/session.json`.
         let stale: Vec<String> = self
             .sessions
             .iter()
@@ -1269,16 +1336,18 @@ impl AppState {
                     .and_then(|pid| {
                         self.projects.iter().find(|p| &p.id == pid).map(|proj| {
                             let dir = crate::session_storage::project_sessions_dir(proj);
-                            let candidate = dir.join(s.filename());
-                            if candidate.exists() {
+                            // Check if the session's subdirectory exists with metadata inside.
+                            let dirname = s.filename().replace(".json", "");
+                            let subdir = dir.join(&dirname);
+                            if subdir.join("session.json").exists() {
                                 return false;
                             }
+                            // Fallback: scan for any subdirectory with this session's ID prefix.
                             let prefix = format!("{}_", s.id);
                             if let Ok(entries) = std::fs::read_dir(&dir) {
                                 !entries.flatten().any(|e| {
                                     let name = e.file_name().to_string_lossy().to_string();
-                                    name.starts_with(&prefix)
-                                        && (name.ends_with(".json") || name.ends_with(".jsonl"))
+                                    e.path().is_dir() && name.starts_with(&prefix)
                                 })
                             } else {
                                 true
@@ -1317,6 +1386,8 @@ impl AppState {
 
     pub fn save(&mut self, storage: &mut dyn eframe::Storage) {
         self.prune_disk_state();
+        // Persist providers to their own file (not app.ron).
+        let _ = crate::provider_file::save_providers_file(&self.providers);
         eframe::set_value(storage, "app_state", self);
     }
 
@@ -1374,7 +1445,7 @@ impl AppState {
         self.sessions.push(sess);
     }
 
-    /// Flush pending message writes to disk, respecting the rate limit.
+    /// Flush pending message writes to disk synchronously, respecting the rate limit.
     /// When `force` is true, writes all pending messages regardless of the rate limit.
     pub fn flush_pending_writes(&mut self, force: bool) {
         use std::collections::HashMap;
@@ -1406,6 +1477,42 @@ impl AppState {
             let _ = crate::session_storage::append_messages_to_jsonl(proj, sess, msgs);
         }
         self.pending_writes.last_write = std::time::Instant::now();
+    }
+
+    /// Drain pending message writes and return them grouped by session for
+    /// offloading to a background persistence thread. Does NOT write to disk.
+    /// Returns `Vec<(resolved_dir_path, messages)>` where the path is computed
+    /// at send time so that subsequent directory renames (e.g. name_session)
+    /// don't orphan the messages.
+    /// Resets the rate-limit timer so the caller can re-enter without
+    /// re-yielding the same batch.
+    pub fn drain_pending_writes(&mut self) -> Vec<(std::path::PathBuf, Vec<ChatMessage>)> {
+        use std::collections::HashMap;
+        if self.pending_writes.pending.is_empty() {
+            return Vec::new();
+        }
+        let pending = std::mem::take(&mut self.pending_writes.pending);
+        let mut grouped: HashMap<String, Vec<ChatMessage>> = HashMap::new();
+        for (sid, msg) in pending {
+            grouped.entry(sid).or_default().push(msg);
+        }
+        let mut batches = Vec::new();
+        for (sid, msgs) in &grouped {
+            let Some(sess) = self.sessions.iter().find(|s| s.id == *sid) else {
+                continue;
+            };
+            let Some(pid) = sess.project_id.as_ref() else {
+                continue;
+            };
+            let Some(proj) = self.projects.iter().find(|p| &p.id == pid) else {
+                continue;
+            };
+            // Resolve the directory path NOW, before any label change.
+            let dir = crate::session_storage::session_messages_dir(proj, sess);
+            batches.push((dir, msgs.clone()));
+        }
+        self.pending_writes.last_write = std::time::Instant::now();
+        batches
     }
 }
 

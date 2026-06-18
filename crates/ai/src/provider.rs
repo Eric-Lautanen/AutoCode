@@ -12,12 +12,35 @@ use std::{
         Arc, OnceLock,
         mpsc::{self, Receiver, Sender},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
-/// Global cookie jar: hostname → "NAME=VALUE" cookie string.
+use crate::thread_pool::ThreadPool;
+
+/// Global thread pool for provider HTTP requests.
+/// Lazily initialized once, sized to available parallelism (2-8 threads).
+fn pool() -> &'static ThreadPool {
+    static POOL: OnceLock<ThreadPool> = OnceLock::new();
+    POOL.get_or_init(|| {
+        let size = std::thread::available_parallelism()
+            .map(|n| n.get().clamp(2, 8))
+            .unwrap_or(4);
+        ThreadPool::new(size)
+    })
+}
+
+/// A cookie value with a creation timestamp for TTL-based expiry.
+struct CookieEntry {
+    value: String,
+    created: Instant,
+}
+
+const COOKIE_TTL_SECS: u64 = 3600; // 1 hour
+const MAX_COOKIES: usize = 100;
+
+/// Global cookie jar: hostname → cookie entry with TTL.
 /// Persisted across calls so DDG doesn't treat each request as a new session.
-static COOKIE_JAR: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+static COOKIE_JAR: Mutex<Option<HashMap<String, CookieEntry>>> = Mutex::new(None);
 
 /// Rotating user-agent strings that mimic real browsers across OS and version.
 static PROFILE_NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -145,22 +168,33 @@ fn enforce_web_rate_limit() {
     *last = Some(std::time::Instant::now());
 }
 
-/// Returns the Cookie header value for a given host, or None if no cookie is stored.
+/// Returns the Cookie header value for a given host, or None if no cookie is
+/// stored or the stored cookie has expired (TTL: 1 hour).
 fn cookie_header(host: &str) -> Option<String> {
-    let jar = match COOKIE_JAR.lock() {
+    let mut jar = match COOKIE_JAR.lock() {
         Ok(guard) => guard,
         Err(poisoned) => {
             COOKIE_JAR.clear_poison();
             poisoned.into_inner()
         }
     };
-    let map = jar.as_ref()?;
-    let cookie = map.get(host)?;
-    Some(format!("Cookie: {}\r\n", cookie))
+    let map = jar.as_mut()?;
+    let now = Instant::now();
+
+    // Check entry and remove if expired.
+    match map.get(host) {
+        Some(entry) if now.duration_since(entry.created).as_secs() < COOKIE_TTL_SECS => {
+            Some(format!("Cookie: {}\r\n", entry.value))
+        }
+        _ => {
+            map.remove(host);
+            None
+        }
+    }
 }
 
 /// Parse and store Set-Cookie headers from the raw HTTP response (including headers).
-/// Returns the updated header_str with any trailing whitespace cleaned.
+/// Enforces TTL (1 hour) and max size (100 entries), evicting oldest on overflow.
 fn store_cookies(host: &str, buffer: &[u8]) {
     let header_end = buffer
         .windows(4)
@@ -173,7 +207,6 @@ fn store_cookies(host: &str, buffer: &[u8]) {
     for line in header_str.lines() {
         let lower = line.to_ascii_lowercase();
         if let Some(val) = lower.strip_prefix("set-cookie:") {
-            // Extract NAME=VALUE before the first semicolon or end
             let cookie_val = val
                 .trim()
                 .split(';')
@@ -199,7 +232,31 @@ fn store_cookies(host: &str, buffer: &[u8]) {
         }
     };
     let map = jar.get_or_insert_with(HashMap::new);
-    map.insert(host.to_string(), new_cookies.join("; "));
+    let now = Instant::now();
+
+    // Evict expired entries.
+    map.retain(|_, entry| now.duration_since(entry.created).as_secs() < COOKIE_TTL_SECS);
+
+    // Evict oldest entries if over the limit.
+    while map.len() >= MAX_COOKIES {
+        let oldest_host = map
+            .iter()
+            .min_by_key(|(_, e)| e.created)
+            .map(|(k, _)| k.clone());
+        if let Some(h) = oldest_host {
+            map.remove(&h);
+        } else {
+            break;
+        }
+    }
+
+    map.insert(
+        host.to_string(),
+        CookieEntry {
+            value: new_cookies.join("; "),
+            created: now,
+        },
+    );
 }
 
 use std::io;
@@ -556,7 +613,7 @@ pub struct ProviderClient;
 impl ProviderClient {
     pub fn complete(provider: ApiProvider, request: CompletionRequest) -> Receiver<ProviderEvent> {
         let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
+        pool().execute(move || {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 run_request_once(provider, request, tx);
             }));

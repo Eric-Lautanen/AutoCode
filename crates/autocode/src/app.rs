@@ -10,7 +10,7 @@ use autocode_ai::{
     chat::{self, ChatRuntime},
     provider, session,
 };
-use autocode_core::{state::AppState, theme};
+use autocode_core::{persistence::PersistenceThread, state::AppState, theme};
 use autocode_ui::{
     ui_chat::{self, ChatPanelState},
     ui_explorer::{self, ExplorerPanelState},
@@ -29,6 +29,7 @@ pub struct AutocodeApp {
     repaint_scheduled: bool,
     sysinfo_rx: Option<std::sync::mpsc::Receiver<autocode_core::sysinfo::SysInfo>>,
     prev_session_id: Option<String>,
+    persistence: PersistenceThread,
 }
 
 impl AutocodeApp {
@@ -49,6 +50,17 @@ impl AutocodeApp {
             Some(autocode_core::sysinfo::start_detect())
         };
 
+        // Drain any remaining pending writes from the loaded state into the
+        // persistence thread so they are not lost.
+        let persistence = PersistenceThread::new();
+        let batches = state.drain_pending_writes();
+        for (dir, msgs) in batches {
+            persistence.send(autocode_core::persistence::PersistenceCommand::AppendMessages {
+                dir,
+                messages: msgs,
+            });
+        }
+
         Self {
             state,
             runtimes: HashMap::new(),
@@ -59,6 +71,7 @@ impl AutocodeApp {
             repaint_scheduled: false,
             sysinfo_rx,
             prev_session_id: None,
+            persistence,
         }
     }
 
@@ -70,6 +83,7 @@ impl AutocodeApp {
                 .iter()
                 .find(|p| Some(&p.id) == sess.project_id.as_ref())
         {
+            sess.closed = false;
             autocode_core::session_storage::load_session(proj, sess);
             // Recompute estimate with actual tool definitions so the toolbar
             // meter matches the pre-flight check from the start.
@@ -154,8 +168,17 @@ impl eframe::App for AutocodeApp {
             }
         }
 
-        // Flush any pending message writes to disk (rate-limited).
-        self.state.flush_pending_writes(false);
+        // Send pending message writes to the background persistence thread.
+        // Path is resolved at send time so directory renames don't orphan messages.
+        let batches = self.state.drain_pending_writes();
+        for (dir, msgs) in batches {
+            self.persistence.send(
+                autocode_core::persistence::PersistenceCommand::AppendMessages {
+                    dir,
+                    messages: msgs,
+                },
+            );
+        }
 
         // Periodically check for sessions deleted from disk while the app is
         // running. Disk is the source of truth — purge anything missing.
@@ -268,6 +291,10 @@ impl eframe::App for AutocodeApp {
                 let _ = autocode_core::session_storage::ensure_project_dirs(
                     self.state.projects.last().unwrap(),
                 );
+                // Persist project identity to disk so it survives restarts.
+                if let Some(proj) = self.state.projects.last() {
+                    let _ = autocode_core::session_storage::save_project_identity(proj);
+                }
                 autocode_core::session_storage::switch_to_project(&mut self.state, &id);
                 self.state.show_explorer = true;
                 self.prev_session_id = self.state.active_session_id.clone();
@@ -349,8 +376,17 @@ impl eframe::App for AutocodeApp {
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        // Flush all pending writes so auto-save captures the latest metadata.
-        self.state.flush_pending_writes(true);
+        // Flush pending message writes to the persistence thread and await completion.
+        let batches = self.state.drain_pending_writes();
+        for (dir, msgs) in batches {
+            self.persistence.send(
+                autocode_core::persistence::PersistenceCommand::AppendMessages {
+                    dir,
+                    messages: msgs,
+                },
+            );
+        }
+        self.persistence.flush();
         {
             // Sync current session state into the active session before saving.
             let prov_label = self.state.active_provider.clone();
@@ -394,8 +430,16 @@ impl eframe::App for AutocodeApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        // Flush all pending message writes to disk before shutdown.
-        self.state.flush_pending_writes(true);
+        // Flush all pending message writes to the persistence thread before shutdown.
+        let batches = self.state.drain_pending_writes();
+        for (dir, msgs) in batches {
+            self.persistence.send(
+                autocode_core::persistence::PersistenceCommand::AppendMessages {
+                    dir,
+                    messages: msgs,
+                },
+            );
+        }
 
         for runtime in self.runtimes.values_mut() {
             runtime.drain();
@@ -424,6 +468,9 @@ impl eframe::App for AutocodeApp {
             let _ = autocode_core::session_storage::save_project_meta(proj, &meta);
         }
         self.save_sessions();
+
+        // Flush and shut down the persistence thread.
+        self.persistence.flush();
 
         std::thread::yield_now();
 

@@ -5,6 +5,48 @@
 use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
 
+// -- LRU Path Cache -----------------------------------------------------------
+
+const PATH_CACHE_MAX: usize = 500;
+
+/// A simple LRU cache for resolved file paths.
+/// Evicts the oldest entry when the capacity is exceeded.
+struct PathCache {
+    map: std::collections::HashMap<String, std::path::PathBuf>,
+    order: std::collections::VecDeque<String>,
+}
+
+impl PathCache {
+    fn new() -> Self {
+        Self {
+            map: std::collections::HashMap::new(),
+            order: std::collections::VecDeque::new(),
+        }
+    }
+
+    fn insert(&mut self, key: String, value: std::path::PathBuf) {
+        if self.map.len() >= PATH_CACHE_MAX && !self.map.contains_key(&key) {
+            if let Some(oldest) = self.order.pop_front() {
+                self.map.remove(&oldest);
+            }
+        }
+        if !self.map.contains_key(&key) {
+            self.order.push_back(key.clone());
+        }
+        self.map.insert(key, value);
+    }
+}
+
+impl autocode_core::helpers::PathCacheTrait for PathCache {
+    fn get_path(&self, key: &str) -> Option<std::path::PathBuf> {
+        self.map.get(key).cloned()
+    }
+
+    fn insert_path(&mut self, key: String, value: std::path::PathBuf) {
+        self.insert(key, value);
+    }
+}
+
 use crate::{
     helpers,
     provider::{
@@ -355,7 +397,7 @@ pub struct ChatRuntime {
     pub status: String,
     pub active_session_id: Option<String>,
     tool_rx: Option<Receiver<Vec<ToolResult>>>,
-    path_cache: std::collections::HashMap<String, std::path::PathBuf>,
+    path_cache: PathCache,
     pending_tool_calls: Vec<ToolCall>,
     assistant_tool_calls_json: Option<serde_json::Value>,
     provider_error: Option<String>,
@@ -404,7 +446,7 @@ impl Default for ChatRuntime {
             status: "Ready".to_string(),
             active_session_id: None,
             tool_rx: None,
-            path_cache: std::collections::HashMap::new(),
+            path_cache: PathCache::new(),
             pending_tool_calls: Vec::new(),
             assistant_tool_calls_json: None,
             provider_error: None,
@@ -1006,6 +1048,37 @@ pub fn update_all(state: &mut AppState, runtimes: &mut HashMap<String, ChatRunti
 
 // -- Stream polling ------------------------------------------------------------
 
+// -- Buffer size caps --------------------------------------------------------
+
+const MAX_RESPONSE_SIZE: usize = 1024 * 1024; // 1MB cap
+const MAX_REASONING_SIZE: usize = 512 * 1024; // 512KB cap
+
+fn append_to_pending(pending_response: &mut String, text: &str) {
+    let remaining = MAX_RESPONSE_SIZE.saturating_sub(pending_response.len());
+    if remaining > 0 {
+        pending_response.push_str(&text[..text.len().min(remaining)]);
+    }
+    if pending_response.len() >= MAX_RESPONSE_SIZE {
+        pending_response.truncate(MAX_RESPONSE_SIZE);
+        if !pending_response.ends_with("[Response truncated due to size limit]") {
+            pending_response.push_str("\n[Response truncated due to size limit]");
+        }
+    }
+}
+
+fn append_to_reasoning(reasoning_buf: &mut String, text: &str) {
+    let remaining = MAX_REASONING_SIZE.saturating_sub(reasoning_buf.len());
+    if remaining > 0 {
+        reasoning_buf.push_str(&text[..text.len().min(remaining)]);
+    }
+    if reasoning_buf.len() >= MAX_REASONING_SIZE {
+        reasoning_buf.truncate(MAX_REASONING_SIZE);
+        if !reasoning_buf.ends_with("[Reasoning truncated due to size limit]") {
+            reasoning_buf.push_str("\n[Reasoning truncated due to size limit]");
+        }
+    }
+}
+
 fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
     let stream_idle_timeout_secs = state.stream_idle_timeout_secs;
 
@@ -1023,7 +1096,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
         match rx.try_recv() {
             Ok(ProviderEvent::Delta(text)) => {
                 runtime.net_status.bytes += text.len() as u64;
-                runtime.pending_response.push_str(&text);
+                append_to_pending(&mut runtime.pending_response, &text);
                 runtime.last_delta_time = Some(std::time::Instant::now());
                 got_something = true;
                 events_this_frame += 1;
@@ -1033,7 +1106,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
             }
             Ok(ProviderEvent::Reasoning(text)) => {
                 runtime.net_status.bytes += text.len() as u64;
-                runtime.reasoning_buf.push_str(&text);
+                append_to_reasoning(&mut runtime.reasoning_buf, &text);
                 runtime.last_delta_time = Some(std::time::Instant::now());
                 got_something = true;
             }
@@ -1165,14 +1238,27 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
             if is_stream_drop && has_partial {
                 // Save partial response for continuation on retry.
                 // Append to any existing backup in case of multiple drops.
+                const MAX_BACKUP_SIZE: usize = 128 * 1024; // 128KB total cap
+                let new_partial = std::mem::take(&mut runtime.pending_response);
                 if !runtime.partial_response_backup.is_empty() {
-                    if runtime.partial_response_backup.len() < 64 * 1024 {
-                        runtime
-                            .partial_response_backup
-                            .push_str(&runtime.pending_response);
+                    let current_len = runtime.partial_response_backup.len();
+                    let new_len = new_partial.len();
+                    if current_len + new_len <= MAX_BACKUP_SIZE {
+                        runtime.partial_response_backup.push_str(&new_partial);
+                    } else {
+                        // Make room by truncating existing backup if needed
+                        if current_len > MAX_BACKUP_SIZE / 2 {
+                            runtime.partial_response_backup.truncate(MAX_BACKUP_SIZE / 2);
+                            runtime.partial_response_backup.push_str("\n[...truncated...]");
+                        }
+                        let available = MAX_BACKUP_SIZE.saturating_sub(runtime.partial_response_backup.len());
+                        if available > 0 {
+                            runtime.partial_response_backup.push_str(&new_partial[..available.min(new_partial.len())]);
+                        }
                     }
                 } else {
-                    runtime.partial_response_backup = std::mem::take(&mut runtime.pending_response);
+                    let available = MAX_BACKUP_SIZE.min(new_partial.len());
+                    runtime.partial_response_backup.push_str(&new_partial[..available]);
                 }
                 runtime.pending_response.clear();
                 runtime.pending_tool_calls.clear();
@@ -1534,7 +1620,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 let (tx, rx) = std::sync::mpsc::channel::<Vec<ToolResult>>();
                 runtime.tool_rx = Some(rx);
 
-                let mut path_cache = std::collections::HashMap::new();
+                let mut path_cache = PathCache::new();
                 std::mem::swap(&mut path_cache, &mut runtime.path_cache);
 
                 let pr_clone = root.clone();
@@ -2563,13 +2649,14 @@ fn build_tool_meta(tc: &ToolCall, result: &str, duration_ms: u64) -> ToolMeta {
 fn execute_tool_with_cache(
     tc: &ToolCall,
     project_root: &str,
-    path_cache: &mut std::collections::HashMap<String, std::path::PathBuf>,
+    path_cache: &mut PathCache,
     allow_escape: bool,
     ctx_used: usize,
     ctx_max: usize,
     max_output: usize,
     session_named: bool,
 ) -> String {
+    use autocode_core::helpers::{resolve_path_cached_trait, resolve_path_write_cached_trait};
     let args: serde_json::Value =
         serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
     match tc.name.as_str() {
@@ -2579,7 +2666,7 @@ fn execute_tool_with_cache(
                 None => return "Error: missing 'path' argument".to_string(),
             };
             let path =
-                core_helpers::resolve_path_cached(raw_path, project_root, path_cache, allow_escape);
+                resolve_path_cached_trait(raw_path, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&path) {
                 return core_helpers::blocked_error(raw_path);
             }
@@ -2647,7 +2734,7 @@ fn execute_tool_with_cache(
                 None => return "Error: missing 'path' argument".to_string(),
             };
             let path =
-                core_helpers::resolve_path_cached(raw_path, project_root, path_cache, allow_escape);
+                resolve_path_cached_trait(raw_path, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&path) {
                 return core_helpers::blocked_error(raw_path);
             }
@@ -2701,7 +2788,7 @@ fn execute_tool_with_cache(
                     None => continue,
                 };
                 let path =
-                    core_helpers::resolve_path_cached(raw, project_root, path_cache, allow_escape);
+                    resolve_path_cached_trait(raw, project_root, path_cache, allow_escape);
                 if core_helpers::is_blocked_path(&path) {
                     out.push_str(&core_helpers::blocked_error(raw));
                     out.push_str("\n---\n");
@@ -2730,7 +2817,7 @@ fn execute_tool_with_cache(
                 None => return "Error: missing 'path' argument".to_string(),
             };
             let content = args["content"].as_str().unwrap_or("");
-            let path = core_helpers::resolve_path_write_cached(
+            let path = resolve_path_write_cached_trait(
                 raw_path,
                 project_root,
                 path_cache,
@@ -2757,7 +2844,7 @@ fn execute_tool_with_cache(
                 None => return "Error: missing 'path' argument".to_string(),
             };
             let path =
-                core_helpers::resolve_path_cached(raw_path, project_root, path_cache, allow_escape);
+                resolve_path_cached_trait(raw_path, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&path) {
                 return core_helpers::blocked_error(raw_path);
             }
@@ -2788,7 +2875,7 @@ fn execute_tool_with_cache(
         "project_tree" => {
             let raw_path = args["path"].as_str().unwrap_or(project_root);
             let path =
-                core_helpers::resolve_path_cached(raw_path, project_root, path_cache, allow_escape);
+                resolve_path_cached_trait(raw_path, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&path) {
                 return core_helpers::blocked_error(raw_path);
             }
@@ -2816,7 +2903,7 @@ fn execute_tool_with_cache(
                 Some(p) => p,
                 None => return "Error: missing 'path' argument".to_string(),
             };
-            let path = core_helpers::resolve_path_write_cached(
+            let path = resolve_path_write_cached_trait(
                 raw_path,
                 project_root,
                 path_cache,
@@ -2849,11 +2936,11 @@ fn execute_tool_with_cache(
                 None => return "Error: missing 'to' argument".to_string(),
             };
             let from =
-                core_helpers::resolve_path_cached(raw_from, project_root, path_cache, allow_escape);
+                resolve_path_cached_trait(raw_from, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&from) {
                 return core_helpers::blocked_error(raw_from);
             }
-            let to = core_helpers::resolve_path_write_cached(
+            let to = resolve_path_write_cached_trait(
                 raw_to,
                 project_root,
                 path_cache,
@@ -2884,7 +2971,7 @@ fn execute_tool_with_cache(
                 Some(p) => p,
                 None => return "Error: missing 'path' argument".to_string(),
             };
-            let path = core_helpers::resolve_path_write_cached(
+            let path = resolve_path_write_cached_trait(
                 raw_path,
                 project_root,
                 path_cache,
@@ -2905,7 +2992,7 @@ fn execute_tool_with_cache(
                 None => return "Error: missing 'pattern' argument".to_string(),
             };
             let search_root = args["path"].as_str().unwrap_or(project_root);
-            let search_path = core_helpers::resolve_path_cached(
+            let search_path = resolve_path_cached_trait(
                 search_root,
                 project_root,
                 path_cache,
@@ -2943,7 +3030,7 @@ fn execute_tool_with_cache(
             let old_text = helpers::strip_line_numbers(raw_old_text);
             let new_text = helpers::strip_line_numbers(raw_new_text);
 
-            let path = core_helpers::resolve_path_write_cached(
+            let path = resolve_path_write_cached_trait(
                 raw_path,
                 project_root,
                 path_cache,
@@ -3012,7 +3099,7 @@ fn execute_tool_with_cache(
             let end_line = args["end_line"].as_u64().unwrap_or(0) as usize;
             let new_text = args["new_text"].as_str().unwrap_or("");
 
-            let path = core_helpers::resolve_path_write_cached(
+            let path = resolve_path_write_cached_trait(
                 raw_path,
                 project_root,
                 path_cache,
@@ -3262,7 +3349,7 @@ fn execute_tool_with_cache(
                 args["path"]
                     .as_str()
                     .map(|p| {
-                        core_helpers::resolve_path_cached(p, project_root, path_cache, allow_escape)
+                        resolve_path_cached_trait(p, project_root, path_cache, allow_escape)
                     })
                     .unwrap_or_else(|| std::path::PathBuf::from(&project_root)),
             );

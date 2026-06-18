@@ -419,6 +419,56 @@ pub fn resolve_path_write_cached(
     p
 }
 
+/// Trait for path cache types that can be used with resolve_path_cached.
+/// Implemented for both HashMap (legacy) and PathCache (LRU-capped).
+pub trait PathCacheTrait {
+    fn get_path(&self, key: &str) -> Option<std::path::PathBuf>;
+    fn insert_path(&mut self, key: String, value: std::path::PathBuf);
+}
+
+impl PathCacheTrait for std::collections::HashMap<String, std::path::PathBuf> {
+    fn get_path(&self, key: &str) -> Option<std::path::PathBuf> {
+        self.get(key).cloned()
+    }
+    fn insert_path(&mut self, key: String, value: std::path::PathBuf) {
+        cache_insert(self, key, value);
+    }
+}
+
+/// Resolve a path using a cache that implements PathCacheTrait.
+#[must_use]
+pub fn resolve_path_cached_trait<C: PathCacheTrait>(
+    raw: &str,
+    project_root: &str,
+    cache: &mut C,
+    allow_escape: bool,
+) -> std::path::PathBuf {
+    let key = format!("r:{}:{}", project_root, raw);
+    if let Some(p) = cache.get_path(&key) {
+        return p;
+    }
+    let p = resolve_path(raw, project_root, allow_escape);
+    cache.insert_path(key, p.clone());
+    p
+}
+
+/// Resolve a write path using a cache that implements PathCacheTrait.
+#[must_use]
+pub fn resolve_path_write_cached_trait<C: PathCacheTrait>(
+    raw: &str,
+    project_root: &str,
+    cache: &mut C,
+    allow_escape: bool,
+) -> std::path::PathBuf {
+    let key = format!("w:{}:{}", project_root, raw);
+    if let Some(p) = cache.get_path(&key) {
+        return p;
+    }
+    let p = resolve_path_write(raw, project_root, allow_escape);
+    cache.insert_path(key, p.clone());
+    p
+}
+
 /// Check whether a path is blocked by traversal detection.
 /// Returns true if the path contains `..` segments that would escape the project root.
 #[must_use]

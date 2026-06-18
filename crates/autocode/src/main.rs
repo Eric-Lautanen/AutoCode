@@ -14,6 +14,14 @@ fn main() -> eframe::Result {
     let data_dir = exe_dir.join("AutoCode_data");
     let _ = autocode_core::fsutil::create_dir_all(&data_dir);
 
+    // Seed providers.json from baked-in assets on first launch.
+    // Once on disk, the app always loads from there so users can add/edit providers.
+    let providers_dst = data_dir.join("providers.json");
+    if !providers_dst.exists() {
+        let providers_src = include_str!("../../../assets/providers.json");
+        let _ = std::fs::write(&providers_dst, providers_src);
+    }
+
     rustls::crypto::ring::default_provider()
         .install_default()
         .expect("Failed to install rustls crypto provider");

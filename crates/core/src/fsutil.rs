@@ -1,12 +1,32 @@
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+
+thread_local! {
+    static TEST_EXE_DIR: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
 
 /// Returns the directory containing the current executable.
 /// Falls back to the current working directory if the exe path is unavailable.
+/// Can be overridden with `set_exe_dir_for_test` (thread-local for test isolation).
 pub fn exe_dir() -> PathBuf {
+    let tl_override = TEST_EXE_DIR.with(|cell| cell.borrow().clone());
+    if let Some(dir) = tl_override {
+        return dir;
+    }
     std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|x| x.to_path_buf()))
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+}
+
+/// Override `exe_dir()` for testing (thread-local). Creates `AutoCode_data`
+/// directory. Call before each test that needs isolated storage.
+pub fn set_exe_dir_for_test(dir: &Path) {
+    TEST_EXE_DIR.with(|cell| {
+        *cell.borrow_mut() = Some(dir.to_path_buf());
+    });
+    let data_dir = dir.join("AutoCode_data");
+    let _ = std::fs::create_dir_all(&data_dir);
 }
 
 pub fn extended_path(path: &Path) -> PathBuf {

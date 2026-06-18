@@ -4,7 +4,7 @@
 use crate::helpers;
 use autocode_ai::provider;
 use autocode_core::{
-    state::{AppState, Project, Session, ThinkingApi},
+    provider_file, state::{AppState, Project, Session, ThinkingApi},
     theme::{Palette, ROUND_MD, ROUND_SM},
 };
 use egui::{
@@ -57,6 +57,7 @@ pub fn show_window(ctx: &egui::Context, state: &mut AppState, settings: &mut Set
         .resizable(true)
         .default_size([700.0, 720.0])
         .min_size([480.0, 340.0])
+        .max_size([750.0, f32::INFINITY])
         .frame(
             Frame::NONE
                 .fill(Palette::BG_BASE)
@@ -163,19 +164,23 @@ pub fn show_window(ctx: &egui::Context, state: &mut AppState, settings: &mut Set
                 .show(ui, |ui| {
                     Frame::NONE
                         .inner_margin(Margin::same(16))
-                        .show(ui, |ui| match settings.tab {
+                        .show(ui, |ui| {
+                            ui.set_max_width(680.0);
+                            match settings.tab {
                             Tab::Providers => show_providers(ui, state, settings),
                             Tab::Projects => show_projects(ui, state),
                             Tab::Prompt => show_prompt(ui, state),
                             Tab::Session => show_session_settings(ui, state),
                             Tab::Timeouts => show_timeouts(ui, state),
                             Tab::About => show_about(ui, state),
+                            }
                         });
                 });
         });
 
     if request_close {
         state.settings_open = false;
+        let _ = provider_file::save_providers_file(&state.providers);
     }
     if !state.settings_open {
         // Notify the chat input that a popup just closed so it can reclaim focus.
@@ -248,7 +253,6 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
     ui.add_space(8.0);
 
     let mut keys: Vec<String> = state.providers.keys().cloned().collect();
-    // Active provider always first.
     keys.sort_by(|a, b| {
         let a_active = state.active_provider == *a;
         let b_active = state.active_provider == *b;
@@ -262,6 +266,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
     let mut to_remove: Vec<String> = Vec::new();
     let mut set_active_key: Option<(String, String)> = None;
     let mut disable_switch_key: Option<String> = None;
+    let mut provider_dirty = false;
 
     for key in keys {
         ui.push_id(("provider", &key), |ui| {
@@ -287,7 +292,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                 .stroke(egui::Stroke::new(1.0, border_color))
                 .inner_margin(Margin::same(12))
                 .show(ui, |ui| {
-                    // Provider header row.
+                    // ── Header ─────────────────────────────────────────
                     ui.horizontal(|ui| {
                         ui.label(
                             RichText::new(p.kind.label())
@@ -338,65 +343,76 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
 
                     ui.add_space(8.0);
 
-                    // Fields in a 2-column grid for alignment.
-                    Grid::new(format!("provider_grid_{}", key))
-                        .num_columns(2)
-                        .spacing([12.0, 6.0])
-                        .min_col_width(60.0)
+                    // ── Connection ─────────────────────────────────────
+                    CollapsingHeader::new("Connection")
+                        .id_salt(format!("conn_{}", key))
+                        .default_open(true)
                         .show(ui, |ui| {
-                            // API Key.
-                            ui.label(helpers::field_label("API Key"));
-                            let mut key_buf = p.api_key.clone_inner();
-                            if ui
-                                .add(
-                                    TextEdit::singleline(&mut key_buf)
-                                        .id(egui::Id::new(("provider_api_key", &key)))
-                                        .password(true)
-                                        .desired_width(f32::INFINITY)
-                                        .hint_text("sk-..."),
-                                )
-                                .changed()
-                            {
-                                if !key_buf.is_empty() && !p.enabled {
-                                    p.enabled = true;
-                                }
-                                p.api_key = autocode_core::state::SecretString::new(key_buf);
-                            }
-                            ui.end_row();
+                            Grid::new(format!("conn_grid_{}", key))
+                                .num_columns(2)
+                                .spacing([12.0, 6.0])
+                                .min_col_width(60.0)
+                                .show(ui, |ui| {
+                                    ui.label(helpers::field_label("API Key"));
+                                    let mut key_buf = p.api_key.clone_inner();
+                                    let resp = ui.add(
+                                            TextEdit::singleline(&mut key_buf)
+                                                .id(egui::Id::new(("provider_api_key", &key)))
+                                                .password(true)
+                                                .desired_width(ui.available_width())
+                                                .hint_text("sk-..."),
+                                    );
+                                    if resp.changed() {
+                                        if !key_buf.is_empty() && !p.enabled {
+                                            p.enabled = true;
+                                        }
+                                        p.api_key = autocode_core::state::SecretString::new(key_buf);
+                                    }
+                                    if resp.lost_focus() {
+                                        provider_dirty = true;
+                                    }
+                                    ui.end_row();
 
-                            // Base URL.
-                            ui.label(helpers::field_label("Base URL"));
-                            let mut url = p.base_url.clone();
-                            if ui
-                                .add(
-                                    TextEdit::singleline(&mut url)
-                                        .id(egui::Id::new(("provider_base_url", &key)))
-                                        .desired_width(f32::INFINITY),
-                                )
-                                .changed()
-                            {
-                                p.base_url = url;
-                            }
-                            ui.end_row();
+                                    ui.label(helpers::field_label("Base URL"));
+                                    let mut url = p.base_url.clone();
+                                    if ui
+                                        .add(
+                                            TextEdit::singleline(&mut url)
+                                                .id(egui::Id::new(("provider_base_url", &key)))
+                                                .desired_width(ui.available_width()),
+                                        )
+                                        .changed()
+                                    {
+                                        p.base_url = url;
+                                    }
+                                    ui.end_row();
 
-                            // Models List URL.
-                            ui.label(helpers::field_label("Models URL"));
-                            let mut models_url = p.models_list_url.clone();
-                            if ui
-                                .add(
-                                    TextEdit::singleline(&mut models_url)
-                                        .id(egui::Id::new(("provider_models_url", &key)))
-                                        .desired_width(f32::INFINITY),
-                                )
-                                .changed()
-                            {
-                                p.models_list_url = models_url;
-                            }
-                            ui.end_row();
+                                    ui.label(helpers::field_label("Models URL"));
+                                    let mut models_url = p.models_list_url.clone();
+                                    if ui
+                                        .add(
+                                            TextEdit::singleline(&mut models_url)
+                                                .id(egui::Id::new(("provider_models_url", &key)))
+                                                .desired_width(ui.available_width()),
+                                        )
+                                        .changed()
+                                    {
+                                        p.models_list_url = models_url;
+                                    }
+                                    ui.end_row();
+                                });
+                        });
 
-                            // Model.
-                            ui.label(helpers::field_label("Model"));
+                    ui.add_space(6.0);
+
+                    // ── Model ──────────────────────────────────────────
+                    CollapsingHeader::new("Model")
+                        .id_salt(format!("model_header_{}", key))
+                        .default_open(true)
+                        .show(ui, |ui| {
+                            // Active model.
                             ui.horizontal(|ui| {
+                                ui.label(helpers::field_label("Active Model"));
                                 let mut model = p.model.clone();
                                 let input_w = ui.available_width() - 100.0;
                                 if ui
@@ -414,60 +430,86 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                 let key_for_fetch = key.clone();
                                 if ui
                                     .button("Fetch")
-                                    .on_hover_text("Fetch available models for this provider")
+                                    .on_hover_text("Fetch available models from API")
                                     .clicked()
                                 {
                                     let models = provider::fetch_models(&p_clone);
                                     let status = format!("{} models", models.len());
-                                    settings
-                                        .fetched_models
-                                        .insert(key_for_fetch.clone(), models);
+                                    settings.fetched_models.insert(key_for_fetch.clone(), models);
                                     settings.fetch_status.insert(key_for_fetch, status);
                                 }
                             });
-                            ui.end_row();
-                            // Fetched model dropdown — separate row so it never pushes
-                            // the window wider.
+
+                            let mut saved = std::mem::take(&mut p.saved_models);
+
+                            // Fetched model list.
                             if let Some(models) = settings.fetched_models.get(&key)
                                 && !models.is_empty()
                             {
-                                ui.label("");
-                                ui.horizontal(|ui| {
-                                    let current_model = p.model.clone();
-                                    ui.set_max_width(260.0);
-                                    egui::ComboBox::from_id_salt(format!("model_list_{}", key))
-                                        .selected_text(&current_model)
-                                        .width(ui.available_width())
-                                        .show_ui(ui, |ui| {
-                                            for m in models.iter() {
-                                                ui.push_id(("model_sel", m), |ui| {
-                                                    if ui
-                                                        .selectable_label(*m == current_model, m)
-                                                        .clicked()
-                                                    {
-                                                        p.model = m.clone();
-                                                        p.fill_from_manifest();
-                                                    }
-                                                });
-                                            }
-                                        });
-                                    if let Some(status) = settings.fetch_status.get(&key) {
+                                ui.add_space(2.0);
+                                Frame::NONE
+                                    .fill(Palette::BG_SURFACE)
+                                    .corner_radius(ROUND_SM)
+                                    .inner_margin(Margin::same(6))
+                                    .show(ui, |ui| {
                                         ui.label(
-                                            RichText::new(status)
-                                                .size(10.0)
-                                                .color(Palette::TEXT_MUTED),
+                                            RichText::new("Fetched Models")
+                                                .size(10.5).color(Palette::TEXT_MUTED).strong(),
                                         );
-                                    }
-                                });
-                                ui.end_row();
+                                        ui.add_space(2.0);
+                                        let scroll_h = (models.len() as f32 * 24.0).min(150.0);
+                                        ScrollArea::vertical()
+                                            .id_salt(format!("fetch_scroll_{}", &key))
+                                            .max_height(scroll_h)
+                                            .show(ui, |ui| {
+                                                for m in models.iter() {
+                                                    let is_saved = saved.contains(m);
+                                                    let is_active = p.model == *m;
+                                                    ui.horizontal(|ui| {
+                                                        ui.label(
+                                                            RichText::new(m)
+                                                                .size(11.0)
+                                                                .color(if is_active { Palette::ACCENT } else { Palette::TEXT_PRIMARY })
+                                                                .monospace(),
+                                                        );
+                                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                            if is_saved {
+                                                                ui.label(
+                                                                    RichText::new("Saved")
+                                                                        .size(9.5).color(Palette::TEXT_MUTED),
+                                                                );
+                                                            } else if ui.small_button("+ Add").clicked() {
+                                                                saved.push(m.clone());
+                                                                let defs = autocode_core::state::model_or_safe(&p.kind, m);
+                                                                let entry = autocode_core::provider_file::ModelEntry {
+                                                                    id: m.clone(),
+                                                                    context_window: defs.context_window,
+                                                                    max_output_tokens: defs.max_output_tokens,
+                                                                    max_output_tokens_thinking: defs.max_output_tokens_thinking,
+                                                                    thinking_api: defs.thinking_api.clone(),
+                                                                    reasoning_efforts: defs.reasoning_efforts.clone(),
+                                                                    supports_cache_control: defs.supports_cache_control,
+                                                                    requests_per_hour: defs.requests_per_hour,
+                                                                    handoff_percent: p.handoff_percent,
+                                                                };
+                                                                let cm = p.models_config.get_or_insert_with(std::collections::HashMap::new);
+                                                                cm.insert(m.clone(), entry);
+                                                                provider_dirty = true;
+                                                            }
+                                                            if ui.small_button("Select").clicked() {
+                                                                p.model = m.clone();
+                                                                p.fill_from_manifest();
+                                                            }
+                                                        });
+                                                    });
+                                                }
+                                            });
+                                    });
                             }
 
-                            // Saved models list with add/remove.
-                            // Work on a local copy to avoid borrow conflicts with closures.
-                            let mut saved = std::mem::take(&mut p.saved_models);
-                            ui.label("");
+                            // Saved models.
+                            ui.add_space(4.0);
                             ui.horizontal(|ui| {
-                                ui.set_max_width(260.0);
                                 let model_count = saved.len();
                                 if model_count == 0 {
                                     ui.label(
@@ -482,231 +524,224 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                             .color(Palette::TEXT_MUTED),
                                     );
                                 }
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        if ui.small_button("+").clicked() {
-                                            saved.push(String::new());
-                                        }
-                                    },
-                                );
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if ui.small_button("+").clicked() {
+                                        saved.push(String::new());
+                                    }
+                                });
                             });
-                            ui.end_row();
                             if !saved.is_empty() {
                                 let mut remove_idx: Option<usize> = None;
                                 let len = saved.len();
+                                let model_col_w = ui.available_width() - 50.0;
                                 for i in 0..len {
                                     let name = saved[i].clone();
-                                    ui.label("");
-                                    ui.horizontal(|ui| {
-                                        let mut new_name = name.clone();
-                                        let resp = ui.add_sized(
-                                            egui::vec2(ui.available_width() - 40.0, 20.0),
-                                            TextEdit::singleline(&mut new_name)
-                                                .id(egui::Id::new(("saved_model", &key, i)))
-                                                .hint_text("model-name"),
-                                        );
-                                        if resp.changed() {
-                                            saved[i] = new_name;
-                                        }
-                                        if !name.is_empty() {
-                                            ui.label(
-                                                RichText::new("\u{2605}")
-                                                    .size(12.0)
-                                                    .color(Palette::WARNING),
+                                    let is_active = p.model == name;
+                                    let mut mc = p.models_config.as_ref()
+                                        .and_then(|m| m.get(&name)).cloned()
+                                        .unwrap_or_else(|| {
+                                            let defs = autocode_core::state::model_or_safe(&p.kind, &name);
+                                            autocode_core::provider_file::ModelEntry {
+                                                id: name.clone(),
+                                                context_window: defs.context_window,
+                                                max_output_tokens: defs.max_output_tokens,
+                                                max_output_tokens_thinking: defs.max_output_tokens_thinking,
+                                                thinking_api: defs.thinking_api.clone(),
+                                                reasoning_efforts: defs.reasoning_efforts.clone(),
+                                                supports_cache_control: defs.supports_cache_control,
+                                                requests_per_hour: defs.requests_per_hour,
+                                                handoff_percent: p.handoff_percent,
+                                            }
+                                        });
+                                    let mut cfg_changed = false;
+
+                                    ui.group(|ui| {
+                                        ui.horizontal(|ui| {
+                                            let mut new_name = name.clone();
+                                            let resp = ui.add_sized(
+                                                egui::vec2(model_col_w, 20.0),
+                                                TextEdit::singleline(&mut new_name)
+                                                    .id(egui::Id::new(("saved_model", &key, i)))
+                                                    .hint_text("model-name"),
                                             );
-                                        }
-                                        if ui.small_button("x").clicked() {
-                                            remove_idx = Some(i);
-                                        }
+                                            if resp.changed() {
+                                                saved[i] = new_name;
+                                            }
+                                            if !name.is_empty() {
+                                                if ui.small_button("\u{2605}").on_hover_text("Select this model").clicked() {
+                                                    p.model = name.clone();
+                                                    p.fill_from_manifest();
+                                                }
+                                            }
+                                            if ui.small_button("x").clicked() {
+                                                remove_idx = Some(i);
+                                            }
+                                        });
+
+                                        CollapsingHeader::new(
+                                            if is_active { "Advanced (active)" } else { "Advanced" }
+                                        )
+                                            .id_salt(format!("model_adv_{}_{}", &key, i))
+                                            .default_open(false)
+                                            .show(ui, |ui| {
+                                                Grid::new(format!("model_adv_grid_{}_{}", &key, i))
+                                                    .num_columns(2)
+                                                    .spacing([12.0, 6.0])
+                                                    .min_col_width(60.0)
+                                                    .show(ui, |ui| {
+                                                        ui.label(helpers::field_label("Context Window"));
+                                                        ui.horizontal(|ui| {
+                                                            let mut val = mc.context_window as i32;
+                                                            if ui.add(
+                                                                egui::DragValue::new(&mut val)
+                                                                    .speed(1000).range(1024..=2_000_000)
+                                                                    .suffix(" tokens"),
+                                                            ).changed() {
+                                                                mc.context_window = val.max(1024) as u32;
+                                                                if is_active { p.max_context_tokens = mc.context_window; }
+                                                                cfg_changed = true;
+                                                            }
+                                                        });
+                                                        ui.end_row();
+
+                                                        ui.label(helpers::field_label("Max Output"));
+                                                        ui.horizontal(|ui| {
+                                                            let mut val = mc.max_output_tokens as i32;
+                                                            if ui.add(
+                                                                egui::DragValue::new(&mut val)
+                                                                    .speed(1000).range(256..=2_000_000)
+                                                                    .suffix(" tokens"),
+                                                            ).changed() {
+                                                                mc.max_output_tokens = val.max(256) as u32;
+                                                                if is_active { p.max_output_tokens = mc.max_output_tokens; }
+                                                                cfg_changed = true;
+                                                            }
+                                                        });
+                                                        ui.end_row();
+
+                                                        ui.label(helpers::field_label("Max (Thinking)"));
+                                                        ui.horizontal(|ui| {
+                                                            let mut val = mc.max_output_tokens_thinking.unwrap_or(mc.max_output_tokens * 2) as i32;
+                                                            if ui.add(
+                                                                egui::DragValue::new(&mut val)
+                                                                    .speed(1000).range(256..=2_000_000)
+                                                                    .suffix(" tokens"),
+                                                            ).changed() {
+                                                                mc.max_output_tokens_thinking = Some(val.max(256) as u32);
+                                                                if is_active { p.max_output_tokens_thinking = val.max(256) as u32; }
+                                                                cfg_changed = true;
+                                                            }
+                                                        });
+                                                        ui.end_row();
+
+                                                        ui.label(helpers::field_label("Thinking API"));
+                                                        ui.horizontal(|ui| {
+                                                            let current_ta = autocode_core::state::parse_thinking_api(&mc.thinking_api);
+                                                            let current_label = current_ta.label();
+                                                            egui::ComboBox::from_id_salt(format!("th_api_{}_{}", &key, i))
+                                                                .selected_text(current_label)
+                                                                .width(ui.available_width())
+                                                                .show_ui(ui, |ui| {
+                                                                    for variant in ThinkingApi::variants() {
+                                                                        if ui.selectable_label(
+                                                                            current_ta == *variant,
+                                                                            variant.label(),
+                                                                        ).clicked() {
+                                                                            mc.thinking_api = variant.label().to_lowercase();
+                                                                            if is_active { p.thinking_api = variant.clone(); }
+                                                                            cfg_changed = true;
+                                                                        }
+                                                                    }
+                                                                });
+                                                        });
+                                                        ui.end_row();
+
+                                                        ui.label(helpers::field_label("Handoff"));
+                                                        ui.horizontal(|ui| {
+                                                            let mut pct = mc.handoff_percent as f32;
+                                                            ui.add(
+                                                                egui::Slider::new(&mut pct, 10.0..=95.0)
+                                                                    .step_by(5.0).show_value(false)
+                                                                    .trailing_fill(true),
+                                                            );
+                                                            let new_pct = pct as u8;
+                                                            mc.handoff_percent = new_pct;
+                                                            if is_active { p.handoff_percent = new_pct; }
+                                                            cfg_changed = true;
+                                                            ui.label(
+                                                                RichText::new(format!("{}%", new_pct))
+                                                                    .size(11.0).color(Palette::ACCENT).strong(),
+                                                            );
+                                                            let threshold = (mc.context_window as u64 * new_pct as u64) / 100;
+                                                            let threshold_fmt = if threshold >= 1_000_000 {
+                                                                format!("{:.1}M", threshold as f64 / 1_000_000.0)
+                                                            } else if threshold >= 1_000 {
+                                                                format!("{:.1}K", threshold as f64 / 1_000.0)
+                                                            } else { threshold.to_string() };
+                                                            ui.label(
+                                                                RichText::new(format!("@{} tokens", threshold_fmt))
+                                                                    .size(10.5).color(Palette::TEXT_MUTED),
+                                                            );
+                                                        });
+                                                        ui.end_row();
+
+                                                        ui.label(helpers::field_label("Rate Limit"));
+                                                        ui.horizontal(|ui| {
+                                                            let mut val = mc.requests_per_hour.unwrap_or(0) as i32;
+                                                            if ui.add(
+                                                                egui::DragValue::new(&mut val)
+                                                                    .speed(100).range(0..=1000000),
+                                                            ).changed() {
+                                                                mc.requests_per_hour = if val <= 0 { None } else { Some(val as u32) };
+                                                                if is_active { p.requests_per_hour = mc.requests_per_hour; }
+                                                                cfg_changed = true;
+                                                            }
+                                                            ui.label(
+                                                                RichText::new("req/hr (0 = unlimited)")
+                                                                    .size(10.5).color(Palette::TEXT_MUTED),
+                                                            );
+                                                        });
+                                                        ui.end_row();
+                                                    });
+                                            });
                                     });
-                                    ui.end_row();
+
+                                    if cfg_changed {
+                                        let config_map = p.models_config.get_or_insert_with(std::collections::HashMap::new);
+                                        config_map.insert(name, mc);
+                                    }
                                 }
                                 if let Some(idx) = remove_idx {
                                     saved.remove(idx);
                                 }
                             }
                             p.saved_models = saved;
-
-                            // Section separator.
-                            ui.label("");
-                            ui.horizontal(|ui| {
-                                ui.separator();
-                            });
-                            ui.end_row();
-
-                            // Context window.
-                            ui.label(helpers::field_label("Context Window"));
-                            ui.horizontal(|ui| {
-                                let mut val = p.max_context_tokens as i32;
-                                if ui
-                                    .add(
-                                        egui::DragValue::new(&mut val)
-                                            .speed(1000)
-                                            .range(1024..=2_000_000)
-                                            .suffix(" tokens"),
-                                    )
-                                    .changed()
-                                {
-                                    p.max_context_tokens = val.max(1024) as u32;
-                                }
-                            });
-                            ui.end_row();
-
-                            // Thinking API.
-                            ui.label(helpers::field_label("Thinking API"));
-                            ui.horizontal(|ui| {
-                                let current = p.thinking_api.label();
-                                egui::ComboBox::from_id_salt(format!("thinking_api_{}", key))
-                                    .selected_text(current)
-                                    .width(ui.available_width())
-                                    .show_ui(ui, |ui| {
-                                        for variant in ThinkingApi::variants() {
-                                            if ui
-                                                .selectable_label(
-                                                    p.thinking_api == *variant,
-                                                    variant.label(),
-                                                )
-                                                .clicked()
-                                            {
-                                                p.thinking_api = variant.clone();
-                                            }
-                                        }
-                                    });
-                            });
-                            ui.end_row();
-
-                            // Handoff percentage.
-                            ui.label(helpers::field_label("Handoff"));
-                            ui.horizontal(|ui| {
-                                let mut pct = p.handoff_percent as f32;
-                                ui.add(
-                                    egui::Slider::new(&mut pct, 10.0..=95.0)
-                                        .step_by(5.0)
-                                        .show_value(false)
-                                        .trailing_fill(true),
-                                );
-                                let new_pct = pct as u8;
-                                p.handoff_percent = new_pct;
-                                ui.label(
-                                    RichText::new(format!("{}%", new_pct))
-                                        .size(11.0)
-                                        .color(Palette::ACCENT)
-                                        .strong(),
-                                );
-                                let threshold =
-                                    (p.max_context_tokens as u64 * new_pct as u64) / 100;
-                                let threshold_fmt = if threshold >= 1_000_000 {
-                                    format!("{:.1}M", threshold as f64 / 1_000_000.0)
-                                } else if threshold >= 1_000 {
-                                    format!("{:.1}K", threshold as f64 / 1_000.0)
-                                } else {
-                                    threshold.to_string()
-                                };
-                                ui.label(
-                                    RichText::new(format!("@{} tokens", threshold_fmt))
-                                        .size(10.5)
-                                        .color(Palette::TEXT_MUTED),
-                                );
-                            });
-                            ui.end_row();
-
-                            // Allow project escape (access files outside project root).
-                            ui.label(helpers::field_label("Allow Outside Access"));
-                            ui.horizontal(|ui| {
-                                let mut val = p.allow_project_escape;
-                                if ui
-                                    .checkbox(&mut val, "")
-                                    .on_hover_text(
-                                        "When enabled, the AI can read/list/grep files \
-                                     anywhere on disk, not just inside the project folder. \
-                                     Write operations are still restricted to the project root \
-                                     unless you also disable the write-path check.",
-                                    )
-                                    .changed()
-                                {
-                                    p.allow_project_escape = val;
-                                }
-                                if val {
-                                    ui.label(
-                                        RichText::new("Enabled")
-                                            .size(11.0)
-                                            .color(Palette::WARNING)
-                                            .strong(),
-                                    );
-                                } else {
-                                    ui.label(
-                                        RichText::new("Restricted to project")
-                                            .size(11.0)
-                                            .color(Palette::TEXT_MUTED),
-                                    );
-                                }
-                            });
-                            ui.end_row();
-
-                            // Max output tokens.
-                            ui.label(helpers::field_label("Max Output"));
-                            ui.horizontal(|ui| {
-                                let mut val = p.max_output_tokens as i32;
-                                if ui
-                                    .add(
-                                        egui::DragValue::new(&mut val)
-                                            .speed(1000)
-                                            .range(256..=2_000_000)
-                                            .suffix(" tokens"),
-                                    )
-                                    .changed()
-                                {
-                                    p.max_output_tokens = val.max(256) as u32;
-                                }
-                            });
-                            ui.end_row();
-
-                            // Max output tokens when thinking is enabled.
-                            ui.label(helpers::field_label("Max Output (Thinking)"));
-                            ui.horizontal(|ui| {
-                                let mut val = p.max_output_tokens_thinking as i32;
-                                if ui
-                                    .add(
-                                        egui::DragValue::new(&mut val)
-                                            .speed(1000)
-                                            .range(256..=2_000_000)
-                                            .suffix(" tokens"),
-                                    )
-                                    .changed()
-                                {
-                                    p.max_output_tokens_thinking = val.max(256) as u32;
-                                }
-                            });
-                            ui.end_row();
-
-                            // Requests per hour rate limit.
-                            ui.label(helpers::field_label("Rate Limit"));
-                            ui.horizontal(|ui| {
-                                let mut val = p.requests_per_hour.unwrap_or(0) as i32;
-                                if ui
-                                    .add(
-                                        egui::DragValue::new(&mut val)
-                                            .speed(100)
-                                            .range(0..=1000000),
-                                    )
-                                    .changed()
-                                {
-                                    p.requests_per_hour =
-                                        if val <= 0 { None } else { Some(val as u32) };
-                                }
-                                ui.label(
-                                    RichText::new("req/hr (0 = unlimited)")
-                                        .size(10.5)
-                                        .color(Palette::TEXT_MUTED),
-                                );
-                            });
-                            ui.end_row();
                         });
+
+                    // Provider-level Outside Access toggle.
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        let mut val = p.allow_project_escape;
+                        if ui.checkbox(&mut val, "")
+                            .on_hover_text(
+                                "When enabled, the AI can read/list/grep files \
+                                 anywhere on disk, not just inside the project folder.",
+                            ).changed()
+                        {
+                            p.allow_project_escape = val;
+                        }
+                        if val {
+                            ui.label(RichText::new("Outside Access: Enabled")
+                                .size(11.0).color(Palette::WARNING).strong());
+                        } else {
+                            ui.label(RichText::new("Outside Access: Restricted to project")
+                                .size(11.0).color(Palette::TEXT_MUTED));
+                        }
+                    });
                 });
 
             ui.add_space(8.0);
-        }); // end push_id("provider", key)
+        });
     }
 
     for key in to_remove {
@@ -714,6 +749,9 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
         if state.active_provider == key {
             state.active_provider = state.providers.keys().next().cloned().unwrap_or_default();
         }
+    }
+    if provider_dirty {
+        let _ = provider_file::save_providers_file(&state.providers);
     }
     if let Some((label, model)) = set_active_key {
         state.active_provider = label.clone();
@@ -875,7 +913,7 @@ fn show_projects(ui: &mut egui::Ui, state: &mut AppState) {
                 .iter()
                 .find(|p| Some(&p.id) == s.project_id.as_ref())
             {
-                let _ = autocode_core::session_storage::save_session(proj, s);
+                let _ = autocode_core::session_storage::save_session_meta(proj, s);
             }
         }
     }
@@ -1022,7 +1060,7 @@ fn show_prompt(ui: &mut egui::Ui, state: &mut AppState) {
     ui.add(
         TextEdit::multiline(&mut state.system_prompt)
             .desired_rows(20)
-            .desired_width(f32::INFINITY)
+            .desired_width(ui.available_width())
             .font(egui::TextStyle::Monospace)
             .text_color(Palette::TEXT_PRIMARY),
     );
@@ -1060,7 +1098,7 @@ fn show_prompt(ui: &mut egui::Ui, state: &mut AppState) {
     ui.add(
         TextEdit::multiline(&mut state.handoff_trigger_prompt)
             .desired_rows(6)
-            .desired_width(f32::INFINITY)
+            .desired_width(ui.available_width())
             .font(egui::TextStyle::Monospace)
             .text_color(Palette::TEXT_PRIMARY),
     );

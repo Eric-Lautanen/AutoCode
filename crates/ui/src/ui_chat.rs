@@ -511,7 +511,7 @@ fn load_new_session(state: &mut AppState, panel_state: &mut ChatPanelState) -> O
                 .iter()
                 .find(|p| Some(&p.id) == new_sess.project_id.as_ref())
         {
-            if new_sess.messages.is_empty() && new_sess.next_message_id > 1 {
+            if new_sess.next_message_id > 1 {
                 let found = autocode_core::session_storage::load_session(new_proj, new_sess);
                 if !found {
                     purge_on_missing = Some(new_id.clone());
