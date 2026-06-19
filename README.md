@@ -4,7 +4,7 @@
 
 Write code, run commands, edit files, search your codebase, and iterate — all through a chat interface where the AI operates as your autonomous agent. Not a harness or scaffold — a single self-contained binary.
 
-> **[v0.1.1 Pre-Release](https://github.com/Eric-Lautanen/AutoCode/releases/tag/v0.1.1)** — Download the latest build for Windows, Linux, and macOS
+> **[v0.2.0 Pre-Release](https://github.com/Eric-Lautanen/AutoCode/releases/tag/v0.2.0)** — Download the latest build for Windows, Linux, and macOS
 
 ![Screenshot](assets/screenshot.png)
 
