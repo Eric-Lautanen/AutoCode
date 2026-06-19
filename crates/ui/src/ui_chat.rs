@@ -1503,7 +1503,7 @@ struct DiffLine<'a> {
 fn lcs_diff_lines<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<DiffLine<'a>> {
     let n = old.len();
     let m = new.len();
-    let mut table = vec![0u16; (n + 1) * (m + 1)];
+    let mut table = vec![0u32; (n + 1) * (m + 1)];
     let idx = |i: usize, j: usize| i * (m + 1) + j;
 
     for i in 0..n {
@@ -1779,7 +1779,9 @@ fn render_inline(ui: &mut egui::Ui, line: &str, word_wrap: bool) {
         ui.label(job);
         return;
     }
-    if let Some(rest) = line.strip_prefix(|c: char| c.is_ascii_digit())
+    let num_len = line.chars().take_while(|c| c.is_ascii_digit()).count();
+    if num_len > 0
+        && let Some(rest) = line.get(num_len..)
         && let Some(rest) = rest.strip_prefix(". ")
     {
         let num: String = line.chars().take_while(|c| c.is_ascii_digit()).collect();
@@ -1910,9 +1912,9 @@ fn show_input_row(
 
                     // Enter sends, Shift+Enter inserts a newline.
                     // Ctrl+Enter is a no-op (not a send shortcut).
-                    let enter_pressed = ui.input(|i| i.key_pressed(Key::Enter))
-                        && !ui.input(|i| i.modifiers.shift)
-                        && !ui.input(|i| i.modifiers.ctrl);
+                    let enter_pressed = ui.input(|i| {
+                        i.key_pressed(Key::Enter) && !i.modifiers.shift && !i.modifiers.ctrl
+                    });
                     let send_shortcut = enter_pressed && send_enabled && !busy;
 
                     // Focus management: only focus the input when the user clicks it.

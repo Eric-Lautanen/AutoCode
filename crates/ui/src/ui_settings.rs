@@ -352,6 +352,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                 .clicked()
                             {
                                 p.enabled = !p.enabled;
+                                provider_dirty = true;
                                 if !p.enabled && is_active {
                                     disable_switch_key = Some(key.clone());
                                 }
@@ -846,6 +847,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
 
     for key in to_remove {
         state.providers.remove(&key);
+        provider_dirty = true;
         if state.active_provider == key {
             state.active_provider = state.providers.keys().next().cloned().unwrap_or_default();
         }
@@ -1417,6 +1419,8 @@ fn show_timeouts(ui: &mut egui::Ui, state: &mut AppState) {
                             .speed(30.0)
                             .range(60..=3600),
                     );
+                    state.shell_timeout_secs =
+                        state.shell_timeout_secs.min(state.shell_timeout_max_secs);
                     ui.label(RichText::new("s").size(10.5).color(Palette::TEXT_MUTED));
                     ui.end_row();
                 });
@@ -1441,6 +1445,7 @@ fn show_timeouts(ui: &mut egui::Ui, state: &mut AppState) {
         state.shell_timeout_max_secs = autocode_core::helpers::default_shell_timeout_max();
         state.max_retries = autocode_core::helpers::default_max_retries();
         state.max_retry_wait_secs = autocode_core::helpers::default_max_retry_wait();
+        state.tool_timeout_secs = autocode_core::helpers::default_tool_timeout();
     }
 }
 
