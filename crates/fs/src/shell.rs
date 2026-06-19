@@ -157,23 +157,22 @@ fn run_command_inner(
             let mut aborted = false;
             if let Some(out_pipe) = stdout {
                 let mut reader = out_pipe;
-                let mut partial = String::new();
+                let mut partial: Vec<u8> = Vec::new();
                 let mut buf = [0u8; 4096];
                 loop {
                     match reader.read(&mut buf) {
                         Ok(0) => break, // EOF
                         Ok(n) => {
                             for &byte in &buf[..n] {
-                                if (byte == b'\n' || byte == b'\r')
-                                    && !partial.is_empty()
-                                    && tx
-                                        .send(ShellEvent::Output(std::mem::take(&mut partial)))
-                                        .is_err()
-                                {
-                                    aborted = true;
-                                    break;
+                                if (byte == b'\n' || byte == b'\r') && !partial.is_empty() {
+                                    let line = String::from_utf8_lossy(&partial).into_owned();
+                                    partial.clear();
+                                    if tx.send(ShellEvent::Output(line)).is_err() {
+                                        aborted = true;
+                                        break;
+                                    }
                                 } else {
-                                    partial.push(byte as char);
+                                    partial.push(byte);
                                 }
                             }
                             if aborted {
@@ -186,7 +185,9 @@ fn run_command_inner(
                 }
                 // Flush any remaining partial output.
                 if !partial.is_empty() {
-                    let _ = tx.send(ShellEvent::Output(partial));
+                    let _ = tx.send(ShellEvent::Output(
+                        String::from_utf8_lossy(&partial).into_owned(),
+                    ));
                 }
             }
             if aborted {
