@@ -133,7 +133,8 @@ impl AutocodeApp {
             if let (Some(prov), Some((temp, top_p, freq, pres, rph, handoff))) =
                 (state.providers.get_mut(&label), sess_params)
             {
-                prov.model = model;
+                prov.model = model.clone();
+                prov.fill_from_config();
                 prov.temperature = temp;
                 prov.top_p = top_p;
                 prov.frequency_penalty = freq;

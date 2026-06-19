@@ -539,6 +539,7 @@ fn load_new_session(state: &mut AppState, panel_state: &mut ChatPanelState) -> O
                     state.active_provider = new_sess.provider_label.clone();
                     if let Some(prov) = state.providers.get_mut(&state.active_provider) {
                         prov.model = new_sess.model.clone();
+                        prov.fill_from_config();
                     }
                 }
                 state.todo_list = new_sess.todo_list.clone();
