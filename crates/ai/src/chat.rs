@@ -2347,6 +2347,10 @@ fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     if !state.handoff_enabled || runtime.handoff_in_progress {
         return;
     }
+    // Don't interrupt a running shell command — wait for it to finish.
+    if runtime.live_shell_rx.is_some() {
+        return;
+    }
     let Some(sid) = runtime.active_session_id.as_ref() else {
         return;
     };
