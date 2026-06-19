@@ -1,9 +1,0 @@
-This file was created by the write_file tool!
-Timestamp: testing_session
-Tools tested so far:
-- project_tree
-- list_dir
-- read_file
-- grep
-- glob
-- write_file

@@ -239,7 +239,7 @@ The app ships with four built-in provider configurations. You can also add any O
 
 MIT License
 
-Copyright (c) 2025 Eric Lautanen
+Copyright (c) 2026 Eric Lautanen
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
