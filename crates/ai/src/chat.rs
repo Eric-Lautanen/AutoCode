@@ -2065,7 +2065,7 @@ fn poll_live_shell(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
         };
         runtime.pending_tool_results.push(result);
 
-            if runtime.pending_tool_remaining.is_empty() {
+        if runtime.pending_tool_remaining.is_empty() {
             commit_tool_results(state, runtime);
         } else {
             let root =
