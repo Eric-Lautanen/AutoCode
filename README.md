@@ -1,6 +1,6 @@
 # AutoCode
 
-**AutoCode** is an autonomous AI coding agent — a native Rust desktop app that connects to LLMs and gives them full access to your filesystem and shell. Not a harness or scaffold — a single self-contained binary.
+**AutoCode** is an autonomous AI coding agent — a native Rust desktop app that connects to LLMs and gives them full access to your filesystem and shell. Not a harness or scaffold — a single self-contained binary. Built in simple code editor, handoff system.  Run tasks for days/weeks.
 
 > **[v0.2.1 Release](https://github.com/Eric-Lautanen/AutoCode/releases/tag/v0.2.1)** — Download for Windows, Linux, and macOS
 
@@ -18,7 +18,7 @@
 | **Streaming** | Real-time SSE with auto-recovery, exponential backoff, auto-continue on drop |
 | **Sessions** | Named sessions per project (up to 50), JSONL history, lazy-load display buffer, per-project tab colors |
 | **Token Management** | 3-tier counting (API → tiktoken → heuristic), auto-handoff at configurable threshold |
-| **File Explorer** | gitignore-aware tree, text/image preview, inline rename/delete |
+| **File Explorer** | gitignore-aware tree, text/image preview, inline rename/delete, simple code editor |
 | **Task Tracking** | Session-level floating todo list + project-level task list (disk-persisted) |
 | **Session Handoff** | Auto-continuation when context limits hit — trigger prompt, RESUME.md generation |
 | **System Info** | Auto-detect OS, CPU, GPU, RAM, shell, and tool availability (Win32 FFI / `/proc` / `lspci`) |
