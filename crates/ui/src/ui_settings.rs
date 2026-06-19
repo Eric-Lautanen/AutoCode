@@ -39,6 +39,12 @@ use std::collections::HashMap;
 
 pub fn show_window(ctx: &egui::Context, state: &mut AppState, settings: &mut SettingsState) {
     if !state.settings_open {
+        // Clean up stale debounce flag from a prior outside-click close.
+        // egui insert_temp is persistent across frames, so we must clear it
+        // here to avoid the first Settings button click being silently swallowed.
+        ctx.data_mut(|d| {
+            d.remove_temp::<bool>(egui::Id::new("settings_closed_this_frame"));
+        });
         return;
     }
     let mut open = true;

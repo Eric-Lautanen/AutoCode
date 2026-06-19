@@ -225,16 +225,12 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     // Settings (lights up when settings window is open).
                     if lit_btn(ui, "Settings", state.settings_open).clicked() {
-                        if state.settings_open {
-                            let just_closed = ui.ctx().data_mut(|d| {
-                                d.remove_temp::<bool>(egui::Id::new("settings_closed_this_frame"))
-                                    .unwrap_or(false)
-                            });
-                            if !just_closed {
-                                state.settings_open = false;
-                            }
-                        } else {
-                            state.settings_open = true;
+                        let just_closed = ui.ctx().data_mut(|d| {
+                            d.remove_temp::<bool>(egui::Id::new("settings_closed_this_frame"))
+                                .unwrap_or(false)
+                        });
+                        if !just_closed {
+                            state.settings_open = !state.settings_open;
                         }
                     }
 
