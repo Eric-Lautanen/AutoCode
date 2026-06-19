@@ -7,6 +7,7 @@
       "models_endpoint": "{base_url}/models",
       "supports_cache_control": true,
       "supports_parallel_tool_calls": true,
+      "supports_strict_tools": true,
       "default_model": "deepseek/deepseek-v4-flash",
       "counting_endpoint": "{base_url}/tokenize",
       "auth_type": "Bearer",
@@ -49,6 +50,7 @@
       "models_endpoint": "{base_url}/models",
       "supports_cache_control": false,
       "supports_parallel_tool_calls": false,
+      "supports_strict_tools": false,
       "default_model": "z-ai/glm-5.1",
       "counting_endpoint": "{base_url}/tokenize",
       "models": {
@@ -72,6 +74,7 @@
       "models_endpoint": "{base_url}/models",
       "supports_cache_control": true,
       "supports_parallel_tool_calls": true,
+      "supports_strict_tools": true,
       "default_model": "gpt-5.5",
       "counting_endpoint": "{base_url}/responses/input_tokens",
       "models": {
@@ -95,6 +98,7 @@
       "models_endpoint": "{base_url}/models",
       "supports_cache_control": false,
       "supports_parallel_tool_calls": true,
+      "supports_strict_tools": true,
       "default_model": "glm-5.1",
       "model_prefix_strip": "opencode-go/",
       "models": {

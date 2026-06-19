@@ -24,6 +24,8 @@ pub struct ProviderEntry {
     pub enabled: bool,
     #[serde(default)]
     pub models: Vec<ModelEntry>,
+    #[serde(default = "default_strict_tools_entry")]
+    pub supports_strict_tools: Option<bool>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -71,6 +73,10 @@ fn default_top_p() -> f32 {
 
 fn default_thinking_api() -> String {
     "off".into()
+}
+
+fn default_strict_tools_entry() -> Option<bool> {
+    None
 }
 
 // ── Path ───────────────────────────────────────────────────────────────
@@ -150,6 +156,7 @@ fn convert_to_providers(file: &ProviderFile) -> HashMap<String, ApiProvider> {
             presence_penalty: 0.0,
             models_list_url: String::new(),
             saved_models,
+            supports_strict_tools_override: entry.supports_strict_tools,
             models_config: Some(models_config),
         };
 
@@ -240,6 +247,7 @@ fn convert_from_providers(providers: &HashMap<String, ApiProvider>) -> ProviderF
             api_key: ap.api_key.clone_inner(),
             enabled: ap.enabled,
             models,
+            supports_strict_tools: ap.supports_strict_tools_override,
         });
     }
     ProviderFile { providers: entries }

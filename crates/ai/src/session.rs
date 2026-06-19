@@ -131,7 +131,7 @@ pub fn prepare_request_messages_for_session(
             .filter(|m| m.role != Role::Error)
             .cloned()
             .collect();
-        let tools = tool_definitions();
+        let tools = tool_definitions(true);
         let model = state
             .sessions
             .iter()

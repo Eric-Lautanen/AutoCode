@@ -492,7 +492,7 @@ fn load_new_session(state: &mut AppState, panel_state: &mut ChatPanelState) -> O
                 } else {
                     autocode_core::helpers::update_full_estimate(
                         new_sess,
-                        &provider::tool_definitions(),
+                        &provider::tool_definitions(true),
                     );
                 }
             }

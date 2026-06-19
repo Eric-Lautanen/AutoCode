@@ -87,7 +87,7 @@ impl AutocodeApp {
         {
             sess.closed = false;
             autocode_core::session_storage::load_session(proj, sess);
-            autocode_core::helpers::update_full_estimate(sess, &provider::tool_definitions());
+            autocode_core::helpers::update_full_estimate(sess, &provider::tool_definitions(true));
             // Keep only the last window of messages in RAM for API requests.
             // Full history lives on disk and is loaded on demand.
             let window = state.ui_display_window;

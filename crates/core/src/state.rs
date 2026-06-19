@@ -19,6 +19,8 @@ pub struct ProviderManifest {
     pub base_url: String,
     pub supports_cache_control: bool,
     pub supports_parallel_tool_calls: bool,
+    #[serde(default = "default_supports_strict_tools")]
+    pub supports_strict_tools: bool,
     pub default_model: String,
     pub models: std::collections::HashMap<String, ModelManifest>,
     #[serde(default)]
@@ -117,6 +119,10 @@ pub fn provider_ids() -> Vec<String> {
     let mut ids: Vec<String> = manifest().providers.keys().cloned().collect();
     ids.sort();
     ids
+}
+
+fn default_supports_strict_tools() -> bool {
+    true
 }
 
 /// Parse thinking_api string from a model manifest into the enum.
@@ -312,6 +318,12 @@ impl ProviderKind {
             .map(|m| m.supports_parallel_tool_calls)
             .unwrap_or(false)
     }
+
+    pub fn supports_strict_tools(&self) -> bool {
+        provider_manifest(self)
+            .map(|m| m.supports_strict_tools)
+            .unwrap_or(true)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
@@ -427,6 +439,11 @@ pub struct ApiProvider {
     #[serde(default)]
     pub presence_penalty: f32,
 
+    /// Per-provider override for strict-mode tool schemas. `None` means
+    /// defer to the manifest (`ProviderKind::supports_strict_tools`).
+    #[serde(default)]
+    pub supports_strict_tools_override: Option<bool>,
+
     /// Per-model configuration overrides (context window, max tokens, etc.).
     /// Keyed by model ID. When absent, values from the baked-in manifest are used.
     #[serde(default)]
@@ -510,6 +527,7 @@ impl ApiProvider {
             presence_penalty: 0.0,
             models_list_url: models_url,
             saved_models,
+            supports_strict_tools_override: None,
             models_config,
         }
     }
@@ -558,6 +576,14 @@ impl ApiProvider {
         if let Some(effort) = defs.reasoning_efforts.first() {
             self.reasoning_effort.clone_from(effort);
         }
+    }
+
+    /// Whether tool definitions sent to this provider should use strict
+    /// JSON-schema mode. Uses the user override if set, otherwise falls
+    /// back to the provider manifest default.
+    pub fn supports_strict_tools(&self) -> bool {
+        self.supports_strict_tools_override
+            .unwrap_or_else(|| self.kind.supports_strict_tools())
     }
 
     /// Fill model-specific fields from the stored per-model config,
