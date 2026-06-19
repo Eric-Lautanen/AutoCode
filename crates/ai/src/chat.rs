@@ -1134,6 +1134,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
     loop {
         match rx.try_recv() {
             Ok(ProviderEvent::Delta(text)) => {
+                let text = autocode_core::helpers::sanitize_display_text(&text);
                 runtime.net_status.bytes += text.len() as u64;
                 append_to_pending(&mut runtime.pending_response, &text);
                 runtime.last_delta_time = Some(std::time::Instant::now());

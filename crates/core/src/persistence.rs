@@ -147,12 +147,6 @@ impl PersistenceThread {
         }
         panics
     }
-
-    /// Check if any panics have occurred without draining them.
-    pub fn has_panics(&self) -> bool {
-        let rx = self.panic_rx.lock().unwrap();
-        rx.try_recv().is_ok()
-    }
 }
 
 impl Drop for PersistenceThread {
