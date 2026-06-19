@@ -43,9 +43,6 @@ pub fn prepare_request_messages_for_session(
     state: &mut AppState,
     session_id: &str,
 ) -> Vec<ApiMessage> {
-    // Flush any pending message writes so disk is fully up to date.
-    state.flush_pending_writes(true);
-
     let supports_cache = {
         let sess = state.sessions.iter().find(|s| s.id == session_id);
         let prov_label = sess
@@ -85,6 +82,17 @@ pub fn prepare_request_messages_for_session(
     {
         let mut seen = std::collections::HashSet::new();
         full_messages.retain(|m| seen.insert(m.id));
+    }
+
+    // Merge any in-RAM messages that are newer than what's on disk
+    // (pushed after the last disk flush).
+    if let Some(sess) = state.sessions.iter().find(|s| s.id == session_id) {
+        let max_disk = full_messages.iter().map(|m| m.id).max().unwrap_or(0);
+        for msg in &sess.messages {
+            if msg.id > max_disk && msg.role != Role::Error {
+                full_messages.push(msg.clone());
+            }
+        }
     }
 
     // Strip orphaned tool_calls: any assistant message whose tool_calls

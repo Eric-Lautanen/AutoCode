@@ -129,6 +129,9 @@ pub struct ChatPanelState {
     prev_message_count: usize,
     /// True when user scrolled up to read history.
     pub user_scrolled_up: bool,
+    /// Oldest non-Error message ID on disk, populated at session load.
+    /// 0 = no history on disk, or not yet checked.
+    oldest_disk_id: u64,
 }
 
 impl Default for ChatPanelState {
@@ -144,6 +147,7 @@ impl Default for ChatPanelState {
             wants_older_messages: false,
             prev_message_count: 0,
             user_scrolled_up: false,
+            oldest_disk_id: 0,
         }
     }
 }
@@ -166,6 +170,7 @@ pub fn show(
         handle_purge_on_missing(purge_on_missing, state, panel_state);
         panel_state.prev_message_count = panel_state.display_buffer.len();
         panel_state.wants_older_messages = false;
+        panel_state.oldest_disk_id = 0;
         restore_scroll_offset(ui, state, panel_state);
         panel_state.prev_session_id = state.active_session_id.clone();
     }
@@ -176,8 +181,13 @@ pub fn show(
         if let (Some(proj), Some(sess)) = (state.active_project(), state.active_session()) {
             let mut all = autocode_core::session_storage::load_all_messages(proj, sess);
             all.retain(|m| m.role != Role::Error);
+            // Deduplicate by ID — the persistence thread may have appended
+            // stale messages after a replay truncation rewrote the files.
+            {
+                let mut seen = std::collections::HashSet::new();
+                all.retain(|m| seen.insert(m.id));
+            }
             if !all.is_empty() {
-                // Catch any in-RAM messages not yet flushed to disk.
                 let max_disk = all.iter().map(|m| m.id).max().unwrap_or(0);
                 for msg in &sess.messages {
                     if msg.id > max_disk && msg.role != Role::Error {
@@ -260,7 +270,7 @@ pub fn show(
                     ui.set_min_width(inner_max_w - 12.0);
                     ui.set_max_width(inner_max_w - 12.0);
                     if !panel_state.display_buffer.is_empty() {
-                        if panel_state.loaded_min_id > 1 {
+                        if panel_state.oldest_disk_id > 0 && panel_state.loaded_min_id > panel_state.oldest_disk_id {
                             if ui.button("Load full history...").clicked() {
                                 panel_state.wants_older_messages = true;
                             }
@@ -471,7 +481,7 @@ fn load_new_session(state: &mut AppState, panel_state: &mut ChatPanelState) -> O
                 .iter()
                 .find(|p| Some(&p.id) == new_sess.project_id.as_ref())
         {
-            if new_sess.next_message_id > 1 {
+            if new_sess.next_message_id > 1 && new_sess.messages.is_empty() {
                 let found = autocode_core::session_storage::load_session(new_proj, new_sess);
                 if !found {
                     purge_on_missing = Some(new_id.clone());
@@ -490,6 +500,17 @@ fn load_new_session(state: &mut AppState, panel_state: &mut ChatPanelState) -> O
                     let keep = window;
                     new_sess.messages = new_sess.messages.split_off(total - keep);
                     new_sess.messages.shrink_to(0);
+                }
+                // Find the oldest non-Error message ID on disk for the
+                // "Load full history" button check.
+                let sess_dir = autocode_core::session_storage::session_messages_dir(new_proj, new_sess);
+                if autocode_core::chunked_jsonl::has_chunked_files(&sess_dir) {
+                    let on_disk = autocode_core::session_storage::load_all_messages(new_proj, new_sess);
+                    panel_state.oldest_disk_id = on_disk.iter()
+                        .filter(|m| m.role != Role::Error && m.role != Role::System)
+                        .map(|m| m.id).min().unwrap_or(0);
+                } else {
+                    panel_state.oldest_disk_id = 0;
                 }
                 panel_state.display_buffer = new_sess
                     .messages
@@ -588,7 +609,7 @@ fn show_session_tabs(
     panel_state: &mut ChatPanelState,
 ) {
     ui.add_space(6.0); // top padding for session tabs
-    ScrollArea::horizontal()
+    let tab_scroll = ScrollArea::horizontal()
         .id_salt("session_tabs")
         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
         .show(ui, |ui| {
@@ -690,10 +711,16 @@ fn show_session_tabs(
                                     if tab_resp.clicked() {
                                         state.active_session_id = Some(id.clone());
                                     }
-                                    if active {
+                                    // Show close button when the pointer is over this tab.
+                                    let tab_hovered = ui.ctx().input(|i| i.pointer.hover_pos())
+                                        .map(|p| tab_resp.rect.expand(8.0).contains(p))
+                                        .unwrap_or(false);
+                                    if active || tab_hovered {
                                         let close = ui.add(
                                             egui::Button::new(
-                                                RichText::new("x").size(9.0).color(theme().text_muted),
+                                                RichText::new("x").size(9.0).color(
+                                                    if active { tab_accent } else { theme().text_muted }
+                                                ),
                                             )
                                             .fill(Color32::TRANSPARENT)
                                             .stroke(Stroke::NONE)
@@ -733,6 +760,19 @@ fn show_session_tabs(
                 }
             });
         });
+    // Auto-scroll tabs to the right when content exceeds viewport
+    // (new tabs are added at the right edge).
+    if tab_scroll.content_size.x > tab_scroll.inner_rect.width() {
+        let mut sa_state = ui.ctx().data_mut(|d| {
+            d.get_persisted::<egui::scroll_area::State>(egui::Id::new("session_tabs"))
+                .unwrap_or_default()
+        });
+        let max_offset = tab_scroll.content_size.x - tab_scroll.inner_rect.width();
+        if sa_state.offset.x < max_offset - 20.0 {
+            sa_state.offset.x = max_offset;
+            ui.ctx().data_mut(|d| d.insert_persisted(egui::Id::new("session_tabs"), sa_state));
+        }
+    }
 }
 
 // -- Empty state ---------------------------------------------------------------
@@ -1104,23 +1144,15 @@ fn render_structured_tool_result(
                 );
                 render_markdown(ui, &msg.content, false);
             } else {
+                let url = meta.file_path.as_deref().unwrap_or("URL");
+                let bytes = meta.byte_count.unwrap_or(0);
                 ui.label(
-                    RichText::new("[web] Fetched URL")
+                    RichText::new(format!("[web] Fetched {} — {} bytes", url, bytes))
                         .size(12.0)
                         .color(theme().accent)
                         .strong(),
                 );
-                ui.push_id(format!("fetch_{}", msg.timestamp), |ui| {
-                    ui.set_max_height(f32::INFINITY);
-                    ScrollArea::vertical()
-                        .max_height(400.0)
-                        .min_scrolled_height(0.0)
-                        .max_width(ui.available_width())
-                        .show(ui, |ui| {
-                            ui.set_min_width(ui.available_width());
-                            render_markdown(ui, &msg.content, false);
-                        });
-                });
+                render_code_block(ui, url, &msg.content);
             }
         }
         "todo_list" => {

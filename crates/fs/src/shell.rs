@@ -3,7 +3,7 @@
 // No permission prompting -- fully autonomous per design spec.
 
 use std::{
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Read},
     process::{Command, Stdio},
     sync::mpsc::{self, Receiver},
 };
@@ -123,14 +123,14 @@ fn run_command_inner(
         if let Some(ref d) = cwd {
             cmd.current_dir(d);
         }
-        cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()
+        cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()
     } else {
         let mut cmd = Command::new("sh");
         cmd.args(["-c", command]);
         if let Some(ref d) = cwd {
             cmd.current_dir(d);
         }
-        cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()
+        cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()
     };
 
     match result {
@@ -171,12 +171,47 @@ fn run_command_inner(
             };
             let mut aborted = false;
             if let Some(out_pipe) = stdout {
-                let reader = BufReader::new(out_pipe);
-                for line in reader.lines().map_while(Result::ok) {
-                    if tx.send(ShellEvent::Output(line)).is_err() {
-                        aborted = true;
-                        break;
+                let mut reader = out_pipe;
+                let mut partial = String::new();
+                let mut buf = [0u8; 4096];
+                loop {
+                    match reader.read(&mut buf) {
+                        Ok(0) => break, // EOF
+                        Ok(n) => {
+                            for &byte in &buf[..n] {
+                                if byte == b'\n' {
+                                    if !partial.is_empty() {
+                                        if tx.send(ShellEvent::Output(
+                                            std::mem::take(&mut partial),
+                                        )).is_err() {
+                                            aborted = true;
+                                            break;
+                                        }
+                                    }
+                                } else if byte == b'\r' {
+                                    // Carriage return — progress spinner update.
+                                    // Flush whatever we have so far.
+                                    if !partial.is_empty() {
+                                        if tx.send(ShellEvent::Output(
+                                            std::mem::take(&mut partial),
+                                        )).is_err() {
+                                            aborted = true;
+                                            break;
+                                        }
+                                    }
+                                } else {
+                                    partial.push(byte as char);
+                                }
+                            }
+                            if aborted { break; }
+                        }
+                        Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(_) => break,
                     }
+                }
+                // Flush any remaining partial output.
+                if !partial.is_empty() {
+                    let _ = tx.send(ShellEvent::Output(partial));
                 }
             }
             if aborted {

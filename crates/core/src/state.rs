@@ -779,7 +779,7 @@ impl Session {
             show_todo: false,
             todo_user_dismissed: false,
             session_named: false,
-            handoff_enabled: false,
+            handoff_enabled: true,
             show_explorer: true,
             settings_open: false,
             closed: false,

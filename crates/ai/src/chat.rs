@@ -208,11 +208,24 @@ pub fn replay_to_message(
         }
     };
 
+    // Drain pending writes and write them to disk synchronously so that
+    // unflushed messages (e.g. name_session tool results) are persisted
+    // before the truncation removes them from the chunk files.
+    for (dir, msgs) in state.drain_pending_writes() {
+        // Find the project for session_messages_dir resolution.
+        if let Some(sess) = state.sessions.iter().find(|s| s.id == session_id)
+            && let Some(pid) = sess.project_id.as_ref()
+            && let Some(proj) = state.projects.iter().find(|p| p.id == *pid)
+        {
+            let _ = autocode_core::session_storage::append_messages_to_jsonl(proj, sess, &msgs);
+        }
+    }
+
     // Truncate in-RAM and on-disk — remove the target message and everything after it.
     {
         let sess = &mut state.sessions[session_idx];
         sess.messages.retain(|m| m.id < message_id);
-        sess.next_message_id = message_id + 1;
+        sess.next_message_id = message_id;
         sess.actual_tokens_used = 0;
 
         let proj = &state.projects[proj_idx];
@@ -220,7 +233,8 @@ pub fn replay_to_message(
         autocode_core::session_storage::save_session_meta(proj, sess).ok()?;
     }
 
-    // Discard any pending disk writes for this session.
+    // Discard any pending disk writes for this session (anything queued
+    // after the flush is already in RAM and will be re-flushed later).
     state
         .pending_writes
         .pending
@@ -1253,36 +1267,53 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 || err_msg.contains("timed out");
             let has_partial = !runtime.pending_response.is_empty();
 
-            if is_stream_drop && has_partial {
-                // Save partial response for continuation on retry.
-                // Append to any existing backup in case of multiple drops.
-                const MAX_BACKUP_SIZE: usize = 128 * 1024; // 128KB total cap
-                let new_partial = std::mem::take(&mut runtime.pending_response);
-                if !runtime.partial_response_backup.is_empty() {
-                    let current_len = runtime.partial_response_backup.len();
-                    let new_len = new_partial.len();
-                    if current_len + new_len <= MAX_BACKUP_SIZE {
-                        runtime.partial_response_backup.push_str(&new_partial);
+            if is_stream_drop {
+                // Check for incomplete tasks BEFORE saving partial response.
+                // If there are tasks to continue, send a continue message
+                // instead of retrying silently.
+                if state.handoff_enabled
+                    && (state.todo_list.has_incomplete() || state.project_task_list.has_incomplete())
+                {
+                    runtime.pending_response.clear();
+                    runtime.pending_tool_calls.clear();
+                    runtime.assistant_tool_calls_json = None;
+                    runtime.stream_drop_retries = 0;
+                    runtime.partial_response_backup.clear();
+                    runtime.retry_count = 0;
+                    runtime.provider_error = None;
+                    auto_continue_impl(state, runtime, "", true);
+                    return true;
+                }
+                if has_partial {
+                    // Save partial response for continuation on retry.
+                    // Append to any existing backup in case of multiple drops.
+                    const MAX_BACKUP_SIZE: usize = 128 * 1024; // 128KB total cap
+                    let new_partial = std::mem::take(&mut runtime.pending_response);
+                    if !runtime.partial_response_backup.is_empty() {
+                        let current_len = runtime.partial_response_backup.len();
+                        let new_len = new_partial.len();
+                        if current_len + new_len <= MAX_BACKUP_SIZE {
+                            runtime.partial_response_backup.push_str(&new_partial);
+                        } else {
+                            // Make room by truncating existing backup if needed
+                            if current_len > MAX_BACKUP_SIZE / 2 {
+                                runtime.partial_response_backup.truncate(MAX_BACKUP_SIZE / 2);
+                                runtime.partial_response_backup.push_str("\n[...truncated...]");
+                            }
+                            let available = MAX_BACKUP_SIZE.saturating_sub(runtime.partial_response_backup.len());
+                            if available > 0 {
+                                runtime.partial_response_backup.push_str(&new_partial[..available.min(new_partial.len())]);
+                            }
+                        }
                     } else {
-                        // Make room by truncating existing backup if needed
-                        if current_len > MAX_BACKUP_SIZE / 2 {
-                            runtime.partial_response_backup.truncate(MAX_BACKUP_SIZE / 2);
-                            runtime.partial_response_backup.push_str("\n[...truncated...]");
-                        }
-                        let available = MAX_BACKUP_SIZE.saturating_sub(runtime.partial_response_backup.len());
-                        if available > 0 {
-                            runtime.partial_response_backup.push_str(&new_partial[..available.min(new_partial.len())]);
-                        }
+                        let available = MAX_BACKUP_SIZE.min(new_partial.len());
+                        runtime.partial_response_backup.push_str(&new_partial[..available]);
                     }
-                } else {
-                    let available = MAX_BACKUP_SIZE.min(new_partial.len());
-                    runtime.partial_response_backup.push_str(&new_partial[..available]);
+                    runtime.stream_drop_retries += 1;
                 }
                 runtime.pending_response.clear();
                 runtime.pending_tool_calls.clear();
                 runtime.assistant_tool_calls_json = None;
-                // Increment stream-drop retry counter for backoff.
-                runtime.stream_drop_retries += 1;
             } else {
                 runtime.pending_response.clear();
                 runtime.pending_tool_calls.clear();
@@ -1393,6 +1424,22 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                             err_msg,
                         ),
                     );
+                    return true;
+                }
+                // If there are incomplete tasks, send a continue message
+                // instead of retrying silently — the model needs to know
+                // the connection dropped and pick up where it left off.
+                if state.handoff_enabled
+                    && (state.todo_list.has_incomplete() || state.project_task_list.has_incomplete())
+                {
+                    runtime.pending_response.clear();
+                    runtime.pending_tool_calls.clear();
+                    runtime.assistant_tool_calls_json = None;
+                    runtime.stream_drop_retries = 0;
+                    runtime.partial_response_backup.clear();
+                    runtime.retry_count = 0;
+                    runtime.provider_error = None;
+                    auto_continue_impl(state, runtime, "", true);
                     return true;
                 }
                 // Forever retry: exponential backoff 5s → 180s cap, never gives up.
@@ -1748,7 +1795,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
             if !shell_calls.is_empty() {
                 runtime.pending_tool_remaining = shell_calls;
                 runtime.pending_tool_results = Vec::new();
-                start_next_live_shell(runtime, &root);
+                start_next_live_shell(state, runtime, &root);
             }
 
             return true;
@@ -1759,12 +1806,20 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
             let reasoning = std::mem::take(&mut runtime.reasoning_buf);
             if response.trim().is_empty() {
                 // Done received with no content and no tool calls.
-                // This typically means the API returned an empty/truncated
-                // response (e.g. request timed out).
-                // Treat like a stream error and retry directly.
-                // Only retry transient errors (network issues, rate limits, etc).
-                // Permanent errors (auth, content filter, invalid model) are not
-                // retryable and should be shown to the user immediately.
+                // If there are incomplete tasks, send a continue message
+                // instead of retrying — the model needs to know to pick up.
+                if state.handoff_enabled
+                    && (state.todo_list.has_incomplete() || state.project_task_list.has_incomplete())
+                {
+                    runtime.pending_response.clear();
+                    runtime.pending_tool_calls.clear();
+                    runtime.assistant_tool_calls_json = None;
+                    runtime.stream_drop_retries = 0;
+                    runtime.partial_response_backup.clear();
+                    runtime.retry_count = 0;
+                    auto_continue_impl(state, runtime, "", true);
+                    return true;
+                }
                 let max_retries = state.max_retries;
                 if runtime.retry_count < max_retries {
                     runtime.retry_count += 1;
@@ -1886,7 +1941,7 @@ fn poll_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
     }
 }
 
-fn start_next_live_shell(runtime: &mut ChatRuntime, project_root: &str) {
+fn start_next_live_shell(state: &mut AppState, runtime: &mut ChatRuntime, project_root: &str) {
     while let Some(tc) = runtime.pending_tool_remaining.first().cloned() {
         let args: serde_json::Value =
             serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
@@ -1935,6 +1990,11 @@ fn start_next_live_shell(runtime: &mut ChatRuntime, project_root: &str) {
         runtime.live_shell_rx = Some(rx);
         runtime.status = format!("Running: {}...", core_helpers::truncate_str(&command, 60));
         return;
+    }
+    // All remaining shell calls were rejected (sanitization, missing args, etc).
+    // Commit any accumulated errors so the model gets feedback.
+    if !runtime.pending_tool_results.is_empty() {
+        commit_tool_results(state, runtime);
     }
 }
 
@@ -1989,11 +2049,20 @@ fn poll_live_shell(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
         runtime.pending_tool_results.push(result);
 
         if runtime.pending_tool_remaining.is_empty() {
+            // If there are incomplete tasks, send a continue message
+            // instead of pushing the error to the model.
+            if state.handoff_enabled
+                && (state.todo_list.has_incomplete() || state.project_task_list.has_incomplete())
+            {
+                runtime.pending_tool_results.clear();
+                auto_continue_impl(state, runtime, "", true);
+                return true;
+            }
             commit_tool_results(state, runtime);
         } else {
             let root =
                 project_root_for_session(state, runtime.active_session_id.as_deref().unwrap_or(""));
-            start_next_live_shell(runtime, &root);
+            start_next_live_shell(state, runtime, &root);
         }
         return true;
     }
@@ -2063,7 +2132,15 @@ fn poll_live_shell(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
         if !runtime.pending_tool_remaining.is_empty() {
             let root =
                 project_root_for_session(state, runtime.active_session_id.as_deref().unwrap_or(""));
-            start_next_live_shell(runtime, &root);
+            start_next_live_shell(state, runtime, &root);
+        } else if exit_code != 0
+            && state.handoff_enabled
+            && (state.todo_list.has_incomplete() || state.project_task_list.has_incomplete())
+        {
+            // Shell command failed and there are incomplete tasks —
+            // send a continue message instead of showing the error to the model.
+            runtime.pending_tool_results.clear();
+            auto_continue_impl(state, runtime, "", true);
         } else {
             commit_tool_results(state, runtime);
         }
@@ -2318,6 +2395,12 @@ fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
 
 
 fn auto_continue(state: &mut AppState, runtime: &mut ChatRuntime, response: &str) {
+    auto_continue_impl(state, runtime, response, false)
+}
+
+/// Send a "continue" message when there are incomplete tasks. If
+/// `connection_dropped` is true the message mentions the dropped connection.
+fn auto_continue_impl(state: &mut AppState, runtime: &mut ChatRuntime, response: &str, connection_dropped: bool) {
     if runtime.handoff_in_progress {
         return;
     }
@@ -2340,22 +2423,25 @@ fn auto_continue(state: &mut AppState, runtime: &mut ChatRuntime, response: &str
     }
     runtime.continuation_chain += 1;
 
+    let prefix = if connection_dropped {
+        "Our connection dropped. "
+    } else {
+        ""
+    };
     let msg = if has_todo_incomplete {
         let (done, total) = state.todo_list.progress();
         format!(
-            "You have unfinished tasks ({}/{} complete). Update the todo list and continue working.",
-            done, total
+            "{}You have unfinished tasks ({}/{} complete). Update the todo list and continue working.",
+            prefix, done, total
         )
     } else if has_project_tasks_incomplete {
         let (done, total) = state.project_task_list.progress();
         format!(
-            "Project tasks remain ({}/{} complete). Update the task list and continue working.",
-            done, total
+            "{}Project tasks remain ({}/{} complete). Update the task list and continue working.",
+            prefix, done, total
         )
     } else {
-        "If you are finished, update and clear the task list with todo_list. \
-         Otherwise continue working."
-            .to_string()
+        format!("{}If you were working on something, continue now. Otherwise update or clear the task list.", prefix)
     };
 
     push_runtime(
