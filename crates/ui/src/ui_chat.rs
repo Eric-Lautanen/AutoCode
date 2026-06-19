@@ -716,15 +716,16 @@ fn show_session_tabs(
                                         .map(|p| tab_resp.rect.expand(8.0).contains(p))
                                         .unwrap_or(false);
                                     if active || tab_hovered {
+                                        ui.add_space(4.0);
                                         let close = ui.add(
                                             egui::Button::new(
-                                                RichText::new("x").size(9.0).color(
+                                                RichText::new("x").size(11.0).color(
                                                     if active { tab_accent } else { theme().text_muted }
                                                 ),
                                             )
                                             .fill(Color32::TRANSPARENT)
                                             .stroke(Stroke::NONE)
-                                            .min_size(Vec2::new(14.0, 14.0)),
+                                            .min_size(Vec2::new(20.0, 18.0)),
                                         );
                                         if close.on_hover_text("Close session").clicked() {
                                             autocode_ai::chat::abort_for_session(runtimes, &id);

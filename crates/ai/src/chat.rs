@@ -211,7 +211,7 @@ pub fn replay_to_message(
     // Drain pending writes and write them to disk synchronously so that
     // unflushed messages (e.g. name_session tool results) are persisted
     // before the truncation removes them from the chunk files.
-    for (dir, msgs) in state.drain_pending_writes() {
+    for (_, msgs) in state.drain_pending_writes() {
         // Find the project for session_messages_dir resolution.
         if let Some(sess) = state.sessions.iter().find(|s| s.id == session_id)
             && let Some(pid) = sess.project_id.as_ref()

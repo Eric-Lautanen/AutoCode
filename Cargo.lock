@@ -137,7 +137,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "autocode"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "autocode-ai",
  "autocode-core",
@@ -154,7 +154,7 @@ dependencies = [
 
 [[package]]
 name = "autocode-ai"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "autocode-core",
  "autocode-fs",
@@ -167,7 +167,7 @@ dependencies = [
 
 [[package]]
 name = "autocode-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "eframe",
  "egui",
@@ -179,14 +179,14 @@ dependencies = [
 
 [[package]]
 name = "autocode-fs"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "autocode-core",
 ]
 
 [[package]]
 name = "autocode-ui"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "autocode-ai",
  "autocode-core",

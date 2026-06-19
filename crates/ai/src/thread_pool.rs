@@ -19,7 +19,7 @@ pub struct PanicInfo {
 pub struct ThreadPool {
     workers: Vec<Worker>,
     sender: mpsc::Sender<Message>,
-    panic_tx: mpsc::Sender<PanicInfo>,
+    _panic_tx: mpsc::Sender<PanicInfo>,
     panic_rx: Mutex<mpsc::Receiver<PanicInfo>>,
 }
 
@@ -85,7 +85,7 @@ impl ThreadPool {
         Self {
             workers,
             sender,
-            panic_tx,
+            _panic_tx: panic_tx,
             panic_rx: Mutex::new(panic_rx),
         }
     }

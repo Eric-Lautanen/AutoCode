@@ -37,7 +37,8 @@ pub struct PersistenceThread {
     tx: mpsc::Sender<PersistenceCommand>,
     handle: Option<thread::JoinHandle<()>>,
     running: std::sync::Arc<AtomicBool>,
-    panic_tx: mpsc::Sender<PanicInfo>,
+    /// Kept alive to keep panic_rx connected — drop would close the channel.
+    _panic_tx: mpsc::Sender<PanicInfo>,
     panic_rx: std::sync::Mutex<mpsc::Receiver<PanicInfo>>,
 }
 
@@ -82,7 +83,7 @@ impl PersistenceThread {
             tx,
             handle: Some(handle),
             running,
-            panic_tx,
+            _panic_tx: panic_tx,
             panic_rx: std::sync::Mutex::new(panic_rx),
         }
     }
