@@ -1022,10 +1022,14 @@ fn build_http_request(
     header_str
 }
 
-/// Redact common API key patterns from a string for safe debug logging.
+/// Redact API key patterns from a string for safe debug logging.
+/// Handles known key prefixes and also catches material after
+/// `Bearer ` / `x-api-key: ` markers (universal across providers).
 fn sanitize_for_log(s: &str) -> String {
-    let prefixes = ["sk-ant-", "sk-proj-", "sk-"];
+    let prefixes = ["sk-ant-", "sk-proj-", "sk-", "nvapi-", "xai-"];
     let mut result = s.to_string();
+
+    // 1. Prefix-based redaction (known key formats).
     for prefix in prefixes {
         while let Some(start) = result.find(prefix) {
             let after = start + prefix.len();
@@ -1042,6 +1046,30 @@ fn sanitize_for_log(s: &str) -> String {
             }
         }
     }
+
+    // 2. Catch any key-like token after "Bearer " or "x-api-key: " markers.
+    //    This covers providers with custom key formats not in the prefix list.
+    for marker in &["Bearer ", "x-api-key: "] {
+        let mut search_start = 0;
+        while let Some(pos) = result[search_start..].find(marker) {
+            let key_start = search_start + pos + marker.len();
+            let remaining = &result[key_start..];
+            // Find end of the API key (alphanumeric, dash, underscore).
+            let key_len = remaining
+                .chars()
+                .position(|c| !c.is_ascii_alphanumeric() && c != '-' && c != '_')
+                .unwrap_or(remaining.len());
+            if key_len >= 8 {
+                let replacement = format!("{}[REDACTED]", marker.trim_end());
+                let end = key_start + key_len;
+                result.replace_range(search_start + pos..end, &replacement);
+                search_start = search_start + pos + replacement.len();
+            } else {
+                search_start = key_start + key_len;
+            }
+        }
+    }
+
     result
 }
 
@@ -1400,7 +1428,8 @@ pub fn fetch_models(provider: &ApiProvider) -> Vec<String> {
         let stream = TcpStream::connect(&addr)?;
         stream.set_read_timeout(Some(Duration::from_secs(15)))?;
 
-        let mut buffer = Vec::new();
+        let max_total = 2_000_000 + 8192; // 2 MB body cap + headroom for headers
+        let mut buffer = Vec::with_capacity(8192.min(max_total));
         let auth_type = autocode_core::state::provider_manifest(&provider.kind)
             .and_then(|m| m.auth_type.as_deref())
             .unwrap_or("Bearer");
@@ -1425,11 +1454,35 @@ pub fn fetch_models(provider: &ApiProvider) -> Vec<String> {
             let client = rustls::ClientConnection::new(config, server_name)?;
             let mut tls_stream = rustls::StreamOwned::new(client, stream);
             tls_stream.write_all(request.as_bytes())?;
-            tls_stream.read_to_end(&mut buffer)?;
+            let mut buf = [0u8; 8192];
+            loop {
+                let remaining = max_total.saturating_sub(buffer.len());
+                if remaining == 0 {
+                    break;
+                }
+                let n = tls_stream.read(&mut buf)?;
+                if n == 0 {
+                    break;
+                }
+                let to_copy = n.min(remaining);
+                buffer.extend_from_slice(&buf[..to_copy]);
+            }
         } else {
             let mut stream = stream;
             stream.write_all(request.as_bytes())?;
-            stream.read_to_end(&mut buffer)?;
+            let mut buf = [0u8; 8192];
+            loop {
+                let remaining = max_total.saturating_sub(buffer.len());
+                if remaining == 0 {
+                    break;
+                }
+                let n = stream.read(&mut buf)?;
+                if n == 0 {
+                    break;
+                }
+                let to_copy = n.min(remaining);
+                buffer.extend_from_slice(&buf[..to_copy]);
+            }
         };
 
         // Strip headers and decode chunked encoding
@@ -1506,11 +1559,13 @@ fn http_response_body(buffer: &[u8]) -> Vec<u8> {
 /// Perform a native HTTP POST request, returning the response body with
 /// HTTP headers stripped. Supports both HTTP and HTTPS.
 /// `extra_headers` allows additional headers like `x-api-key` for Anthropic.
+/// Reads at most `max_bytes` of body data (plus 8 KB headroom for headers).
 pub fn native_post(
     url: &str,
     api_key: &str,
     body: &str,
     timeout_secs: u64,
+    max_bytes: usize,
     extra_headers: &[(&str, &str)],
 ) -> Result<String, String> {
     let _t0 = std::time::Instant::now();
@@ -1552,7 +1607,8 @@ pub fn native_post(
     header_str.push_str(body);
 
     let request_bytes = header_str.as_bytes();
-    let mut buffer = Vec::with_capacity(8192);
+    let max_total = max_bytes + 8192;
+    let mut buffer = Vec::with_capacity(8192.min(max_total));
 
     let read_result: Result<(), String> = (|| {
         if use_tls {
@@ -1569,9 +1625,16 @@ pub fn native_post(
 
             let mut buf = [0u8; 8192];
             loop {
+                let remaining = max_total.saturating_sub(buffer.len());
+                if remaining == 0 {
+                    break;
+                }
                 match tls_stream.read(&mut buf) {
                     Ok(0) => break,
-                    Ok(n) => buffer.extend_from_slice(&buf[..n]),
+                    Ok(n) => {
+                        let to_copy = n.min(remaining);
+                        buffer.extend_from_slice(&buf[..to_copy]);
+                    }
                     Err(e)
                         if e.kind() == std::io::ErrorKind::TimedOut
                             || e.kind() == std::io::ErrorKind::WouldBlock =>
@@ -1589,9 +1652,16 @@ pub fn native_post(
 
             let mut buf = [0u8; 8192];
             loop {
+                let remaining = max_total.saturating_sub(buffer.len());
+                if remaining == 0 {
+                    break;
+                }
                 match plain.read(&mut buf) {
                     Ok(0) => break,
-                    Ok(n) => buffer.extend_from_slice(&buf[..n]),
+                    Ok(n) => {
+                        let to_copy = n.min(remaining);
+                        buffer.extend_from_slice(&buf[..to_copy]);
+                    }
                     Err(e)
                         if e.kind() == std::io::ErrorKind::TimedOut
                             || e.kind() == std::io::ErrorKind::WouldBlock =>
@@ -1657,6 +1727,7 @@ pub fn count_input_tokens(
         provider.api_key.as_str(),
         &body_str,
         timeout_secs,
+        65536, // 64 KB cap — token-count responses are tiny
         &extra_refs,
     )?;
 
