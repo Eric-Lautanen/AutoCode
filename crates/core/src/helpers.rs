@@ -647,10 +647,10 @@ pub fn default_request_timeout() -> u64 {
     300
 }
 pub fn default_tool_timeout() -> u64 {
-    120
+    300
 }
 pub fn default_shell_timeout() -> u64 {
-    120
+    300
 }
 pub fn default_shell_timeout_max() -> u64 {
     600

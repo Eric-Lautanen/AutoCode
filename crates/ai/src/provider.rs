@@ -571,7 +571,7 @@ pub fn tool_definitions() -> serde_json::Value {
     );
 
     serde_json::json!([
-        {"type":"function","function":{"name":"run_shell","strict":true,"description":shell_desc,"parameters":{"type":"object","properties":{"command":{"type":"string","description":"Shell command."},"cwd":{"type":"string","description":"Working dir (default: project root)."},"timeout_secs":{"type":"integer","description":"Timeout secs (default 120, max 600)."}},"required":["command"],"additionalProperties":false}}},
+        {"type":"function","function":{"name":"run_shell","strict":true,"description":shell_desc,"parameters":{"type":"object","properties":{"command":{"type":"string","description":"Shell command."},"cwd":{"type":"string","description":"Working dir (default: project root)."},"timeout_secs":{"type":"integer","description":"Timeout secs (default 300, max 600)."}},"required":["command"],"additionalProperties":false}}},
         {"type":"function","function":{"name":"read_file","strict":true,"description":"Read a file. Numbered lines, line/byte totals. Use offset+limit for large files. For multi-file use read_files.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"File path."},"offset":{"type":"integer","description":"Start line (1-based, default 1)."},"limit":{"type":"integer","description":"Max lines (default 2000). Read at least 50 lines per call."}},"required":["path"],"additionalProperties":false}}},
         {"type":"function","function":{"name":"read_files","strict":true,"description":"Read multiple files at once (max 10). Use instead of repeated read_file.","parameters":{"type":"object","properties":{"paths":{"type":"array","items":{"type":"string"},"description":"File paths (max 10)."}},"required":["paths"],"additionalProperties":false}}},
         {"type":"function","function":{"name":"read_entire_file","strict":true,"description":"Read entire file without truncation. Use sparingly -- only when patch_file fails or you need absolute certainty about content.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"File path."},"entire":{"type":"boolean","description":"Must be true to use this tool."}},"required":["path","entire"],"additionalProperties":false}}},
@@ -676,32 +676,31 @@ fn run_request(
             port,
             path: &path,
         };
-        send_https(
-            &conn,
-            provider.api_key.as_str(),
-            &body,
-            req.stream,
-            &req.model,
-            tx,
-            &timeouts,
-            &extra_headers,
-        )
-    } else {
-        let conn = HttpConn {
-            host: &host,
-            port,
-            path: &path,
-        };
-        send_http(
+        send_https(HttpArgs {
             conn,
-            provider.api_key.as_str(),
-            &body,
-            req.stream,
-            &req.model,
+            api_key: provider.api_key.as_str(),
+            body: &body,
+            stream: req.stream,
+            model: &req.model,
             tx,
-            &timeouts,
-            &extra_headers,
-        )
+            timeouts: &timeouts,
+            extra_headers: &extra_headers,
+        })
+    } else {
+        send_http(HttpArgs {
+            conn: HttpConn {
+                host: &host,
+                port,
+                path: &path,
+            },
+            api_key: provider.api_key.as_str(),
+            body: &body,
+            stream: req.stream,
+            model: &req.model,
+            tx,
+            timeouts: &timeouts,
+            extra_headers: &extra_headers,
+        })
     }
 }
 
@@ -904,65 +903,70 @@ fn apply_timeouts(stream: &TcpStream, is_stream: bool, cfg: &TimeoutConfig) -> s
     stream.set_write_timeout(Some(Duration::from_secs(cfg.request)))
 }
 
-#[allow(clippy::too_many_arguments)]
-fn send_http(
-    conn: HttpConn<'_>,
-    api_key: &str,
-    body: &str,
+struct HttpArgs<'a> {
+    conn: HttpConn<'a>,
+    api_key: &'a str,
+    body: &'a str,
     stream: bool,
-    model: &str,
+    model: &'a str,
     tx: Sender<ProviderEvent>,
-    timeouts: &TimeoutConfig,
-    extra_headers: &[(String, String)],
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let _t0 = std::time::Instant::now();
-    let mut stream_conn = connect_tcp(conn.host, conn.port, timeouts.request)?;
-    apply_timeouts(&stream_conn, stream, timeouts)?;
+    timeouts: &'a TimeoutConfig,
+    extra_headers: &'a [(String, String)],
+}
 
-    let extra_refs: Vec<(&str, &str)> = extra_headers
+fn send_http(args: HttpArgs<'_>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let _t0 = std::time::Instant::now();
+    let mut stream_conn = connect_tcp(args.conn.host, args.conn.port, args.timeouts.request)?;
+    apply_timeouts(&stream_conn, args.stream, args.timeouts)?;
+
+    let extra_refs: Vec<(&str, &str)> = args
+        .extra_headers
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
-    let request = build_http_request(conn.host, conn.path, api_key, body, &extra_refs);
+    let request = build_http_request(
+        args.conn.host,
+        args.conn.path,
+        args.api_key,
+        args.body,
+        &extra_refs,
+    );
     let _t1 = std::time::Instant::now();
     stream_conn.write_all(request.as_bytes())?;
     stream_conn.flush()?;
     let mut reader = BufReader::with_capacity(8192, stream_conn);
-    process_http_response(&mut reader, stream, model, tx)
+    process_http_response(&mut reader, args.stream, args.model, args.tx)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn send_https(
-    conn: &HttpConn<'_>,
-    api_key: &str,
-    body: &str,
-    is_stream: bool,
-    model: &str,
-    tx: Sender<ProviderEvent>,
-    timeouts: &TimeoutConfig,
-    extra_headers: &[(String, String)],
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+fn send_https(args: HttpArgs<'_>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let _t0 = std::time::Instant::now();
-    let stream = connect_tcp(conn.host, conn.port, timeouts.request)?;
-    apply_timeouts(&stream, is_stream, timeouts)?;
+    let stream = connect_tcp(args.conn.host, args.conn.port, args.timeouts.request)?;
+    apply_timeouts(&stream, args.stream, args.timeouts)?;
 
     let config = tls_config();
-    let dns_name = rustls::pki_types::DnsName::try_from(conn.host.to_string())
+    let dns_name = rustls::pki_types::DnsName::try_from(args.conn.host.to_string())
         .map_err(|_| "invalid DNS name")?;
     let server_name = ServerName::DnsName(dns_name);
     let client = rustls::ClientConnection::new(config, server_name)?;
     let _t1 = std::time::Instant::now();
     let mut tls_stream = rustls::StreamOwned::new(client, stream);
-    let extra_refs: Vec<(&str, &str)> = extra_headers
+    let extra_refs: Vec<(&str, &str)> = args
+        .extra_headers
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
-    let request = build_http_request(conn.host, conn.path, api_key, body, &extra_refs);
+    let request = build_http_request(
+        args.conn.host,
+        args.conn.path,
+        args.api_key,
+        args.body,
+        &extra_refs,
+    );
     let _t2 = std::time::Instant::now();
     tls_stream.write_all(request.as_bytes())?;
     tls_stream.flush()?;
     let mut reader = BufReader::with_capacity(16384, tls_stream);
-    process_http_response(&mut reader, is_stream, model, tx)
+    process_http_response(&mut reader, args.stream, args.model, args.tx)
 }
 
 /// Read auth headers from the provider manifest (e.g. x-api-key for Anthropic-style).

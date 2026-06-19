@@ -1755,16 +1755,16 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                         let start = std::time::Instant::now();
 
                         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            execute_tool_with_cache(
+                            execute_tool_with_cache(ToolExecCtx {
                                 tc,
-                                &pr_clone,
-                                &mut path_cache,
+                                project_root: &pr_clone,
+                                path_cache: &mut path_cache,
                                 allow_escape,
-                                ctx_info.0,
-                                ctx_info.1,
-                                ctx_info.3,
+                                ctx_used: ctx_info.0,
+                                ctx_max: ctx_info.1,
+                                max_output: ctx_info.3,
                                 session_named,
-                            )
+                            })
                         }));
                         let result = match result {
                             Ok(r) => r,
@@ -2906,17 +2906,28 @@ fn build_tool_meta(tc: &ToolCall, result: &str, duration_ms: u64) -> ToolMeta {
 
 // -- Tool execution (async, runs on background thread) -------------------------
 
-#[allow(clippy::too_many_arguments)]
-fn execute_tool_with_cache(
-    tc: &ToolCall,
-    project_root: &str,
-    path_cache: &mut PathCache,
+struct ToolExecCtx<'a> {
+    tc: &'a ToolCall,
+    project_root: &'a str,
+    path_cache: &'a mut PathCache,
     allow_escape: bool,
     ctx_used: usize,
     ctx_max: usize,
     max_output: usize,
     session_named: bool,
-) -> String {
+}
+
+fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
+    let ToolExecCtx {
+        tc,
+        project_root,
+        path_cache,
+        allow_escape,
+        ctx_used,
+        ctx_max,
+        max_output,
+        session_named,
+    } = ctx;
     use autocode_core::helpers::{resolve_path_cached_trait, resolve_path_write_cached_trait};
     let args: serde_json::Value =
         serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
