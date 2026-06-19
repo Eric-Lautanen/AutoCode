@@ -4,7 +4,7 @@
 
 Write code, run commands, edit files, search your codebase, and iterate — all through a chat interface where the AI operates as your autonomous agent. Not a harness or scaffold — a single self-contained binary.
 
-> **[v0.2.0 Release](https://github.com/Eric-Lautanen/AutoCode/releases/tag/v0.2.0)** — Download the latest build for Windows, Linux, and macOS
+> **[v0.2.1 Release](https://github.com/Eric-Lautanen/AutoCode/releases/tag/v0.2.1)** — Download the latest build for Windows, Linux, and macOS
 
 > **⚠️ WARNING — No Permission, No Prompts, No Hand-Holding**
 > This thing does what you tell it. It reads, writes, deletes, and runs code on your machine with **zero confirmation prompts**. There is no "Are you sure?" popup. No safety rail. No second opinion. If you tell it to `rm -rf /`, it will try its hardest. You are piloting a chainsaw, not a scalpel. Use at your own risk — seriously.
@@ -39,7 +39,7 @@ Built in **Rust** (edition 2024, minimum Rust 1.95) with the **egui** (0.34) imm
 Cargo.toml                               # workspace root, resolver = "2"
 ├── .cargo/config.toml                    # +crt-static for MSVC + musl targets
 ├── assets/
-│   ├── providers.json                    # editable provider/model manifest (4 providers, ~42 models)
+│   ├── providers.json                    # editable provider/model manifest (4 providers, ~64 models)
 │   ├── icon.icns / icon.ico              # macOS / Windows icons
 │   └── linux/                           # Linux icons (16–512px)
 ├── crates/
@@ -48,16 +48,16 @@ Cargo.toml                               # workspace root, resolver = "2"
 │   │   ├── app.rs         (527)   # AutocodeApp (eframe::App), frame loop, state wiring
 │   │   ├── build.rs        (4)    # embed Windows icon resource
 │   │   └── helpers.rs      (1)    # reserved
-│   ├── core/               — core types, utilities, infrastructure (~5,617 lines)
-│   │   ├── state.rs      (1495)  # AppState, Project, Session, ChatMessage, ApiProvider,
+│   ├── core/               — core types, utilities, infrastructure (~5,626 lines)
+│   │   ├── state.rs      (1500)  # AppState, Project, Session, ChatMessage, ApiProvider,
 │   │   │                           SecretString, DesignSettings (72 fields), TodoItem, manifest
-│   │   ├── helpers.rs    (1436)  # ID gen, token estimation (heuristic + tiktoken + regex),
+│   │   ├── helpers.rs    (1439)  # ID gen, token estimation (heuristic + tiktoken + regex),
 │   │   │                           path resolution + traversal guard, tiny regex engine
 │   │   ├── fsutil.rs      (148)   # exe_dir, \\?\ extended paths, atomic read/write, TEMP_FILES
 │   │   ├── theme.rs      (140)   # dark Visuals+Style, Palette (20 colors), hash-based project_accent
 │   │   ├── extract.rs     (298)   # HTML scraping (scraper), DuckDuckGo results, domain blacklist
 │   │   ├── sysinfo.rs     (689)   # OS/CPU/GPU/RAM/shell/tool detection (Win32 FFI, /proc, lspci)
-│   │   ├── session_storage.rs (628) # JSON/JSONL persistence, atomic writes, orphan scavenge,
+│   │   ├── session_storage.rs (629) # JSON/JSONL persistence, atomic writes, orphan scavenge,
 │   │   │                           load_messages_before, truncate_messages_after
 │   │   ├── chunked_jsonl.rs (215) # Chunked JSONL (1000 msg/chunk), rotation for large sessions
 │   │   ├── persistence.rs  (152)  # Background persistence thread for offloading JSONL writes
@@ -65,11 +65,11 @@ Cargo.toml                               # workspace root, resolver = "2"
 │   │   ├── shell_task_storage.rs (82) # Shell task persistence (save/load/delete as JSON files)
 │   │   └── tokenizer/
 │   │       └── mod.rs      (88)    # Tokenizer trait, TiktokenTokenizer, HeuristicTokenizer
-│   ├── ai/                 — AI provider client + chat orchestration (~6,481 lines)
-│   │   ├── chat.rs       (3558)  # orchestration: send_message, SSE polling, 20 tool handlers,
+│   ├── ai/                 — AI provider client + chat orchestration (~6,461 lines)
+│   │   ├── chat.rs       (3548)  # orchestration: send_message, SSE polling, 20 tool handlers,
 │   │   │                           retry/backoff, auto-continuation, handoff, session auto-naming,
 │   │   │                           replay, partial-response recovery, live shell streaming
-│   │   ├── provider.rs   (1722)  # raw TCP+rustls HTTP client, SSE parsing, 20 tool definitions,
+│   │   ├── provider.rs   (1712)  # raw TCP+rustls HTTP client, SSE parsing, 20 tool definitions,
 │   │   │                           model list fetch, counting API, rotating browser profiles (8)
 │   │   ├── session.rs    (168)   # system prompt seeding + sysinfo, message prep with dedup,
 │   │   │                           orphan-tool stripping, cache_control, full-history estimate
@@ -77,18 +77,18 @@ Cargo.toml                               # workspace root, resolver = "2"
 │   │   │                           token-set similarity, todo parsing, line-number stripping,
 │   │   │                           project task parsing
 │   │   └── thread_pool.rs (125)  # Background thread pool for concurrent jobs with panic isolation
-│   ├── fs/                 — filesystem tools (~915 lines)
-│   │   ├── shell.rs       (234)   # background shell via channels (cmd with CREATE_NO_WINDOW, sh),
+│   ├── fs/                 — filesystem tools (~880 lines)
+│   │   ├── shell.rs       (199)   # background shell via channels (cmd with CREATE_NO_WINDOW, sh),
 │   │   │                           temp script cleanup, PID reporting, stderr capture
 │   │   ├── explorer.rs    (467)   # gitignore-aware list_dir/glob/grep/find_project_root,
 │   │   │                           recursive grep with size/binary limits, project_tree (depth 20)
 │   │   └── helpers.rs    (206)   # file extraction from code fences, glob matching (*/**/?)
-│   └── ui/                 — egui UI panels (~5,944 lines)
+│   └── ui/                 — egui UI panels (~5,971 lines)
 │       ├── ui_chat.rs    (2198)  # chat panel: tabs, bubbles, markdown, diff, streaming, shell,
 │       │                           structured tool cards, per-project tab colors, replay button
-│       ├── ui_settings.rs(1501)  # 6-tab settings window (Providers/Projects/Prompt/Session/
+│       ├── ui_settings.rs(1535)  # 6-tab settings window (Providers/Projects/Prompt/Session/
 │       │                           Timeouts/About)
-│       ├── ui_explorer.rs (864)  # file tree (all files shown), preview (text+image with edit/
+│       ├── ui_explorer.rs (857)  # file tree (all files shown), preview (text+image with edit/
 │       │                           save), rename/delete context menu, gutter line numbers
 │       ├── ui_toolbar.rs  (340)  # project/session/provider/model pickers, budget meter, blink-dot
 │       ├── ui_todo.rs     (285)  # floating session task list, progress bar, priority dots, auto-close
@@ -96,7 +96,7 @@ Cargo.toml                               # workspace root, resolver = "2"
 │       └── helpers.rs     (445)  # time formatting, tool result parsing, markdown, LayoutJob,
 │                                 screen pixel sampling (Windows FFI), todo_scroll_area
 ```
-**Total: ~19,540 lines of Rust source across 35 files.**
+**Total: ~19,520 lines of Rust source across 35 files (36 including test).**
 
 ### Key Architecture Decisions
 
@@ -111,7 +111,7 @@ Cargo.toml                               # workspace root, resolver = "2"
 
 ### Data Flow
 
-1. **Startup** — `main.rs` installs rustls crypto, loads persisted state from `app.ron`, launches native window (1400×900)
+1. **Startup** — `main.rs` installs rustls crypto, seeds `AutoCode_data/providers.json` from baked-in defaults on first launch, loads app state from `app.ron` and provider configs (including API keys) from `providers.json`, launches native window (1400×900)
 2. **User input** — message typed in chat panel; toolbar provides project/session/provider selection
 3. **Chat orchestration** — `chat.rs::send_message()` loads history from disk, prepares request with optional prompt caching, builds API POST with tool definitions, parses SSE stream, dispatches tool calls to handler functions
 4. **Tool execution** — 20 tool handlers execute autonomously (filesystem, shell, search, web, task tracking, session management, line-number-based patching)
@@ -154,7 +154,7 @@ AutoCode automatically detects OpenGL availability at startup:
 
 ## Configuration
 
-AutoCode persists its state (API keys, provider settings, projects, prompts, sessions) via eframe's built-in persistence layer (`app.ron` in the executable's `AutoCode_data/` directory). On first launch, open the **Settings** window to configure:
+AutoCode persists its state across restarts. Most settings (projects, prompts, display/timeout config) are stored via eframe's persistence layer (`app.ron`). Provider configurations — including API keys — are stored separately in `AutoCode_data/providers.json` as **plaintext JSON**. On first launch, open the **Settings** window to configure:
 
 1. **Providers** — Add API keys, select models, and set per-provider rate limits (`requests_per_hour`) for OpenRouter, NVIDIA NIM, OpenAI-Compatible, or OpenCode Go endpoints (per-model manifests are embedded via `providers.json`)
 2. **Projects** — Add project directories for the file explorer to scan (uses native folder picker via `rfd`)
@@ -169,7 +169,8 @@ AutoCode persists its state (API keys, provider settings, projects, prompts, ses
 <exe_dir>/
 ├── autocode.exe
 └── AutoCode_data/
-    ├── app.ron                  # eframe persistence state
+    ├── app.ron                  # eframe persistence state (no API keys)
+    ├── providers.json           # provider configs + API keys (plaintext JSON)
     └── projects/
         └── <project_data_dir>/
             ├── meta.json            # project-level metadata (task lists, versioned for future schema)
@@ -189,7 +190,7 @@ AutoCode persists its state (API keys, provider settings, projects, prompts, ses
 
 ## Security
 
-- API keys stored using `SecretString` (zeroes heap memory on drop)
+- API keys zeroed from heap memory on drop via `SecretString`, but **persisted as plaintext** in `AutoCode_data/providers.json` (no encryption at rest)
 - Shell commands scoped to the project directory
 - Path traversal attacks (`../../etc/passwd`) detected and blocked with a cached resolver (`#[must_use]` annotated)
 - Temporary files (shell scripts, extracted content) tracked and cleaned up on exit
