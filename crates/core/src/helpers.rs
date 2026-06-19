@@ -619,11 +619,20 @@ pub fn default_handoff_trigger_prompt_string() -> String {
 pub fn default_handoff_enabled() -> bool {
     false
 }
+pub fn default_handoff_continuation_prompt_string() -> String {
+    crate::state::DEFAULT_HANDOFF_CONTINUATION_PROMPT.to_string()
+}
 pub fn default_thinking_mode() -> bool {
     false
 }
 pub fn default_reasoning_effort() -> String {
     "high".into()
+}
+pub fn default_temperature() -> f32 {
+    0.2
+}
+pub fn default_top_p() -> f32 {
+    1.0
 }
 pub fn default_max_output_tokens() -> u32 {
     16384
@@ -1172,6 +1181,78 @@ pub fn update_full_estimate(session: &mut crate::state::Session, tools_json: &se
     session.estimated_full_tokens =
         estimate_full_request_tokens(&filtered, Some(tools_json), model);
     session.estimated_messages_tokens = estimate_full_request_tokens(&filtered, None, model);
+}
+
+/// Replace or strip Unicode characters that egui's default fonts don't support
+/// (emojis, symbols, etc.) to avoid tofu blocks (□□□) in the UI.
+/// Lightweight — no extra font files needed.
+pub fn sanitize_display_text(s: &str) -> String {
+    s.chars()
+        .filter_map(|c| {
+            let u = c as u32;
+            match u {
+                // Variation Selectors (U+FE00-U+FE0F) — strip
+                0xFE00..=0xFE0F => None,
+                // Zero Width Joiner — strip
+                0x200D => None,
+                // Regional Indicator (flag) pairs — each half is strip
+                0x1F1E6..=0x1F1FF => None,
+                // Emoticons / Emoji (U+1F300-U+1F9FF)
+                0x1F300..=0x1F9FF => None,
+                // Supplemental Arrows-B (U+2900-U+297F)
+                0x2900..=0x297F => None,
+                // CJK Compatibility (U+3300-U+33FF)
+                0x3300..=0x33FF => None,
+                // Enclosed Alphanumerics (U+2460-U+24FF) — circles, parens
+                0x2460..=0x24FF => None,
+                // Enclosed CJK (U+3200-U+32FF)
+                0x3200..=0x32FF => None,
+                // Tags (U+E0000-U+E007F) — strip
+                0xE0000..=0xE007F => None,
+                // Misc symbols that often render as tofu
+                0x26A0 => Some('!'),  // ⚠ -> !
+                0x26A1 => Some('!'),  // ⚡ -> !
+                0x2714 => Some('*'),  // ✔ -> *
+                0x2716 => Some('x'),  // ✖ -> x
+                0x2713 => Some('*'),  // ✓ -> *
+                0x274C => Some('x'),  // ❌ -> x
+                0x2705 => Some('*'),  // ✅ -> *
+                0x2192 => Some('>'),  // → -> >
+                0x2190 => Some('<'),  // ← -> <
+                0x2191 => Some('^'),  // ↑ -> ^
+                0x2193 => Some('v'),  // ↓ -> v
+                0x27A1 => Some('>'),  // ➡ -> >
+                0x2B05 => Some('<'),  // ⬅ -> <
+                0x2B06 => Some('^'),  // ⬆ -> ^
+                0x2B07 => Some('v'),  // ⬇ -> v
+                // Miscellaneous Symbols and Arrows (U+2B00-U+2BFF) — catch remaining
+                0x2B00..=0x2BFF => None,
+                // General Punctuation smart quotes / dashes
+                0x2013 => Some('-'),  // En dash
+                0x2014 => Some('-'),  // Em dash
+                0x2018 | 0x2019 => Some('\''), // Smart quotes single
+                0x201C | 0x201D => Some('"'),  // Smart quotes double
+                0x2026 => Some('.'), // Ellipsis -> .
+                // Keep anything in egui's safe ranges
+                _ if u <= 0x007F => Some(c),                // ASCII
+                _ if (0x00A0..=0x024F).contains(&u) => Some(c), // Latin + extended
+                _ if (0x0370..=0x03FF).contains(&u) => Some(c), // Greek
+                _ if (0x0400..=0x052F).contains(&u) => Some(c), // Cyrillic
+                _ if (0x2000..=0x206F).contains(&u) => None, // Other punctuation
+                _ if (0x2100..=0x23FF).contains(&u) => Some(c), // Letterlike + technical
+                _ if (0x2500..=0x257F).contains(&u) => Some(c), // Box drawing
+                _ if (0x2580..=0x259F).contains(&u) => Some(c), // Block elements
+                _ if (0x25A0..=0x25FF).contains(&u) => Some(c), // Geometric shapes
+                _ if (0x2600..=0x26FF).contains(&u) => None, // Misc symbols
+                _ if (0x2700..=0x27BF).contains(&u) => None, // Dingbats
+                _ if (0xFE20..=0xFE23).contains(&u) => Some(c), // Combining ligatures
+                // CJK / Hangul — keep
+                _ if (0x2E80..=0x9FFF).contains(&u) => Some(c),
+                _ if (0xAC00..=0xD7AF).contains(&u) => Some(c),
+                _ => None,
+            }
+        })
+        .collect()
 }
 
 /// Format a panic payload into a human-readable string.

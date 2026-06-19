@@ -172,6 +172,10 @@ pub fn load_project_meta(project: &Project) -> Option<crate::state::ProjectMeta>
     }
 }
 
+fn default_sess_temperature() -> f32 { 0.2 }
+fn default_sess_top_p() -> f32 { 1.0 }
+fn default_handoff_pct_session() -> u8 { 80 }
+
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct SessionMeta {
     pub id: String,
@@ -200,6 +204,19 @@ pub struct SessionMeta {
     pub settings_open: bool,
     #[serde(default)]
     pub actual_tokens_used: usize,
+    /// Per-model sampling parameters snapshot (restored on session resume).
+    #[serde(default = "default_sess_temperature")]
+    pub temperature: f32,
+    #[serde(default = "default_sess_top_p")]
+    pub top_p: f32,
+    #[serde(default)]
+    pub frequency_penalty: f32,
+    #[serde(default)]
+    pub presence_penalty: f32,
+    #[serde(default)]
+    pub requests_per_hour: Option<u32>,
+    #[serde(default = "default_handoff_pct_session")]
+    pub handoff_percent: u8,
 }
 
 fn atomic_write(path: &Path, contents: &str) -> std::io::Result<()> {
@@ -275,6 +292,12 @@ pub fn save_session(project: &Project, session: &Session) -> std::io::Result<()>
         show_explorer: session.show_explorer,
         settings_open: session.settings_open,
         actual_tokens_used: session.actual_tokens_used,
+        temperature: session.temperature,
+        top_p: session.top_p,
+        frequency_penalty: session.frequency_penalty,
+        presence_penalty: session.presence_penalty,
+        requests_per_hour: session.requests_per_hour,
+        handoff_percent: session.handoff_percent,
     };
     atomic_write_json(&meta_path, &meta)
 }
@@ -303,7 +326,9 @@ pub fn save_session_meta(project: &Project, session: &Session) -> std::io::Resul
             {
                 let new_path = parent.join(&new_dirname);
                 if !new_path.exists() {
-                    let _ = fsutil::rename(&entry.path(), &new_path);
+                    if let Err(e) = fsutil::rename(&entry.path(), &new_path) {
+                        eprintln!("[session_storage] Failed to rename session dir: {}", e);
+                    }
                 }
             }
         }
@@ -328,6 +353,12 @@ pub fn save_session_meta(project: &Project, session: &Session) -> std::io::Resul
         show_explorer: session.show_explorer,
         settings_open: session.settings_open,
         actual_tokens_used: session.actual_tokens_used,
+        temperature: session.temperature,
+        top_p: session.top_p,
+        frequency_penalty: session.frequency_penalty,
+        presence_penalty: session.presence_penalty,
+        requests_per_hour: session.requests_per_hour,
+        handoff_percent: session.handoff_percent,
     };
     atomic_write_json(&meta_path, &meta)
 }
@@ -366,6 +397,12 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
                 session.show_explorer = meta.show_explorer;
                 session.settings_open = meta.settings_open;
                 session.actual_tokens_used = meta.actual_tokens_used;
+                session.temperature = meta.temperature;
+                session.top_p = meta.top_p;
+                session.frequency_penalty = meta.frequency_penalty;
+                session.presence_penalty = meta.presence_penalty;
+                session.requests_per_hour = meta.requests_per_hour;
+                session.handoff_percent = meta.handoff_percent;
                 // Recompute token estimates from loaded messages so the UI shows
                 // accurate context usage immediately after startup, rather than
                 // falling back to the less-accurate per-message token_count().
@@ -426,7 +463,9 @@ pub fn delete_session_file(project: &Project, session: &Session) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
             if entry.path().is_dir() && name.starts_with(&prefix) {
-                let _ = fsutil::remove_dir(&entry.path());
+                if let Err(e) = fsutil::remove_dir(&entry.path()) {
+                    eprintln!("[session_storage] Failed to remove session dir {:?}: {}", entry.path(), e);
+                }
             }
         }
     }
@@ -468,7 +507,9 @@ fn cleanup_orphan_temp_files(dir: &Path, max_age_secs: u64) {
                 && let Ok(ts) = ts_str.parse::<u64>()
                 && now.saturating_sub(ts) > max_age_secs
             {
-                let _ = fsutil::remove_file(&entry.path());
+                if let Err(e) = fsutil::remove_file(&entry.path()) {
+                    eprintln!("[session_storage] Failed to remove orphan temp file {:?}: {}", entry.path(), e);
+                }
             }
         }
     }
@@ -476,38 +517,77 @@ fn cleanup_orphan_temp_files(dir: &Path, max_age_secs: u64) {
 
 // -- Disk discovery (projects & sessions) -------------------------------------
 
-/// Path to the project identity file on disk.
-fn project_identity_path(data_dir_name: &str) -> PathBuf {
+fn project_dir(data_dir_name: &str) -> PathBuf {
     fsutil::exe_dir()
         .join("AutoCode_data")
         .join("projects")
         .join(data_dir_name)
-        .join("project.json")
 }
 
-/// Save project identity to disk as project.json.
+/// Save project identity to disk. Writes to both meta.json (so only one file
+/// is needed going forward) and project.json (backward compatibility / safety
+/// net so identity data is never lost if one write silently fails).
 pub fn save_project_identity(project: &Project) -> std::io::Result<()> {
-    let path = project_identity_path(&project.data_dir_name);
-    if let Some(parent) = path.parent() {
-        fsutil::create_dir_all(parent)?;
-    }
-    atomic_write_json(&path, project)
+    let dir = project_dir(&project.data_dir_name);
+    fsutil::create_dir_all(&dir)?;
+
+    // 1. Write identity into meta.json alongside the task list.
+    let mut meta = load_project_meta(project).unwrap_or_default();
+    meta.project_id = project.id.clone();
+    meta.project_name = project.name.clone();
+    meta.root_path = project.root_path.clone();
+    meta.created_at = project.created_at;
+    save_project_meta(project, &meta)?;
+
+    // 2. Also write project.json as a safety net so existing code paths
+    //    that only look for project.json still work.
+    let identity_path = dir.join("project.json");
+    atomic_write_json(&identity_path, project)?;
+
+    Ok(())
 }
 
-/// Load project identity from disk.
+/// Load project identity. Tries meta.json first (merged file), falls back to
+/// project.json (legacy separate file).
 pub fn load_project_identity(data_dir_name: &str) -> Option<Project> {
-    let path = project_identity_path(data_dir_name);
+    let dir = project_dir(data_dir_name);
+
+    // Try meta.json — it may have identity fields now.
+    if let Some(meta) = load_project_meta_raw(&dir)
+        && !meta.project_id.is_empty()
+    {
+        return Some(Project {
+            id: meta.project_id,
+            name: meta.project_name,
+            root_path: meta.root_path,
+            created_at: meta.created_at,
+            data_dir_name: data_dir_name.to_string(),
+        });
+    }
+
+    // Fallback: legacy project.json.
+    let old_path = dir.join("project.json");
+    if let Ok(json) = fsutil::read_to_string(&old_path)
+        && let Ok(project) = serde_json::from_str::<Project>(&json)
+    {
+        return Some(project);
+    }
+
+    None
+}
+
+/// Read ProjectMeta from a project directory without needing a Project reference.
+fn load_project_meta_raw(dir: &Path) -> Option<crate::state::ProjectMeta> {
+    let path = dir.join("meta.json");
     if !path.exists() {
         return None;
     }
-    match fsutil::read_to_string(&path) {
-        Ok(json) => serde_json::from_str(&json).ok(),
-        Err(_) => None,
-    }
+    let json = fsutil::read_to_string(&path).ok()?;
+    serde_json::from_str(&json).ok()
 }
 
 /// Discover projects from disk by scanning AutoCode_data/projects/.
-/// Only returns projects that have a valid project.json identity file.
+/// Returns projects that have identity data in meta.json (or old project.json).
 pub fn discover_projects_from_disk() -> Vec<Project> {
     let proj_dir = fsutil::exe_dir()
         .join("AutoCode_data")
@@ -573,6 +653,12 @@ pub fn discover_sessions_from_disk(project: &Project) -> Vec<Session> {
                         closed: true,
                         estimated_full_tokens: 0,
                         estimated_messages_tokens: 0,
+                        temperature: meta.temperature,
+                        top_p: meta.top_p,
+                        frequency_penalty: meta.frequency_penalty,
+                        presence_penalty: meta.presence_penalty,
+                        requests_per_hour: meta.requests_per_hour,
+                        handoff_percent: meta.handoff_percent,
                     });
                 }
         }

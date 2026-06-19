@@ -421,6 +421,9 @@ pub struct CompletionRequest {
     pub thinking_mode: bool,
     pub reasoning_effort: String,
     pub thinking_api: autocode_core::state::ThinkingApi,
+    pub top_p: f32,
+    pub frequency_penalty: f32,
+    pub presence_penalty: f32,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -586,7 +589,7 @@ pub fn tool_definitions() -> serde_json::Value {
         {"type":"function","function":{"name":"todo_list","strict":true,"description":"Track multi-step tasks for the current session. Send full list on every update.","parameters":{"type":"object","properties":{"title":{"type":"string","description":"Short title (max 35 chars)."},"task_items":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string","description":"Stable id e.g. '1'."},"content":{"type":"string","description":"Task description."},"status":{"type":"string","enum":["pending","in_progress","completed","cancelled"],"description":"Status."},"priority":{"type":"string","enum":["high","medium","low"],"description":"Priority (default medium)."}},"required":["id","content","status"],"additionalProperties":false},"description":"All items."}},"required":["title","task_items"],"additionalProperties":false}}},
         {"type":"function","function":{"name":"project_task_list","strict":true,"description":"Track project-level tasks that persist across sessions. Use for long-running goals. Send full list on every update.","parameters":{"type":"object","properties":{"title":{"type":"string","description":"Short title (max 35 chars)."},"task_items":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string","description":"Stable id e.g. '1'."},"content":{"type":"string","description":"Task description."},"status":{"type":"string","enum":["pending","in_progress","completed","cancelled"],"description":"Status."},"priority":{"type":"string","enum":["high","medium","low"],"description":"Priority (default medium)."}},"required":["id","content","status"],"additionalProperties":false},"description":"All items."}},"required":["title","task_items"],"additionalProperties":false}}},
         {"type":"function","function":{"name":"glob","strict":true,"description":"Find files by glob pattern. Returns sorted relative paths.","parameters":{"type":"object","properties":{"pattern":{"type":"string","description":"Glob pattern (*, **, ?). e.g. '**/*.rs'."},"path":{"type":"string","description":"Search dir (default: project root)."}},"required":["pattern"],"additionalProperties":false}}},
-        {"type":"function","function":{"name":"handoff","strict":true,"description":"End session & resume fresh. Save RESUME.md. next_prompt instructs the next session.","parameters":{"type":"object","properties":{"reason":{"type":"string","description":"Why handoff is needed (e.g. 'context nearing limit')."},"next_prompt":{"type":"string","description":"What the next session should continue working on, and how."}},"required":["reason","next_prompt"],"additionalProperties":false}}},
+        {"type":"function","function":{"name":"handoff","strict":true,"description":"End session and start a fresh one. next_prompt becomes the first user message in the new session.","parameters":{"type":"object","properties":{"reason":{"type":"string","description":"Why handoff is needed."},"next_prompt":{"type":"string","description":"Full instructions for the next session on what to continue working on."}},"required":["reason","next_prompt"],"additionalProperties":false}}},
         {"type":"function","function":{"name":"name_session","strict":true,"description":"Set a descriptive label for this session. Call first in every session.","parameters":{"type":"object","properties":{"name":{"type":"string","description":"Short name e.g. 'fixing_build'."}},"required":["name"],"additionalProperties":false}}},
     ])
 }
@@ -725,6 +728,12 @@ struct RequestBody<'a> {
     max_tokens: u32,
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frequency_penalty: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    presence_penalty: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<serde_json::Value>,
@@ -766,12 +775,19 @@ fn build_request_body(
         })
         .collect();
 
+    let top_p = if (req.top_p - 1.0).abs() < f32::EPSILON { None } else { Some(req.top_p) };
+    let frequency_penalty = if req.frequency_penalty.abs() < f32::EPSILON { None } else { Some(req.frequency_penalty) };
+    let presence_penalty = if req.presence_penalty.abs() < f32::EPSILON { None } else { Some(req.presence_penalty) };
+
     let mut body = RequestBody {
         model: &req.model,
         messages,
         temperature: req.temperature,
         max_tokens: req.max_tokens,
         stream: req.stream,
+        top_p,
+        frequency_penalty,
+        presence_penalty,
         tools: None,
         tool_choice: None,
         stream_options: None,
@@ -787,6 +803,15 @@ fn build_request_body(
         }
         autocode_core::state::ThinkingApi::OpenAI if req.thinking_mode => {
             body.reasoning_effort = Some(&req.reasoning_effort);
+        }
+        autocode_core::state::ThinkingApi::Anthropic if req.thinking_mode => {
+            body.thinking = Some(serde_json::json!({"type": "enabled", "budget_tokens": 16000}));
+        }
+        autocode_core::state::ThinkingApi::Gemini if req.thinking_mode => {
+            body.thinking = Some(serde_json::json!({"type": "enabled"}));
+        }
+        autocode_core::state::ThinkingApi::Grok if req.thinking_mode => {
+            body.thinking = Some(serde_json::json!({"type": "enabled"}));
         }
         _ => {}
     }

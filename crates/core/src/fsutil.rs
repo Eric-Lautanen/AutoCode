@@ -26,7 +26,9 @@ pub fn set_exe_dir_for_test(dir: &Path) {
         *cell.borrow_mut() = Some(dir.to_path_buf());
     });
     let data_dir = dir.join("AutoCode_data");
-    let _ = std::fs::create_dir_all(&data_dir);
+    if let Err(e) = std::fs::create_dir_all(&data_dir) {
+        eprintln!("[fsutil] Failed to create test data directory: {}", e);
+    }
 }
 
 pub fn extended_path(path: &Path) -> PathBuf {

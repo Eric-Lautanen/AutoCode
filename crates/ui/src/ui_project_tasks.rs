@@ -61,7 +61,7 @@ pub fn show_window(ctx: &egui::Context, state: &mut AppState) {
                             "Project Tasks".to_string()
                         } else {
                             let t = state.project_task_list.title.clone();
-                            autocode_core::helpers::truncate_str(&t, 35)
+                            autocode_core::helpers::truncate_str(&t, 25)
                         };
                         ui.label(
                             RichText::new(title)
@@ -103,6 +103,7 @@ pub fn show_window(ctx: &egui::Context, state: &mut AppState) {
                                     let meta = ProjectMeta {
                                         version: 1,
                                         project_task_list: Default::default(),
+                                        ..Default::default()
                                     };
                                     let _ = session_storage::save_project_meta(proj, &meta);
                                 }
@@ -200,6 +201,7 @@ pub fn show_window(ctx: &egui::Context, state: &mut AppState) {
             let meta = autocode_core::state::ProjectMeta {
                 version: 1,
                 project_task_list: ptl,
+                ..Default::default()
             };
             let _ = autocode_core::session_storage::save_project_meta(proj, &meta);
         }
@@ -270,6 +272,7 @@ fn render_item(ui: &mut egui::Ui, item: &TodoItem, item_w: f32) {
         })
         .show(ui, |ui| {
             ui.set_min_width(item_w);
+            ui.set_max_width(item_w);
             ui.horizontal(|ui| {
                 if let Some(dot_color) = priority_dot {
                     let (rect, _) =

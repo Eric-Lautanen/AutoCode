@@ -12,14 +12,18 @@ use egui::Vec2;
 fn main() -> eframe::Result {
     let exe_dir = autocode_core::fsutil::exe_dir();
     let data_dir = exe_dir.join("AutoCode_data");
-    let _ = autocode_core::fsutil::create_dir_all(&data_dir);
+    if let Err(e) = autocode_core::fsutil::create_dir_all(&data_dir) {
+        eprintln!("[main] Failed to create data directory: {}", e);
+    }
 
     // Seed providers.json from baked-in assets on first launch.
     // Once on disk, the app always loads from there so users can add/edit providers.
     let providers_dst = data_dir.join("providers.json");
     if !providers_dst.exists() {
         let providers_src = include_str!("../../../assets/providers.json");
-        let _ = std::fs::write(&providers_dst, providers_src);
+        if let Err(e) = std::fs::write(&providers_dst, providers_src) {
+            eprintln!("[main] Failed to write providers.json: {}", e);
+        }
     }
 
     rustls::crypto::ring::default_provider()

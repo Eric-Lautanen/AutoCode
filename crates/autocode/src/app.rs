@@ -85,11 +85,9 @@ impl AutocodeApp {
         {
             sess.closed = false;
             autocode_core::session_storage::load_session(proj, sess);
-            // Recompute estimate with actual tool definitions so the toolbar
-            // meter matches the pre-flight check from the start.
             autocode_core::helpers::update_full_estimate(sess, &provider::tool_definitions());
-            // Evict excess messages from RAM — full history is on disk.
-            // The UI will page in older messages on demand via load_messages_before.
+            // Keep only the last window of messages in RAM for API requests.
+            // Full history lives on disk and is loaded on demand.
             let window = state.ui_display_window;
             let total = sess.messages.len();
             if total > window * 2 {
@@ -119,8 +117,21 @@ impl AutocodeApp {
             && state.providers.contains_key(&label)
         {
             state.active_provider = label.clone();
-            if let Some(prov) = state.providers.get_mut(&label) {
+            // Snapshot the session's per-model params before mutating the provider.
+            let sess_params = state.active_session().map(|s| (
+                s.temperature, s.top_p, s.frequency_penalty, s.presence_penalty,
+                s.requests_per_hour, s.handoff_percent,
+            ));
+            if let (Some(prov), Some((temp, top_p, freq, pres, rph, handoff))) =
+                (state.providers.get_mut(&label), sess_params)
+            {
                 prov.model = model;
+                prov.temperature = temp;
+                prov.top_p = top_p;
+                prov.frequency_penalty = freq;
+                prov.presence_penalty = pres;
+                prov.requests_per_hour = rph;
+                prov.handoff_percent = handoff;
             }
         }
     }
@@ -139,10 +150,12 @@ impl AutocodeApp {
                 .find(|p| Some(&p.id) == sess.project_id.as_ref())
             {
                 // Only write metadata if the session files still exist on disk.
-                // Disk is the source of truth — if the user deleted the session
+                // Disk is the source of truth - if the user deleted the session
                 // manually we must not recreate it.
                 if autocode_core::session_storage::session_exists(proj, sess) {
-                    let _ = autocode_core::session_storage::save_session_meta(proj, sess);
+                    if let Err(e) = autocode_core::session_storage::save_session_meta(proj, sess) {
+                        eprintln!("[app] Failed to save session meta for {}: {}", sess.id, e);
+                    }
                 }
             }
         }
@@ -151,6 +164,15 @@ impl AutocodeApp {
 
 impl eframe::App for AutocodeApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Update window title with active session name.
+        let title = self.state.active_session()
+            .map(|s| {
+                let label = if s.label.is_empty() { &s.id } else { &s.label };
+                format!("AutoCode :: {}", label)
+            })
+            .unwrap_or_else(|| "AutoCode -- Autonomous AI Coder".into());
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
+
         ctx.set_debug_on_hover(self.state.debug_mode);
         ctx.options_mut(|o| {
             o.warn_on_id_clash = self.state.debug_mode;
@@ -190,6 +212,19 @@ impl eframe::App for AutocodeApp {
             if now.saturating_sub(last) >= 30 {
                 ctx.data_mut(|d| d.insert_temp(egui::Id::new("last_stale_purge"), now));
                 self.state.prune_disk_state();
+            }
+        }
+
+        // Persist session meta immediately when provider/model changes in the UI.
+        if self.state.session_meta_dirty {
+            self.state.session_meta_dirty = false;
+            if let Some(sess) = self.state.active_session()
+                && let Some(proj) = self.state.active_project()
+                && autocode_core::session_storage::session_exists(proj, sess)
+            {
+                if let Err(e) = autocode_core::session_storage::save_session_meta(proj, sess) {
+                    eprintln!("[app] Failed to save session meta: {}", e);
+                }
             }
         }
 
@@ -288,12 +323,16 @@ impl eframe::App for AutocodeApp {
                 };
                 let id = project.id.clone();
                 self.state.projects.push(project);
-                let _ = autocode_core::session_storage::ensure_project_dirs(
+                if let Err(e) = autocode_core::session_storage::ensure_project_dirs(
                     self.state.projects.last().unwrap(),
-                );
+                ) {
+                    eprintln!("[app] Failed to create project directories: {}", e);
+                }
                 // Persist project identity to disk so it survives restarts.
                 if let Some(proj) = self.state.projects.last() {
-                    let _ = autocode_core::session_storage::save_project_identity(proj);
+                    if let Err(e) = autocode_core::session_storage::save_project_identity(proj) {
+                        eprintln!("[app] Failed to save project identity: {}", e);
+                    }
                 }
                 autocode_core::session_storage::switch_to_project(&mut self.state, &id);
                 self.state.show_explorer = true;
@@ -401,6 +440,10 @@ impl eframe::App for AutocodeApp {
             let handoff_enabled = self.state.handoff_enabled;
             let show_explorer = self.state.show_explorer;
             let settings_open = self.state.settings_open;
+            let provider_params = self.state.active_provider().map(|p| (
+                p.temperature, p.top_p, p.frequency_penalty, p.presence_penalty,
+                p.requests_per_hour, p.handoff_percent,
+            ));
             if let Some(sess) = self.state.active_session_mut() {
                 sess.provider_label = prov_label;
                 sess.model = model;
@@ -410,6 +453,14 @@ impl eframe::App for AutocodeApp {
                 sess.handoff_enabled = handoff_enabled;
                 sess.show_explorer = show_explorer;
                 sess.settings_open = settings_open;
+                if let Some((temp, top_p, freq, pres, rph, handoff)) = provider_params {
+                    sess.temperature = temp;
+                    sess.top_p = top_p;
+                    sess.frequency_penalty = freq;
+                    sess.presence_penalty = pres;
+                    sess.requests_per_hour = rph;
+                    sess.handoff_percent = handoff;
+                }
             }
         }
         // Persist project metadata to disk.
@@ -418,8 +469,11 @@ impl eframe::App for AutocodeApp {
             let meta = autocode_core::state::ProjectMeta {
                 version: 1,
                 project_task_list: ptl,
+                ..Default::default()
             };
-            let _ = autocode_core::session_storage::save_project_meta(proj, &meta);
+            if let Err(e) = autocode_core::session_storage::save_project_meta(proj, &meta) {
+                eprintln!("[app] Failed to save project meta: {}", e);
+            }
         }
         self.save_sessions();
         self.state.save(storage);
@@ -464,8 +518,11 @@ impl eframe::App for AutocodeApp {
             let meta = autocode_core::state::ProjectMeta {
                 version: 1,
                 project_task_list: ptl,
+                ..Default::default()
             };
-            let _ = autocode_core::session_storage::save_project_meta(proj, &meta);
+            if let Err(e) = autocode_core::session_storage::save_project_meta(proj, &meta) {
+                eprintln!("[app] Failed to save project meta on exit: {}", e);
+            }
         }
         self.save_sessions();
 
@@ -483,7 +540,9 @@ impl eframe::App for AutocodeApp {
                 }
             };
             for path in temp_files.drain(..) {
-                let _ = std::fs::remove_file(path);
+                if let Err(e) = std::fs::remove_file(&path) {
+                    eprintln!("[app] Failed to remove temp file {:?}: {}", path, e);
+                }
             }
         }
     }

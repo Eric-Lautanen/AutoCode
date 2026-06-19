@@ -22,7 +22,31 @@ pub enum ShellEvent {
     SpawnError(String),
 }
 
-pub fn run_command_in_dir(command: &str, cwd: Option<&str>) -> (ShellTask, Receiver<ShellEvent>) {
+/// Characters that are rejected by the shell sanitizer when not explicitly needed.
+const SHELL_METACHARACTERS: &[char] = &[';', '&', '|', '>', '<'];
+
+/// Sanitize a shell command by checking for dangerous metacharacters.
+/// Returns `Ok(())` if the command is safe, or `Err` with a description of the problem.
+///
+/// This is a defense-in-depth measure. The AI should not be generating commands
+/// with these characters, but if it does, we reject them to prevent injection.
+pub fn sanitize_shell(command: &str) -> Result<(), String> {
+    for ch in SHELL_METACHARACTERS {
+        if command.contains(*ch) {
+            return Err(format!(
+                "Shell command contains disallowed character '{}'. \
+                 Metacharacters like ; && || > < | are not permitted. \
+                 Use separate tool calls instead of chaining commands.",
+                ch
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub fn run_command_in_dir(command: &str, cwd: Option<&str>) -> Result<(ShellTask, Receiver<ShellEvent>), String> {
+    sanitize_shell(command)?;
+
     let (tx, rx) = mpsc::channel();
     let (pid_tx, pid_rx) = mpsc::channel();
     let task_id = helpers::generate_id();
@@ -49,7 +73,7 @@ pub fn run_command_in_dir(command: &str, cwd: Option<&str>) -> (ShellTask, Recei
         pid,
     };
 
-    (task, rx)
+    Ok((task, rx))
 }
 
 fn run_command_inner(

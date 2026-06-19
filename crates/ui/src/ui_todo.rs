@@ -63,7 +63,7 @@ pub fn show_window(ctx: &egui::Context, state: &mut AppState) {
                             "Task List".to_string()
                         } else {
                             let t = state.todo_list.title.clone();
-                            autocode_core::helpers::truncate_str(&t, 35)
+                            autocode_core::helpers::truncate_str(&t, 25)
                         };
                         ui.label(
                             RichText::new(title)
@@ -260,6 +260,7 @@ fn render_item(ui: &mut egui::Ui, item: &TodoItem, item_w: f32) {
         })
         .show(ui, |ui| {
             ui.set_min_width(item_w);
+            ui.set_max_width(item_w);
             ui.horizontal(|ui| {
                 if let Some(dot_color) = priority_dot {
                     let (rect, _) =

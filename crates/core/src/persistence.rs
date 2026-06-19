@@ -23,6 +23,13 @@ pub enum PersistenceCommand {
     Shutdown,
 }
 
+/// Information about a panic caught in the persistence thread.
+#[derive(Debug, Clone)]
+pub struct PanicInfo {
+    pub thread_name: String,
+    pub payload: String,
+}
+
 /// A background thread that handles all JSONL message persistence off the UI
 /// thread. Metadata writes (session meta, project meta, project identity) remain
 /// synchronous since they are tiny atomic writes.
@@ -30,6 +37,8 @@ pub struct PersistenceThread {
     tx: mpsc::Sender<PersistenceCommand>,
     handle: Option<thread::JoinHandle<()>>,
     running: std::sync::Arc<AtomicBool>,
+    panic_tx: mpsc::Sender<PanicInfo>,
+    panic_rx: std::sync::Mutex<mpsc::Receiver<PanicInfo>>,
 }
 
 impl Default for PersistenceThread {
@@ -43,12 +52,28 @@ impl PersistenceThread {
         let (tx, rx) = mpsc::channel::<PersistenceCommand>();
         let running = std::sync::Arc::new(AtomicBool::new(true));
         let r = running.clone();
+        let (panic_tx, panic_rx) = mpsc::channel::<PanicInfo>();
+        let panic_tx_clone = panic_tx.clone();
         let handle = thread::Builder::new()
             .name("persistence".into())
             .spawn(move || {
-                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     Self::run_loop(rx);
                 }));
+                if let Err(panic_payload) = result {
+                    let payload = if let Some(s) = panic_payload.downcast_ref::<String>() {
+                        s.clone()
+                    } else if let Some(s) = panic_payload.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else {
+                        "unknown panic payload".to_string()
+                    };
+                    let info = PanicInfo {
+                        thread_name: "persistence".to_string(),
+                        payload,
+                    };
+                    let _ = panic_tx_clone.send(info);
+                }
                 r.store(false, Ordering::SeqCst);
             })
             .expect("failed to spawn persistence thread");
@@ -57,6 +82,8 @@ impl PersistenceThread {
             tx,
             handle: Some(handle),
             running,
+            panic_tx,
+            panic_rx: std::sync::Mutex::new(panic_rx),
         }
     }
 
@@ -64,12 +91,16 @@ impl PersistenceThread {
         while let Ok(cmd) = rx.recv() {
             match cmd {
                 PersistenceCommand::AppendMessages { dir, messages } => {
-                    let _ = chunked_jsonl::append_messages_chunked(
+                    if let Err(e) = chunked_jsonl::append_messages_chunked(
                         &dir, "", "", &messages,
-                    );
+                    ) {
+                        eprintln!("[persistence] Failed to append messages to {:?}: {}", dir, e);
+                    }
                 }
                 PersistenceCommand::Flush { done_tx } => {
-                    let _ = done_tx.send(());
+                    if done_tx.send(()).is_err() {
+                        eprintln!("[persistence] Flush acknowledgment failed: receiver dropped");
+                    }
                 }
                 PersistenceCommand::Shutdown => break,
             }
@@ -77,14 +108,21 @@ impl PersistenceThread {
     }
 
     pub fn send(&self, cmd: PersistenceCommand) {
-        let _ = self.tx.send(cmd);
+        if let Err(e) = self.tx.send(cmd) {
+            eprintln!("[persistence] Failed to send command: {}", e);
+        }
     }
 
     /// Send a flush command and wait up to 30s for acknowledgment.
     pub fn flush(&self) {
         let (done_tx, done_rx) = mpsc::channel();
-        let _ = self.tx.send(PersistenceCommand::Flush { done_tx });
-        let _ = done_rx.recv_timeout(std::time::Duration::from_secs(30));
+        if self.tx.send(PersistenceCommand::Flush { done_tx }).is_ok() {
+            if let Err(e) = done_rx.recv_timeout(std::time::Duration::from_secs(30)) {
+                eprintln!("[persistence] Flush timed out or failed: {}", e);
+            }
+        } else {
+            eprintln!("[persistence] Failed to send flush command");
+        }
     }
 
     /// Shut down the thread and wait for it to finish.
@@ -97,6 +135,22 @@ impl PersistenceThread {
 
     pub fn is_running(&self) -> bool {
         self.running.load(Ordering::SeqCst)
+    }
+
+    /// Drain any panic reports that have accumulated since the last check.
+    pub fn drain_panics(&self) -> Vec<PanicInfo> {
+        let rx = self.panic_rx.lock().unwrap();
+        let mut panics = Vec::new();
+        while let Ok(info) = rx.try_recv() {
+            panics.push(info);
+        }
+        panics
+    }
+
+    /// Check if any panics have occurred without draining them.
+    pub fn has_panics(&self) -> bool {
+        let rx = self.panic_rx.lock().unwrap();
+        rx.try_recv().is_ok()
     }
 }
 

@@ -11,12 +11,12 @@
       "counting_endpoint": "{base_url}/tokenize",
       "auth_type": "Bearer",
       "models": {
-        "anthropic/claude-opus-4.8": { "context_window": 1000000, "max_output_tokens": 128000, "max_output_tokens_thinking": 32000, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": true },
-        "anthropic/claude-opus-4.7": { "context_window": 1000000, "max_output_tokens": 128000, "max_output_tokens_thinking": 32000, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": true },
-        "anthropic/claude-opus-4.6": { "context_window": 1000000, "max_output_tokens": 128000, "max_output_tokens_thinking": 32000, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": true },
-        "anthropic/claude-sonnet-4.6": { "context_window": 1000000, "max_output_tokens": 64000, "max_output_tokens_thinking": 32000, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": true },
-        "anthropic/claude-sonnet-4.5": { "context_window": 200000, "max_output_tokens": 64000, "max_output_tokens_thinking": 16384, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": true },
-        "anthropic/claude-haiku-4.5": { "context_window": 200000, "max_output_tokens": 64000, "max_output_tokens_thinking": 16384, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": true },
+        "anthropic/claude-opus-4.8": { "context_window": 1000000, "max_output_tokens": 128000, "max_output_tokens_thinking": 32000, "thinking_api": "anthropic", "reasoning_efforts": ["high"], "supports_cache_control": true },
+        "anthropic/claude-opus-4.7": { "context_window": 1000000, "max_output_tokens": 128000, "max_output_tokens_thinking": 32000, "thinking_api": "anthropic", "reasoning_efforts": ["high"], "supports_cache_control": true },
+        "anthropic/claude-opus-4.6": { "context_window": 1000000, "max_output_tokens": 128000, "max_output_tokens_thinking": 32000, "thinking_api": "anthropic", "reasoning_efforts": ["high"], "supports_cache_control": true },
+        "anthropic/claude-sonnet-4.6": { "context_window": 1000000, "max_output_tokens": 64000, "max_output_tokens_thinking": 32000, "thinking_api": "anthropic", "reasoning_efforts": ["high"], "supports_cache_control": true },
+        "anthropic/claude-sonnet-4.5": { "context_window": 200000, "max_output_tokens": 64000, "max_output_tokens_thinking": 16384, "thinking_api": "anthropic", "reasoning_efforts": ["high"], "supports_cache_control": true },
+        "anthropic/claude-haiku-4.5": { "context_window": 200000, "max_output_tokens": 64000, "max_output_tokens_thinking": 16384, "thinking_api": "anthropic", "reasoning_efforts": ["high"], "supports_cache_control": true },
         "deepseek/deepseek-v4-pro": { "context_window": 1048576, "max_output_tokens": 192000, "max_output_tokens_thinking": 16384, "thinking_api": "deepseek", "reasoning_efforts": ["high", "max"], "supports_cache_control": true },
         "deepseek/deepseek-v4-flash": { "context_window": 1048576, "max_output_tokens": 65536, "max_output_tokens_thinking": 16384, "thinking_api": "deepseek", "reasoning_efforts": ["high", "max"], "supports_cache_control": true },
         "minimax/minimax-m3": { "context_window": 1048576, "max_output_tokens": 256000, "thinking_api": "off", "reasoning_efforts": [], "supports_cache_control": false },
@@ -32,14 +32,14 @@
         "openai/o4-mini": { "context_window": 200000, "max_output_tokens": 50000, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": true },
         "openai/o3": { "context_window": 200000, "max_output_tokens": 50000, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": true },
         "openai/gpt-4.1": { "context_window": 1048576, "max_output_tokens": 32768, "thinking_api": "openai", "reasoning_efforts": ["low", "medium", "high"], "supports_cache_control": true },
-        "google/gemini-2.5-pro": { "context_window": 1048576, "max_output_tokens": 32768, "thinking_api": "off", "reasoning_efforts": [], "supports_cache_control": false },
-        "google/gemini-2.5-flash": { "context_window": 1048576, "max_output_tokens": 32767, "thinking_api": "off", "reasoning_efforts": [], "supports_cache_control": false },
+        "google/gemini-2.5-pro": { "context_window": 1048576, "max_output_tokens": 32768, "thinking_api": "gemini", "reasoning_efforts": [], "supports_cache_control": false },
+        "google/gemini-2.5-flash": { "context_window": 1048576, "max_output_tokens": 32767, "thinking_api": "gemini", "reasoning_efforts": [], "supports_cache_control": false },
         "stepfun/step-3.7-flash": { "context_window": 262144, "max_output_tokens": 16384, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": false },
         "qwen/qwen3.7-max": { "context_window": 1000000, "max_output_tokens": 32768, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": false },
         "qwen/qwen3.7-plus": { "context_window": 1000000, "max_output_tokens": 32768, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": false },
         "qwen/qwen3.6-plus": { "context_window": 1000000, "max_output_tokens": 32768, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": false },
         "meta-llama/llama-4-maverick": { "context_window": 1048576, "max_output_tokens": 8192, "thinking_api": "off", "reasoning_efforts": [], "supports_cache_control": false },
-        "x-ai/grok-4.20": { "context_window": 2000000, "max_output_tokens": 32768, "thinking_api": "off", "reasoning_efforts": [], "supports_cache_control": false }
+        "x-ai/grok-4.20": { "context_window": 2000000, "max_output_tokens": 32768, "thinking_api": "grok", "reasoning_efforts": [], "supports_cache_control": false }
       }
     },
     "nvidia-nim": {
@@ -52,17 +52,17 @@
       "default_model": "z-ai/glm-5.1",
       "counting_endpoint": "{base_url}/tokenize",
       "models": {
-        "z-ai/glm-5.1": { "context_window": 131072, "max_output_tokens": 8192, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": false, "requests_per_hour": 40 },
-        "moonshotai/kimi-k2.6": { "context_window": 262144, "max_output_tokens": 8192, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": false, "requests_per_hour": 40 },
-        "deepseek-ai/deepseek-v4-flash": { "context_window": 1048576, "max_output_tokens": 65536, "max_output_tokens_thinking": 16384, "thinking_api": "deepseek", "reasoning_efforts": ["high", "max"], "supports_cache_control": false, "requests_per_hour": 40 },
+        "z-ai/glm-5.1": { "context_window": 131072, "max_output_tokens": 8192, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": false, "requests_per_hour": 30 },
+        "moonshotai/kimi-k2.6": { "context_window": 262144, "max_output_tokens": 8192, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": false, "requests_per_hour": 30 },
+        "deepseek-ai/deepseek-v4-flash": { "context_window": 1048576, "max_output_tokens": 65536, "max_output_tokens_thinking": 16384, "thinking_api": "deepseek", "reasoning_efforts": ["high", "max"], "supports_cache_control": false, "requests_per_hour": 30 },
         "deepseek-ai/deepseek-v4-pro": { "context_window": 1048576, "max_output_tokens": 192000, "max_output_tokens_thinking": 16384, "thinking_api": "deepseek", "reasoning_efforts": ["high", "max"], "supports_cache_control": false, "requests_per_hour": 30 },
-        "minimaxai/minimax-m2.7": { "context_window": 204800, "max_output_tokens": 32768, "thinking_api": "off", "reasoning_efforts": [], "supports_cache_control": false, "requests_per_hour": 40 },
-        "minimaxai/minimax-m3": { "context_window": 1048576, "max_output_tokens": 256000, "thinking_api": "off", "reasoning_efforts": [], "supports_cache_control": false, "requests_per_hour": 40 },
+        "minimaxai/minimax-m2.7": { "context_window": 204800, "max_output_tokens": 32768, "thinking_api": "off", "reasoning_efforts": [], "supports_cache_control": false, "requests_per_hour": 30 },
+        "minimaxai/minimax-m3": { "context_window": 1048576, "max_output_tokens": 256000, "thinking_api": "off", "reasoning_efforts": [], "supports_cache_control": false, "requests_per_hour": 30 },
         "nvidia/nemotron-3-super-120b-a12b": { "context_window": 1000000, "max_output_tokens": 16384, "thinking_api": "off", "reasoning_efforts": [], "supports_cache_control": false, "requests_per_hour": 30 },
-        "nvidia/nemotron-3-ultra-550b-a55b": { "context_window": 1000000, "max_output_tokens": 16384, "thinking_api": "off", "reasoning_efforts": [], "supports_cache_control": false, "requests_per_hour": 20 },
-        "qwen/qwen3-next-80b-a3b-instruct": { "context_window": 262144, "max_output_tokens": 16384, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": false, "requests_per_hour": 40 },
-        "meta/llama-4-maverick-17b-128e-instruct": { "context_window": 1048576, "max_output_tokens": 8192, "thinking_api": "off", "reasoning_efforts": [], "supports_cache_control": false, "requests_per_hour": 40 },
-        "mistralai/mistral-medium-3.5-128b": { "context_window": 262144, "max_output_tokens": 16384, "thinking_api": "off", "reasoning_efforts": [], "supports_cache_control": false, "requests_per_hour": 40 }
+        "nvidia/nemotron-3-ultra-550b-a55b": { "context_window": 1000000, "max_output_tokens": 16384, "thinking_api": "off", "reasoning_efforts": [], "supports_cache_control": false, "requests_per_hour": 30 },
+        "qwen/qwen3-next-80b-a3b-instruct": { "context_window": 262144, "max_output_tokens": 16384, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": false, "requests_per_hour": 30 },
+        "meta/llama-4-maverick-17b-128e-instruct": { "context_window": 1048576, "max_output_tokens": 8192, "thinking_api": "off", "reasoning_efforts": [], "supports_cache_control": false, "requests_per_hour": 30 },
+        "mistralai/mistral-medium-3.5-128b": { "context_window": 262144, "max_output_tokens": 16384, "thinking_api": "off", "reasoning_efforts": [], "supports_cache_control": false, "requests_per_hour": 30 }
       }
     },
     "openai-compatible": {

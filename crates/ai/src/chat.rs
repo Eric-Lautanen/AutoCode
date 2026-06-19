@@ -208,15 +208,15 @@ pub fn replay_to_message(
         }
     };
 
-    // Truncate in-RAM and on-disk.
+    // Truncate in-RAM and on-disk — remove the target message and everything after it.
     {
         let sess = &mut state.sessions[session_idx];
-        sess.messages.retain(|m| m.id <= message_id);
+        sess.messages.retain(|m| m.id < message_id);
         sess.next_message_id = message_id + 1;
         sess.actual_tokens_used = 0;
 
         let proj = &state.projects[proj_idx];
-        autocode_core::session_storage::truncate_messages_after(proj, sess, message_id).ok()?;
+        autocode_core::session_storage::truncate_messages_after(proj, sess, message_id.saturating_sub(1)).ok()?;
         autocode_core::session_storage::save_session_meta(proj, sess).ok()?;
     }
 
@@ -320,8 +320,11 @@ fn push_tool_results_to_state(state: &mut AppState, runtime: &ChatRuntime, resul
                 let meta = autocode_core::state::ProjectMeta {
                     version: 1,
                     project_task_list: ptl,
+                    ..Default::default()
                 };
-                let _ = autocode_core::session_storage::save_project_meta(proj, &meta);
+                if let Err(e) = autocode_core::session_storage::save_project_meta(proj, &meta) {
+                    eprintln!("[chat] Failed to save project meta: {}", e);
+                }
             }
         }
     }
@@ -612,7 +615,9 @@ fn kill_process(pid: u32) {
             const CREATE_NO_WINDOW: u32 = 0x08000000;
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
-        let _ = cmd.output();
+        if let Err(e) = cmd.output() {
+            eprintln!("[chat] Failed to kill process {} via taskkill: {}", pid, e);
+        }
 
         for _ in 0..10 {
             std::thread::sleep(std::time::Duration::from_millis(100));
@@ -626,11 +631,14 @@ fn kill_process(pid: u32) {
             }
         }
     } else {
-        let _ = std::process::Command::new("kill")
+        let result = std::process::Command::new("kill")
             .args(["-9", &pid.to_string()])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .output();
+        if let Err(e) = result {
+            eprintln!("[chat] Failed to kill process {} via kill -9: {}", pid, e);
+        }
     }
 }
 
@@ -799,9 +807,9 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
     let thinking = provider.thinking_mode && provider.thinking_api.supports_thinking();
     let defs = autocode_core::state::model_or_safe(&provider.kind, &provider.model);
     let thinking_api = provider.thinking_api.clone();
-    // DeepSeek through Go proxy always does reasoning — can't disable it.
+    // Some providers always do reasoning through their proxy — can't disable.
     // Must use the higher token budget so content isn't starved.
-    let force_thinking = matches!(thinking_api, autocode_core::state::ThinkingApi::DeepSeek);
+    let force_thinking = thinking_api.supports_thinking();
     let mut max_tokens = if thinking || force_thinking {
         let t = provider.max_output_tokens_thinking;
         if t > 0 {
@@ -934,10 +942,17 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
         estimated
     };
 
+    let temperature = if thinking && provider.thinking_api == autocode_core::state::ThinkingApi::DeepSeek {
+        0.0
+    } else {
+        provider.temperature.clamp(0.0, 2.0)
+    };
+    let top_p = provider.top_p.max(0.01); // must be > 0 for most providers
+
     let req = CompletionRequest {
         messages,
         model: provider.model.clone(),
-        temperature: if thinking { 0.0 } else { 0.2 },
+        temperature,
         max_tokens,
         stream: true,
         tools: true,
@@ -948,6 +963,9 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
         thinking_mode: thinking,
         reasoning_effort,
         thinking_api,
+        top_p,
+        frequency_penalty: provider.frequency_penalty.clamp(-2.0, 2.0),
+        presence_penalty: provider.presence_penalty.clamp(-2.0, 2.0),
     };
 
     runtime.pending_response.clear();
@@ -1276,6 +1294,17 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
             // retryable — show them and let the user take action.
             // Transient errors retry forever with capped exponential backoff,
             // only stopped by user interaction (stop button → drain()).
+            // Try to fix provider parameter errors gracefully
+            // (e.g. top_p out of range, temperature unsupported, etc.)
+            // When a fix is applied, reset retry count so the next attempt
+            // uses fresh backoff rather than accumulating from the bad-param attempts.
+            if fix_provider_params(state, &err_msg) {
+                runtime.retry_count = 0;
+                runtime.retry_after = Some(std::time::Instant::now());
+                runtime.status = "Parameter adjusted, retrying...".into();
+                return true;
+            }
+
             let orphaned = err_msg.contains("insufficient tool messages")
                 || err_msg.contains("tool_calls")
                     && err_msg.contains("must be followed by tool messages");
@@ -1551,7 +1580,6 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 };
                 if sess.session_named {
                     let label = sess.label.clone();
-                    let _ = sess;
                     let content = format!("Session already named '{}'. No change.", label);
                     let mut msg = ChatMessage::new(Role::Tool, content);
                     msg.tool_call_id = Some(tc.id.clone());
@@ -1570,7 +1598,6 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     sess.session_named = true;
                     let meta_pid = sess.project_id.clone();
                     let meta_sid = sess.id.clone();
-                    let _ = sess;
                     let content = format!("Session named as '{}'.", safe);
                     let mut msg = ChatMessage::new(Role::Tool, content);
                     msg.tool_call_id = Some(tc.id.clone());
@@ -1584,7 +1611,9 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                         && let Some(proj) = state.projects.iter().find(|p| p.id == pid)
                         && let Some(s) = state.sessions.iter().find(|s| s.id == meta_sid)
                     {
-                        let _ = autocode_core::session_storage::save_session_meta(proj, s);
+                        if let Err(e) = autocode_core::session_storage::save_session_meta(proj, s) {
+                            eprintln!("[chat] Failed to save session meta: {}", e);
+                        }
                     }
                 }
             }
@@ -1883,7 +1912,24 @@ fn start_next_live_shell(runtime: &mut ChatRuntime, project_root: &str) {
         let timeout_secs = args["timeout_secs"].as_u64().unwrap_or(0);
         runtime.live_shell_timeout_secs = timeout_secs;
         runtime.live_shell_buf = format!("$ {}\n", command);
-        let (task, rx) = shell::run_command_in_dir(&command, Some(&cwd));
+        let (task, rx) = match shell::run_command_in_dir(&command, Some(&cwd)) {
+            Ok(result) => result,
+            Err(e) => {
+                runtime.pending_tool_results.push(ToolResult {
+                    tool_call: tc,
+                    content: format!("Shell command rejected: {}", e),
+                    meta: ToolMeta {
+                        tool_name: "run_shell".into(),
+                        is_error: true,
+                        ..Default::default()
+                    },
+                    todo_update: None,
+                    project_todo_update: None,
+                });
+                runtime.pending_tool_remaining.remove(0);
+                continue;
+            }
+        };
         runtime.live_shell_pid = task.pid;
         runtime.live_shell_start = Some(std::time::Instant::now());
         runtime.live_shell_rx = Some(rx);
@@ -2103,7 +2149,7 @@ fn commit_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) {
 }
 
 /// Handle a `handoff` tool call: archive the session and start a fresh one
-/// with instructions to read RESUME.md.
+/// with the model's next_prompt as the first user message.
 fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     let was_in_progress = std::mem::replace(&mut runtime.handoff_in_progress, true);
     if was_in_progress {
@@ -2131,16 +2177,13 @@ fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     }
 
     // Save the old session to disk before creating the new one.
-    // The JSONL is append-only — just flush pending writes and update metadata.
+    // The JSONL is append-only - just flush pending writes and update metadata.
     if let Some(sess) = state.active_session()
         && let Some(pid) = sess.project_id.as_ref()
         && let Some(proj) = state.projects.iter().find(|p| &p.id == pid)
     {
-        let _ = autocode_core::session_storage::save_session_meta(proj, sess);
-        let resume_path = std::path::Path::new(&proj.root_path).join("RESUME.md");
-        if !resume_path.exists() {
-            let content = generate_resume_content(sess);
-            let _ = std::fs::write(&resume_path, &content);
+        if let Err(e) = autocode_core::session_storage::save_session_meta(proj, sess) {
+            eprintln!("[chat] Failed to save session meta before handoff: {}", e);
         }
     }
     state.flush_pending_writes(true);
@@ -2171,9 +2214,13 @@ fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     push_runtime(state, runtime, sys);
 
     // Use the AI-generated next_prompt as the first user message in the fresh session.
-    // Falls back to a generic instruction if the model didn't provide one (e.g. auto-handoff).
+    // Falls back to a continuation prompt when no AI prompt is available.
     let handoff_msg = runtime.handoff_next_prompt.take().unwrap_or_else(|| {
-        "Continue the previous work. Read RESUME.md for context if available.".to_string()
+        if state.project_task_list.has_incomplete() {
+            state.handoff_continuation_prompt.clone()
+        } else {
+            "Continue the previous work from where you left off.".to_string()
+        }
     });
     let msg = ChatMessage::new(Role::User, handoff_msg);
     push_runtime(state, runtime, msg);
@@ -2268,50 +2315,14 @@ fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     // Trigger already sent — the model has the warning, it's up to it now.
 }
 
-/// Generate a RESUME.md summary from the session's last messages.
-fn generate_resume_content(sess: &autocode_core::state::Session) -> String {
-    let label = &sess.label;
-    let msg_count = sess.messages.len();
-    let mut lines = Vec::new();
-    lines.push(format!("# Session Resume: {}", label));
-    lines.push(format!("- **Messages exchanged**: {}", msg_count));
-    if !sess.todo_list.is_empty() {
-        lines.push("- **Task status**:".to_string());
-        for item in &sess.todo_list.items {
-            let status = match item.status {
-                autocode_core::state::TodoStatus::Completed => "[x]",
-                autocode_core::state::TodoStatus::InProgress => "[-]",
-                autocode_core::state::TodoStatus::Pending => "[ ]",
-                autocode_core::state::TodoStatus::Cancelled => "[~]",
-            };
-            let content = item.content.trim();
-            if !content.is_empty() {
-                lines.push(format!("  {} {}", status, content));
-            }
-        }
-    }
-    // Include last few assistant messages for context.
-    let recent: Vec<&autocode_core::state::ChatMessage> = sess
-        .messages
-        .iter()
-        .filter(|m| m.role == autocode_core::state::Role::Assistant)
-        .rev()
-        .take(3)
-        .collect();
-    if !recent.is_empty() {
-        lines.push("\n## Recent Progress".to_string());
-        for msg in recent.iter().rev() {
-            let snippet: String = msg.content.chars().take(200).collect();
-            if !snippet.trim().is_empty() {
-                lines.push(format!("\n> {}", snippet.replace('\n', "\n> ")));
-            }
-        }
-    }
-    lines.join("\n")
-}
+
 
 fn auto_continue(state: &mut AppState, runtime: &mut ChatRuntime, response: &str) {
     if runtime.handoff_in_progress {
+        return;
+    }
+    // Only auto-continue when handoff mode is enabled.
+    if !state.handoff_enabled {
         return;
     }
     let has_todo_incomplete = state.todo_list.has_incomplete();
@@ -2324,15 +2335,132 @@ fn auto_continue(state: &mut AppState, runtime: &mut ChatRuntime, response: &str
         return;
     }
     let max_chain = state.max_retries.max(5);
-    if runtime.continuation_chain < max_chain {
-        runtime.continuation_chain += 1;
-        push_runtime(
-            state,
-            runtime,
-            ChatMessage::new(Role::User, "continue".to_string()),
-        );
-        start_completion(state, runtime);
+    if runtime.continuation_chain >= max_chain {
+        return;
     }
+    runtime.continuation_chain += 1;
+
+    let msg = if has_todo_incomplete {
+        let (done, total) = state.todo_list.progress();
+        format!(
+            "You have unfinished tasks ({}/{} complete). Update the todo list and continue working.",
+            done, total
+        )
+    } else if has_project_tasks_incomplete {
+        let (done, total) = state.project_task_list.progress();
+        format!(
+            "Project tasks remain ({}/{} complete). Update the task list and continue working.",
+            done, total
+        )
+    } else {
+        "If you are finished, update and clear the task list with todo_list. \
+         Otherwise continue working."
+            .to_string()
+    };
+
+    push_runtime(
+        state,
+        runtime,
+        ChatMessage::new(Role::User, msg),
+    );
+    start_completion(state, runtime);
+}
+
+/// Detect and fix provider parameter errors in error messages.
+/// Returns true if a parameter was adjusted (caller should retry immediately).
+fn fix_provider_params(state: &mut AppState, err_msg: &str) -> bool {
+    let lower = err_msg.to_lowercase();
+
+    // Extract param name from error text.
+    let param = if lower.contains("top_p") { "top_p" }
+    else if lower.contains("temperature") && lower.contains("must be") { "temperature" }
+    else if lower.contains("frequency_penalty") { "frequency_penalty" }
+    else if lower.contains("presence_penalty") { "presence_penalty" }
+    else if lower.contains("max_tokens") { "max_tokens" }
+    else { return false };
+
+    let prov_label = state.active_provider.clone();
+    let model_id = state.active_provider()
+        .map(|p| p.model.clone())
+        .unwrap_or_default();
+    if model_id.is_empty() { return false }
+
+    let changed = match param {
+        "top_p" => {
+            let v = 0.01;
+            if let Some(prov) = state.providers.get_mut(&prov_label) {
+                prov.top_p = v;
+                if let Some(sess) = state.active_session_mut() { sess.top_p = v; }
+                true
+            } else { false }
+        }
+        "temperature" => {
+            let v = 0.7;
+            if let Some(prov) = state.providers.get_mut(&prov_label) {
+                prov.temperature = v;
+                if let Some(sess) = state.active_session_mut() { sess.temperature = v; }
+                true
+            } else { false }
+        }
+        "frequency_penalty" | "presence_penalty" => {
+            let v = 0.0;
+            if let Some(prov) = state.providers.get_mut(&prov_label) {
+                prov.frequency_penalty = v;
+                prov.presence_penalty = v;
+                if let Some(sess) = state.active_session_mut() { sess.frequency_penalty = v; sess.presence_penalty = v; }
+                true
+            } else { false }
+        }
+        "max_tokens" => {
+            let v = 4096u32;
+            if let Some(prov) = state.providers.get_mut(&prov_label) {
+                prov.max_output_tokens = v;
+                true
+            } else { false }
+        }
+        _ => false,
+    };
+
+    if changed {
+        // Persist the fix to the model config so it survives restarts.
+        let label = prov_label.clone();
+        if let Some(prov) = state.providers.get_mut(&label) {
+            let mut mc = prov.models_config.as_ref()
+                .and_then(|m| m.get(&model_id)).cloned()
+                .unwrap_or_else(|| {
+                    let defs = autocode_core::state::model_or_safe(&prov.kind, &model_id);
+                    autocode_core::provider_file::ModelEntry {
+                        id: model_id.clone(),
+                        context_window: defs.context_window,
+                        max_output_tokens: defs.max_output_tokens,
+                        max_output_tokens_thinking: defs.max_output_tokens_thinking,
+                        thinking_api: defs.thinking_api.clone(),
+                        reasoning_efforts: defs.reasoning_efforts.clone(),
+                        supports_cache_control: defs.supports_cache_control,
+                        requests_per_hour: defs.requests_per_hour,
+                        handoff_percent: prov.handoff_percent,
+                        temperature: prov.temperature,
+                        top_p: prov.top_p,
+                        frequency_penalty: prov.frequency_penalty,
+                        presence_penalty: prov.presence_penalty,
+                    }
+                });
+            match param {
+                "top_p" => mc.top_p = 0.01,
+                "temperature" => mc.temperature = 0.7,
+                "frequency_penalty" | "presence_penalty" => {
+                    mc.frequency_penalty = 0.0;
+                    mc.presence_penalty = 0.0;
+                }
+                "max_tokens" => mc.max_output_tokens = 4096,
+                _ => {}
+            }
+            let cm = prov.models_config.get_or_insert_with(std::collections::HashMap::new);
+            cm.insert(model_id, mc);
+        }
+    }
+
+    changed
 }
 
 fn file_tool_meta(
@@ -2827,7 +2955,12 @@ fn execute_tool_with_cache(
                 return core_helpers::blocked_error(raw_path);
             }
             if let Some(parent) = path.parent() {
-                let _ = fsutil::create_dir_all(parent);
+                if let Err(e) = fsutil::create_dir_all(parent) {
+                    return helpers::tool_error(
+                        &format!("Error creating parent directory for {}: {}", path.display(), e),
+                        "Check that the parent path is writable",
+                    );
+                }
             }
             match fsutil::write(&path, content) {
                 Ok(_) => format!("Written {} bytes to {}", content.len(), path.display()),
@@ -2950,7 +3083,12 @@ fn execute_tool_with_cache(
                 return core_helpers::blocked_error(raw_to);
             }
             if let Some(parent) = to.parent() {
-                let _ = fsutil::create_dir_all(parent);
+                if let Err(e) = fsutil::create_dir_all(parent) {
+                    return helpers::tool_error(
+                        &format!("Error creating parent directory for {}: {}", to.display(), e),
+                        "Check that the destination path is writable",
+                    );
+                }
             }
             match fsutil::rename(&from, &to) {
                 Ok(_) => format!("Renamed {} -> {}", from.display(), to.display()),

@@ -124,6 +124,9 @@ pub fn parse_thinking_api(s: &str) -> ThinkingApi {
     match s {
         "deepseek" => ThinkingApi::DeepSeek,
         "openai" => ThinkingApi::OpenAI,
+        "anthropic" => ThinkingApi::Anthropic,
+        "gemini" => ThinkingApi::Gemini,
+        "grok" => ThinkingApi::Grok,
         _ => ThinkingApi::Off,
     }
 }
@@ -312,6 +315,9 @@ pub enum ThinkingApi {
     Off,
     DeepSeek,
     OpenAI,
+    Anthropic,
+    Gemini,
+    Grok,
 }
 
 impl ThinkingApi {
@@ -320,11 +326,21 @@ impl ThinkingApi {
             Self::Off => "Off",
             Self::DeepSeek => "DeepSeek",
             Self::OpenAI => "OpenAI",
+            Self::Anthropic => "Anthropic",
+            Self::Gemini => "Gemini",
+            Self::Grok => "Grok",
         }
     }
 
     pub fn variants() -> &'static [ThinkingApi] {
-        &[ThinkingApi::Off, ThinkingApi::DeepSeek, ThinkingApi::OpenAI]
+        &[
+            ThinkingApi::Off,
+            ThinkingApi::DeepSeek,
+            ThinkingApi::OpenAI,
+            ThinkingApi::Anthropic,
+            ThinkingApi::Gemini,
+            ThinkingApi::Grok,
+        ]
     }
 
     pub fn supports_thinking(&self) -> bool {
@@ -393,6 +409,19 @@ pub struct ApiProvider {
     #[serde(default)]
     pub saved_models: Vec<String>,
 
+    /// Sampling temperature (0.0-2.0). Defaults to 0.2, 0.0 when thinking is enabled.
+    #[serde(default = "crate::helpers::default_temperature")]
+    pub temperature: f32,
+    /// Top-p nucleus sampling (0.0-1.0).
+    #[serde(default = "crate::helpers::default_top_p")]
+    pub top_p: f32,
+    /// Frequency penalty (-2.0-2.0).
+    #[serde(default)]
+    pub frequency_penalty: f32,
+    /// Presence penalty (-2.0-2.0).
+    #[serde(default)]
+    pub presence_penalty: f32,
+
     /// Per-model configuration overrides (context window, max tokens, etc.).
     /// Keyed by model ID. When absent, values from the baked-in manifest are used.
     #[serde(default)]
@@ -439,6 +468,10 @@ impl ApiProvider {
                     supports_cache_control: defs.supports_cache_control,
                     requests_per_hour: defs.requests_per_hour,
                     handoff_percent: 80,
+                    temperature: 0.2,
+                    top_p: 1.0,
+                    frequency_penalty: 0.0,
+                    presence_penalty: 0.0,
                 };
                 (id.clone(), entry)
             }).collect());
@@ -460,6 +493,10 @@ impl ApiProvider {
                 .max_output_tokens_thinking
                 .unwrap_or(defs.max_output_tokens * 2),
             requests_per_hour: defs.requests_per_hour,
+            temperature: 0.2,
+            top_p: 1.0,
+            frequency_penalty: 0.0,
+            presence_penalty: 0.0,
             models_list_url: models_url,
             saved_models,
             models_config,
@@ -534,6 +571,10 @@ impl ApiProvider {
         self.reasoning_effort = mc.reasoning_efforts.first().cloned().unwrap_or_else(|| "high".into());
         self.requests_per_hour = mc.requests_per_hour;
         self.handoff_percent = mc.handoff_percent;
+        self.temperature = mc.temperature;
+        self.top_p = mc.top_p;
+        self.frequency_penalty = mc.frequency_penalty;
+        self.presence_penalty = mc.presence_penalty;
     }
 
     pub fn reset_defaults(&mut self) {
@@ -551,6 +592,10 @@ impl ApiProvider {
         self.thinking_api = defaults.thinking_api;
         self.max_output_tokens = defaults.max_output_tokens;
         self.max_output_tokens_thinking = defaults.max_output_tokens_thinking;
+        self.temperature = 0.2;
+        self.top_p = 1.0;
+        self.frequency_penalty = 0.0;
+        self.presence_penalty = 0.0;
         self.fill_from_manifest();
     }
 }
@@ -634,14 +679,7 @@ pub struct ChatMessage {
 impl ChatMessage {
     pub fn new(role: Role, content: impl Into<String>) -> Self {
         let original: String = content.into();
-        let mut content = original.clone();
-        // Tool and system output is usually ASCII-safe; skip expensive filter.
-        if !matches!(role, Role::Tool | Role::System) {
-            content.retain(|c| {
-                let u = c as u32;
-                (32..=126).contains(&u) || u == 10 || u == 9 || (160..=255).contains(&u)
-            });
-        }
+        let content = crate::helpers::sanitize_display_text(&original);
         let token_count = crate::helpers::estimate_tokens(&content);
         Self {
             id: 0,
@@ -708,6 +746,21 @@ pub struct Session {
     /// in the chat history and are the same for every request.
     #[serde(default)]
     pub estimated_messages_tokens: usize,
+
+    /// Snapshot of per-model sampling params at session save time.
+    /// Restored when the session is resumed so settings aren't lost.
+    #[serde(default)]
+    pub temperature: f32,
+    #[serde(default)]
+    pub top_p: f32,
+    #[serde(default)]
+    pub frequency_penalty: f32,
+    #[serde(default)]
+    pub presence_penalty: f32,
+    #[serde(default)]
+    pub requests_per_hour: Option<u32>,
+    #[serde(default = "crate::helpers::default_handoff_percent")]
+    pub handoff_percent: u8,
 }
 
 impl Session {
@@ -732,6 +785,12 @@ impl Session {
             closed: false,
             estimated_full_tokens: 0,
             estimated_messages_tokens: 0,
+            temperature: 0.2,
+            top_p: 1.0,
+            frequency_penalty: 0.0,
+            presence_penalty: 0.0,
+            requests_per_hour: None,
+            handoff_percent: 80,
         }
     }
 
@@ -992,11 +1051,21 @@ impl ProjectTaskList {
 
 /// Disk-persisted project metadata stored alongside the sessions folder.
 /// Version field enables future schema evolution.
+/// Includes project identity fields so only one file (meta.json) is needed
+/// per project — project.json is no longer written.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProjectMeta {
     pub version: u32,
     #[serde(default)]
     pub project_task_list: ProjectTaskList,
+    #[serde(default)]
+    pub project_id: String,
+    #[serde(default)]
+    pub project_name: String,
+    #[serde(default)]
+    pub root_path: String,
+    #[serde(default)]
+    pub created_at: u64,
 }
 
 impl Default for ProjectMeta {
@@ -1004,6 +1073,10 @@ impl Default for ProjectMeta {
         Self {
             version: 1,
             project_task_list: ProjectTaskList::default(),
+            project_id: String::new(),
+            project_name: String::new(),
+            root_path: String::new(),
+            created_at: 0,
         }
     }
 }
@@ -1057,6 +1130,9 @@ pub struct AppState {
 
     #[serde(default = "crate::helpers::default_handoff_trigger_prompt_string")]
     pub handoff_trigger_prompt: String,
+
+    #[serde(default = "crate::helpers::default_handoff_continuation_prompt_string")]
+    pub handoff_continuation_prompt: String,
 
     #[serde(default = "crate::helpers::default_handoff_enabled")]
     pub handoff_enabled: bool,
@@ -1165,6 +1241,11 @@ pub struct AppState {
     /// `disk_write_rate_ms` interval.
     #[serde(skip)]
     pub pending_writes: PendingWrites,
+
+    /// Set to true when the session's provider_label or model changes
+    /// in the UI so the main loop can persist the session meta to disk.
+    #[serde(skip)]
+    pub session_meta_dirty: bool,
 }
 
 use std::collections::HashMap;
@@ -1194,6 +1275,7 @@ impl Default for AppState {
             active_session_id: None,
             system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
             handoff_trigger_prompt: DEFAULT_HANDOFF_TRIGGER_PROMPT.to_string(),
+            handoff_continuation_prompt: DEFAULT_HANDOFF_CONTINUATION_PROMPT.to_string(),
             handoff_enabled: false,
             shell_tasks: Vec::new(),
             show_explorer: true,
@@ -1222,6 +1304,7 @@ impl Default for AppState {
             web_rate_limit_ms: crate::helpers::default_web_rate_limit_ms(),
             disk_write_rate_ms: crate::helpers::default_disk_write_rate_ms(),
             pending_writes: PendingWrites::new(),
+            session_meta_dirty: false,
         }
     }
 }
@@ -1265,7 +1348,9 @@ impl AppState {
                 state.providers.insert(compat_key.to_string(), ApiProvider::new(kind));
             }
             // Write the initial providers to disk.
-            let _ = crate::provider_file::save_providers_file(&state.providers);
+            if let Err(e) = crate::provider_file::save_providers_file(&state.providers) {
+                eprintln!("[state] Failed to save initial providers file: {}", e);
+            }
         }
 
         // Ensure active_provider is valid.
@@ -1380,14 +1465,18 @@ impl AppState {
 
         // 6. Ensure project directories still exist.
         for p in &self.projects {
-            let _ = crate::session_storage::ensure_project_dirs(p);
+            if let Err(e) = crate::session_storage::ensure_project_dirs(p) {
+                eprintln!("[state] Failed to ensure project dirs for {}: {}", p.id, e);
+            }
         }
     }
 
     pub fn save(&mut self, storage: &mut dyn eframe::Storage) {
         self.prune_disk_state();
         // Persist providers to their own file (not app.ron).
-        let _ = crate::provider_file::save_providers_file(&self.providers);
+        if let Err(e) = crate::provider_file::save_providers_file(&self.providers) {
+            eprintln!("[state] Failed to save providers file: {}", e);
+        }
         eframe::set_value(storage, "app_state", self);
     }
 
@@ -1439,7 +1528,9 @@ impl AppState {
         if let Some(ref pid) = sess.project_id
             && let Some(proj) = self.projects.iter().find(|p| &p.id == pid)
         {
-            let _ = crate::session_storage::save_session_meta(proj, &sess);
+            if let Err(e) = crate::session_storage::save_session_meta(proj, &sess) {
+                eprintln!("[state] Failed to save new session meta: {}", e);
+            }
         }
         self.active_session_id = Some(sess.id.clone());
         self.sessions.push(sess);
@@ -1474,7 +1565,9 @@ impl AppState {
             let Some(proj) = self.projects.iter().find(|p| &p.id == pid) else {
                 continue;
             };
-            let _ = crate::session_storage::append_messages_to_jsonl(proj, sess, msgs);
+            if let Err(e) = crate::session_storage::append_messages_to_jsonl(proj, sess, msgs) {
+                eprintln!("[state] Failed to append messages to JSONL for session {}: {}", sess.id, e);
+            }
         }
         self.pending_writes.last_write = std::time::Instant::now();
     }
@@ -1529,17 +1622,24 @@ SESSION
 - name_session once at start with the task name.
 - todo_list at start with numbered steps. Update live. Result shows context \
 usage (e.g. '45K/128K (35%)') for handoff timing.
-- Near limit: save RESUME.md, call handoff.
+- Near limit: call handoff with next_prompt.
 - After edits: git add -A && git commit (feat:/fix:/perf:/chore:). Push.
 - After each task, state what was done and what remains.
 ";
 
 pub const DEFAULT_HANDOFF_TRIGGER_PROMPT: &str = "\
-⚠️ CONTEXT WARNING: The context window is near its limit.
+!! CONTEXT WARNING: The context window is near its limit.
 
 This conversation must end now. Immediately:
 1. STOP all ongoing work.
-2. Update RESUME.md with your complete progress and current task status.
-3. Call the `handoff` tool with an appropriate reason.
+2. Use the `project_task_list` tool to record any new tasks.
+3. Call the `handoff` tool with a complete next_prompt.
 
 Do NOT continue working or write any more code. Use the handoff tool now.";
+
+/// Default prompt injected as the first user message when a forced handoff
+/// occurs (no AI-generated next_prompt available) and project-level tasks
+/// are active. Tells the model to pick up the project tasks.
+pub const DEFAULT_HANDOFF_CONTINUATION_PROMPT: &str = "\
+Project tasks remain. Review the project task list and create a \
+session-level todo list to accomplish them. Continue working.";

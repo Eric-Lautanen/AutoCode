@@ -170,76 +170,33 @@ pub fn show(
         panel_state.prev_session_id = state.active_session_id.clone();
     }
 
-    // Phase 2: auto-load or click-to-load older messages.
-    // Check if user is near the top of the scroll area (within ~5 messages).
-    if panel_state.loaded_min_id > 1
-        && let Some(sa_id) = panel_state.scroll_area_id
-    {
-        let sa_state = ui.ctx().data_mut(|d| {
-            d.get_persisted::<egui::scroll_area::State>(sa_id)
-                .unwrap_or_default()
-        });
-        let threshold = 300.0;
-        if sa_state.offset.y < threshold && !panel_state.scroll_to_bottom {
-            panel_state.wants_older_messages = true;
-        }
-    }
-    if panel_state.wants_older_messages && panel_state.loaded_min_id > 1 {
+    // Handle "Load full history" — load all messages from disk.
+    if panel_state.wants_older_messages {
         panel_state.wants_older_messages = false;
-        let proj_id = state.active_project_id.clone();
-        let sess_id = state.active_session_id.clone();
-        if let Some(proj) = state
-            .projects
-            .iter()
-            .find(|p| Some(&p.id) == proj_id.as_ref())
-            && let Some(sess) = state
-                .sessions
-                .iter()
-                .find(|s| Some(&s.id) == sess_id.as_ref())
-        {
-            // Capture scroll offset to anchor view after prepending.
-            let anchor_sid = state.active_session_id.clone().unwrap_or_default();
-            let prev_offset = panel_state.scroll_area_id.map(|sa_id| {
-                ui.ctx().data_mut(|d| {
-                    d.get_persisted::<egui::scroll_area::State>(sa_id)
-                        .unwrap_or_default()
-                        .offset
-                        .y
-                })
-            });
-            let count = state.ui_display_window;
-            let older = autocode_core::session_storage::load_messages_before(
-                proj,
-                sess,
-                panel_state.loaded_min_id,
-                count,
-            );
-            if !older.is_empty() {
-                let older: Vec<_> = older
-                    .into_iter()
-                    .filter(|m| m.role != Role::Error)
-                    .collect();
-                let added = older.len();
-                if added == 0 {
-                    return;
+        if let (Some(proj), Some(sess)) = (state.active_project(), state.active_session()) {
+            let mut all = autocode_core::session_storage::load_all_messages(proj, sess);
+            all.retain(|m| m.role != Role::Error);
+            if !all.is_empty() {
+                // Catch any in-RAM messages not yet flushed to disk.
+                let max_disk = all.iter().map(|m| m.id).max().unwrap_or(0);
+                for msg in &sess.messages {
+                    if msg.id > max_disk && msg.role != Role::Error {
+                        all.push(msg.clone());
+                    }
                 }
-                panel_state.loaded_min_id = older.first().map(|m| m.id).unwrap_or(0);
-                let mut new_buf = older;
-                new_buf.extend_from_slice(&panel_state.display_buffer);
-                panel_state.display_buffer = new_buf;
-                // Advance scroll by estimated height of prepended content.
-                if let Some(prev_y) = prev_offset {
-                    let sa_id = egui::Id::new(("chat_scroll", anchor_sid.as_str()));
-                    let mut sa_state = ui.ctx().data_mut(|d| {
-                        d.get_persisted::<egui::scroll_area::State>(sa_id)
-                            .unwrap_or_default()
-                    });
-                    sa_state.offset.y = prev_y + added as f32 * 60.0;
-                    ui.ctx().data_mut(|d| d.insert_persisted(sa_id, sa_state));
-                }
+                panel_state.display_buffer = all;
+                panel_state.prev_message_count = sess.messages.len();
             }
         }
     }
+
+    // Track oldest message ID for scroll-back eviction.
+    panel_state.loaded_min_id = panel_state
+        .display_buffer
+        .iter()
+        .map(|m| m.id)
+        .min()
+        .unwrap_or(0);
 
     // Phase 2: new messages arrived — append to display_buffer.
     if let Some(sess) = state.active_session() {
@@ -255,21 +212,9 @@ pub fn show(
                 panel_state.scroll_to_bottom = true;
             }
         } else if current_count < panel_state.prev_message_count {
-            // Session was trimmed (RAM eviction in start_completion).
-            // Rebuild display_buffer from sess.messages — the new user
-            // message was pushed to the session *before* the trim, so it
-            // would otherwise be silently dropped from the visible chat.
-            panel_state.display_buffer = sess
-                .messages
-                .iter()
-                .filter(|m| m.role != Role::Error)
-                .cloned()
-                .collect();
-            panel_state.loaded_min_id = panel_state
-                .display_buffer
-                .first()
-                .map(|m| m.id)
-                .unwrap_or(0);
+            // Session was trimmed in RAM — keep the display buffer intact
+            // (it already has all messages loaded), just remember the new
+            // count so we can detect future new messages.
             panel_state.prev_message_count = current_count;
         }
     }
@@ -295,13 +240,15 @@ pub fn show(
         let input_row_h = 92.0;
         let scroll_h = (ui.available_height() - input_row_h).max(40.0);
 
-        let scroll_resp = ScrollArea::vertical()
+        let scroll_resp = ScrollArea::both()
             .id_salt(("chat_scroll", active_sid.as_deref().unwrap_or("")))
             .max_height(scroll_h)
             .stick_to_bottom(panel_state.scroll_to_bottom)
             .auto_shrink([false; 2])
             .show(ui, |ui| {
-                ui.set_min_width(chat_w);
+                let inner_max_w = (chat_w - 30.0).max(200.0);
+                ui.set_min_width(inner_max_w);
+                ui.set_max_width(inner_max_w);
                 ui.add_space(6.0);
                 let bubble_indent = Margin {
                     left: 6,
@@ -310,23 +257,13 @@ pub fn show(
                     bottom: 0,
                 };
                 Frame::NONE.inner_margin(bubble_indent).show(ui, |ui| {
-                    ui.set_min_width(chat_w - 12.0);
+                    ui.set_min_width(inner_max_w - 12.0);
+                    ui.set_max_width(inner_max_w - 12.0);
                     if !panel_state.display_buffer.is_empty() {
                         if panel_state.loaded_min_id > 1 {
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    RichText::new(format!(
-                                        "Showing {} messages (oldest ID: {})",
-                                        panel_state.display_buffer.len(),
-                                        panel_state.loaded_min_id,
-                                    ))
-                                    .size(11.0)
-                                    .color(theme().text_muted),
-                                );
-                                if ui.button("Load older messages...").clicked() {
-                                    panel_state.wants_older_messages = true;
-                                }
-                            });
+                            if ui.button("Load full history...").clicked() {
+                                panel_state.wants_older_messages = true;
+                            }
                             ui.add_space(8.0);
                         }
                         ui.push_id(
@@ -337,7 +274,14 @@ pub fn show(
                                 for (i, msg) in panel_state.display_buffer.iter().enumerate() {
                                     match msg.role {
                                         Role::User => {
-                                            show_user_bubble(ui, msg, chat_w);
+                                            if show_user_bubble(ui, msg, chat_w) {
+                                                ui.ctx().data_mut(|d| {
+                                                    d.insert_temp(
+                                                        egui::Id::new("replay_action"),
+                                                        Some((sid.to_string(), msg.id)),
+                                                    );
+                                                });
+                                            }
                                         }
                                         Role::Assistant => {
                                             show_assistant_content(ui, msg, i, sid, show_reasoning);
@@ -400,19 +344,14 @@ pub fn show(
             });
             let max_y = (scroll_resp.content_size.y - scroll_resp.inner_rect.height()).max(0.0);
             panel_state.user_scrolled_up = sa_state.offset.y < max_y - 20.0;
-            // Evict loaded history from display_buffer when back near bottom.
-            if !panel_state.user_scrolled_up && panel_state.loaded_min_id > 1 {
+            // Evict loaded history when back near bottom.
+            if !panel_state.user_scrolled_up {
                 let window = state.ui_display_window;
                 let overshoot = panel_state.display_buffer.len().saturating_sub(window);
                 if overshoot > 0 {
-                    let dropped = panel_state.display_buffer.split_off(overshoot);
-                    panel_state.display_buffer = dropped;
+                    let tail = panel_state.display_buffer.split_off(overshoot);
+                    panel_state.display_buffer = tail;
                     panel_state.display_buffer.shrink_to(0);
-                    panel_state.loaded_min_id = panel_state
-                        .display_buffer
-                        .first()
-                        .map(|m| m.id)
-                        .unwrap_or(0);
                 }
             }
         }
@@ -457,14 +396,35 @@ pub fn show(
     } // end scoped block — runtime borrow is released here
 
     // Handle any pending replay action from a ↺ button click.
+    // The action was stored by show_user_bubble during the message loop above.
     let replay = ui
         .ctx()
         .data_mut(|d| d.remove_temp::<Option<(String, u64)>>(egui::Id::new("replay_action")))
         .flatten();
     if let Some((sid, msg_id)) = replay {
         if let Some(text) = autocode_ai::chat::replay_to_message(state, runtimes, &sid, msg_id) {
+            // Rebuild the display buffer from the truncated session.
+            if let Some(sess) = state.active_session() {
+                panel_state.display_buffer = sess
+                    .messages
+                    .iter()
+                    .filter(|m| m.role != Role::Error)
+                    .cloned()
+                    .collect();
+                panel_state.loaded_min_id = panel_state
+                    .display_buffer
+                    .first()
+                    .map(|m| m.id)
+                    .unwrap_or(0);
+            }
+            // Force Phase 2 to re-read on the next frame as a safety net.
+            panel_state.prev_message_count = usize::MAX;
             panel_state.input = text;
             panel_state.scroll_to_bottom = true;
+            ui.ctx().memory_mut(|mem| {
+                mem.request_focus(egui::Id::new(format!("chat_input_{}", sid)));
+            });
+            ui.ctx().request_repaint();
         }
     }
 
@@ -516,15 +476,14 @@ fn load_new_session(state: &mut AppState, panel_state: &mut ChatPanelState) -> O
                 if !found {
                     purge_on_missing = Some(new_id.clone());
                 } else {
-                    // Recompute estimate with actual tool definitions so the
-                    // toolbar meter matches the pre-flight check from the start.
                     autocode_core::helpers::update_full_estimate(
                         new_sess,
                         &provider::tool_definitions(),
                     );
                 }
-                // Evict excess messages from RAM now that they're loaded from disk.
-                // Full history remains on disk for on-demand loading.
+            }
+            if purge_on_missing.is_none() {
+                // Keep session RAM small — full history is on disk.
                 let window = state.ui_display_window;
                 let total = new_sess.messages.len();
                 if total > window * 2 {
@@ -532,21 +491,18 @@ fn load_new_session(state: &mut AppState, panel_state: &mut ChatPanelState) -> O
                     new_sess.messages = new_sess.messages.split_off(total - keep);
                     new_sess.messages.shrink_to(0);
                 }
-            }
-            if purge_on_missing.is_none() {
-                let window = state.ui_display_window;
-                let total = new_sess.messages.len();
-                let start = total.saturating_sub(window);
-                panel_state.display_buffer = new_sess.messages[start..]
+                panel_state.display_buffer = new_sess
+                    .messages
                     .iter()
                     .filter(|m| m.role != Role::Error)
                     .cloned()
-                    .collect::<Vec<_>>();
+                    .collect();
                 panel_state.loaded_min_id = panel_state
                     .display_buffer
                     .first()
                     .map(|m| m.id)
                     .unwrap_or(0);
+                panel_state.prev_message_count = new_sess.messages.len();
                 if !new_sess.provider_label.is_empty()
                     && state.providers.contains_key(&new_sess.provider_label)
                 {
@@ -800,14 +756,15 @@ fn empty_state(ui: &mut egui::Ui, state: &AppState) {
 
 // -- Message bubbles -----------------------------------------------------------
 
-fn show_user_bubble(ui: &mut egui::Ui, msg: &ChatMessage, panel_w: f32) {
+fn show_user_bubble(ui: &mut egui::Ui, msg: &ChatMessage, panel_w: f32) -> bool {
     let max_w = (panel_w * DesignSettings::default().user_bubble_max_width_pct).max(240.0);
+    let clicked = std::cell::Cell::new(false);
     ui.push_id(msg.timestamp, |ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
             ui.add_space(8.0);
             ui.vertical(|ui| {
                 ui.set_max_width(max_w);
-                Frame::NONE
+                let frame_resp = Frame::NONE
                     .fill(theme().user_bubble_fill)
                     .corner_radius(ROUND_MD)
                     .stroke(Stroke::new(1.0, theme().user_bubble_stroke))
@@ -815,13 +772,42 @@ fn show_user_bubble(ui: &mut egui::Ui, msg: &ChatMessage, panel_w: f32) {
                     .show(ui, |ui| {
                         render_markdown(ui, &msg.content, true);
                     });
+
+                let bubble_rect = frame_resp.response.rect;
+                let overlay_size = egui::vec2(24.0, 24.0);
+                let overlay_rect = egui::Rect::from_min_size(
+                    egui::pos2(bubble_rect.left() + 4.0, bubble_rect.top() + 4.0),
+                    overlay_size,
+                );
+                let overlay_id = ui.make_persistent_id(("resend", msg.timestamp));
+                let overlay_resp = ui.interact(overlay_rect, overlay_id, egui::Sense::click())
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text("Edit and resend from this message");
+
+                if frame_resp.response.hovered() || overlay_resp.hovered() {
+                    let painter = ui.painter();
+                    painter.rect_filled(overlay_rect, ROUND_SM, Color32::from_black_alpha(80));
+                    painter.text(
+                        overlay_rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        "\u{21A9}",
+                        egui::FontId::proportional(14.0),
+                        Color32::WHITE,
+                    );
+                }
+
+                if overlay_resp.clicked() {
+                    clicked.set(true);
+                }
             });
         });
     });
+    clicked.into_inner()
 }
 
 fn show_assistant_content(ui: &mut egui::Ui, msg: &ChatMessage, _idx: usize, sid: &str, show_reasoning: bool) {
     ui.push_id((msg.timestamp, sid), |ui| {
+        ui.set_max_width(ui.available_width());
         if show_reasoning {
             if let Some(reasoning) = &msg.reasoning_content
                 && !reasoning.is_empty()
@@ -1571,6 +1557,7 @@ fn show_live_reasoning(ui: &mut egui::Ui, text: &str) {
         .stroke(Stroke::new(1.0, theme().reason_border))
         .inner_margin(Margin::same(8))
         .show(ui, |ui| {
+            ui.set_max_width(ui.available_width());
             render_markdown_streaming(ui, text, false);
         });
 }
@@ -1856,14 +1843,15 @@ fn show_input_row(
                     let input_w = (ui.available_width() - 240.0).max(0.0);
                     let send_enabled = !panel_state.input.trim().is_empty() && !busy;
 
-                    let te = TextEdit::multiline(&mut panel_state.input)
-                        .id(egui::Id::new(format!("chat_input_{}", sid)))
-                        .hint_text("Describe a task... Shift+Enter for newline")
-                        .desired_width(input_w)
-                        .font(egui::TextStyle::Body)
-                        .text_color(theme().text_primary);
-
-                    let resp = ui.add_sized(egui::vec2(input_w, 60.0), te);
+                    let resp = ui.add(
+                        TextEdit::multiline(&mut panel_state.input)
+                            .id(egui::Id::new(format!("chat_input_{}", sid)))
+                            .hint_text("Describe a task... Shift+Enter for newline")
+                            .desired_width(input_w)
+                            .desired_rows(3)
+                            .font(egui::TextStyle::Body)
+                            .text_color(theme().text_primary),
+                    );
 
                     // Enter sends, Shift+Enter inserts a newline.
                     // Ctrl+Enter is a no-op (not a send shortcut).
@@ -2117,6 +2105,7 @@ fn show_input_row(
 // -- Markdown-lite renderer with bold, italic, inline code, tables -------------
 
 fn render_markdown(ui: &mut egui::Ui, text: &str, word_wrap: bool) {
+    ui.set_max_width(ui.available_width());
     let mut in_code = false;
     let mut code_lang = String::new();
     let mut code_buf = String::new();
@@ -2150,6 +2139,7 @@ fn render_markdown(ui: &mut egui::Ui, text: &str, word_wrap: bool) {
 }
 
 fn render_markdown_streaming(ui: &mut egui::Ui, text: &str, word_wrap: bool) {
+    ui.set_max_width(ui.available_width());
     let mut in_code = false;
     let mut code_lang = String::new();
     let mut code_buf = String::new();

@@ -58,7 +58,9 @@ pub fn seed_from_persisted(persisted: &SysInfo) -> bool {
         if persisted.report.contains('\u{2713}') || persisted.report.contains('\u{2717}') {
             return false;
         }
-        let _ = LIVE_CACHE.set(persisted.clone());
+        if LIVE_CACHE.set(persisted.clone()).is_err() {
+            eprintln!("[sysinfo] Failed to set LIVE_CACHE from persisted data");
+        }
         true
     } else {
         false
@@ -71,8 +73,12 @@ pub fn start_detect() -> std::sync::mpsc::Receiver<SysInfo> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let info = build_sysinfo();
-        let _ = LIVE_CACHE.set(info.clone());
-        let _ = tx.send(info);
+        if LIVE_CACHE.set(info.clone()).is_err() {
+            eprintln!("[sysinfo] Failed to set LIVE_CACHE from background thread");
+        }
+        if tx.send(info).is_err() {
+            eprintln!("[sysinfo] Failed to send sysinfo via channel (receiver dropped)");
+        }
     });
     rx
 }

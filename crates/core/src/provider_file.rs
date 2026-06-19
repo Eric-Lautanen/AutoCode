@@ -43,9 +43,23 @@ pub struct ModelEntry {
     /// Handoff threshold percentage (10-95). Defaults to 80.
     #[serde(default = "default_handoff_pct")]
     pub handoff_percent: u8,
+    /// Sampling temperature (0.0-2.0). Defaults to 0.2.
+    #[serde(default = "default_temperature")]
+    pub temperature: f32,
+    /// Top-p nucleus sampling (0.0-1.0). Defaults to 1.0.
+    #[serde(default = "default_top_p")]
+    pub top_p: f32,
+    /// Frequency penalty (-2.0-2.0). Defaults to 0.0.
+    #[serde(default)]
+    pub frequency_penalty: f32,
+    /// Presence penalty (-2.0-2.0). Defaults to 0.0.
+    #[serde(default)]
+    pub presence_penalty: f32,
 }
 
 fn default_handoff_pct() -> u8 { 80 }
+fn default_temperature() -> f32 { 0.2 }
+fn default_top_p() -> f32 { 1.0 }
 
 fn default_thinking_api() -> String {
     "off".into()
@@ -118,6 +132,10 @@ fn convert_to_providers(file: &ProviderFile) -> HashMap<String, ApiProvider> {
             max_output_tokens: 0,
             max_output_tokens_thinking: 0,
             requests_per_hour: None,
+            temperature: 0.2,
+            top_p: 1.0,
+            frequency_penalty: 0.0,
+            presence_penalty: 0.0,
             models_list_url: String::new(),
             saved_models,
             models_config: Some(models_config),
@@ -168,6 +186,10 @@ fn convert_from_providers(providers: &HashMap<String, ApiProvider>) -> ProviderF
                         supports_cache_control: defs.supports_cache_control,
                         requests_per_hour: defs.requests_per_hour,
                         handoff_percent: ap.handoff_percent,
+                        temperature: ap.temperature,
+                        top_p: ap.top_p,
+                        frequency_penalty: ap.frequency_penalty,
+                        presence_penalty: ap.presence_penalty,
                     });
                 }
             }
@@ -186,6 +208,10 @@ fn convert_from_providers(providers: &HashMap<String, ApiProvider>) -> ProviderF
                     supports_cache_control: defs.supports_cache_control,
                     requests_per_hour: defs.requests_per_hour,
                     handoff_percent: ap.handoff_percent,
+                    temperature: ap.temperature,
+                    top_p: ap.top_p,
+                    frequency_penalty: ap.frequency_penalty,
+                    presence_penalty: ap.presence_penalty,
                 }
             }).collect()
         };

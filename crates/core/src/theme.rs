@@ -82,29 +82,11 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> Color32 {
 // -- apply() -- call once from AutocodeApp::new() -------------------------------
 
 pub fn apply(ctx: &Context) {
-    let mut fonts = FontDefinitions::default();
-
-    // Optionally add a system emoji font as a fallback so emojis and other
-    // Unicode characters (CJK, symbols, etc.) render instead of showing
-    // a missing-glyph box.
-    //
-    // System emoji fonts are 5-20 MB on disk and loaded fully into RAM,
-    // so they are disabled by default. Set AUTOCODE_EMOJI_FONT=1 to enable.
-    if std::env::var("AUTOCODE_EMOJI_FONT").as_deref() == Ok("1")
-        && let Some(emoji_font) = load_system_emoji_font()
-    {
-        fonts
-            .font_data
-            .insert("system_emoji".to_owned(), emoji_font);
-        if let Some(list) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-            list.push("system_emoji".to_owned());
-        }
-        if let Some(list) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
-            list.push("system_emoji".to_owned());
-        }
-    }
-
-    ctx.set_fonts(fonts);
+    // Use egui's default fonts only — no emoji font loaded.
+    // Unsupported glyphs (emoji, symbols, etc.) are handled by
+    // sanitize_display_text() which strips/replaces them before rendering,
+    // avoiding tofu blocks without loading 5-20 MB font files.
+    ctx.set_fonts(FontDefinitions::default());
 
     let mut style = Style::default();
 
@@ -189,30 +171,4 @@ pub fn apply(ctx: &Context) {
     ctx.set_global_style(style);
 }
 
-fn load_system_emoji_font() -> Option<std::sync::Arc<egui::FontData>> {
-    let candidates: &[&str] = if cfg!(target_os = "windows") {
-        &[
-            "C:\\Windows\\Fonts\\seguiemj.ttf",
-            "C:\\Windows\\Fonts\\seguisym.ttf",
-        ]
-    } else if cfg!(target_os = "macos") {
-        &[
-            "/System/Library/Fonts/Apple Color Emoji.ttc",
-            "/Library/Fonts/Apple Color Emoji.ttc",
-        ]
-    } else {
-        &[
-            "/usr/share/fonts/noto/NotoColorEmoji.ttf",
-            "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
-            "/usr/share/fonts/noto-color-emoji/NotoColorEmoji.ttf",
-            "/usr/share/fonts/truetype/fonts-emoji/NotoColorEmoji.ttf",
-        ]
-    };
 
-    for path in candidates {
-        if let Ok(data) = std::fs::read(path) {
-            return Some(std::sync::Arc::new(egui::FontData::from_owned(data)));
-        }
-    }
-    None
-}

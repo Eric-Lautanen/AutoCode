@@ -159,6 +159,10 @@ pub fn load_messages_chunked_before(
 
 /// Truncate messages, keeping only those with `id <= keep_up_to_id`.
 /// Rewrites all chunk files, removing excess messages.
+///
+/// Crash-safe: new chunks are written to a temp subdirectory first, old
+/// files are deleted only after the new data is safely on disk, then temp
+/// files are renamed into place.
 pub fn truncate_messages_chunked(
     dir: &Path,
     keep_up_to_id: u64,
@@ -166,13 +170,33 @@ pub fn truncate_messages_chunked(
     let all = read_all_messages_chunked(dir);
     let keep: Vec<ChatMessage> = all.into_iter().filter(|m| m.id <= keep_up_to_id).collect();
 
-    // Remove all existing chunk files.
+    // Write new chunks to a temp subdirectory first so that a crash during
+    // writing does not destroy the original data.
+    let pid = std::process::id();
+    let n = crate::helpers::ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp_dir = dir.join(format!(".tmp_truncate_{}_{}", pid, n));
+    fsutil::create_dir_all(&tmp_dir)?;
+    write_messages_chunked(&tmp_dir, &keep)?;
+
+    // Old files can now be safely removed - the new data is on disk.
     for path in find_chunk_files(dir) {
-        let _ = fsutil::remove_file(&path);
+        if let Err(e) = fsutil::remove_file(&path) {
+            eprintln!("[chunked_jsonl] Failed to remove old chunk {:?}: {}", path, e);
+        }
     }
 
-    // Write back as chunked.
-    write_messages_chunked(dir, &keep)
+    // Rename temp files into place so find_chunk_files can see them.
+    for tmp_path in find_chunk_files(&tmp_dir) {
+        let name = tmp_path.file_name().unwrap();
+        let dest = dir.join(name);
+        fsutil::rename(&tmp_path, &dest)?;
+    }
+
+    // Clean up the temp subdirectory.
+    if let Err(e) = fsutil::remove_dir(&tmp_dir) {
+        eprintln!("[chunked_jsonl] Failed to remove temp dir {:?}: {}", tmp_dir, e);
+    }
+    Ok(())
 }
 
 fn write_messages_to_chunk(
@@ -221,5 +245,4 @@ fn write_messages_chunked(dir: &Path, messages: &[ChatMessage]) -> std::io::Resu
 
     Ok(())
 }
-
 

@@ -174,7 +174,8 @@ fn show_tree(ui: &mut egui::Ui, dir: &std::path::Path, state: &mut TreeState<'_>
             let id = ui.make_persistent_id(&path_str);
 
             let is_renaming = state.renaming.as_deref() == Some(&path_str);
-            let header_resp = egui::collapsing_header::CollapsingState::load_with_default_open(
+            let mut header_clicked = false;
+            let mut header_resp = egui::collapsing_header::CollapsingState::load_with_default_open(
                 ui.ctx(),
                 id,
                 is_open,
@@ -185,7 +186,7 @@ fn show_tree(ui: &mut egui::Ui, dir: &std::path::Path, state: &mut TreeState<'_>
                         *state.rename_buffer = entry.name.clone();
                     }
                     let resp = ui.add_sized(
-                        ui.available_size(),
+                        egui::vec2(ui.available_width(), 20.0),
                         TextEdit::singleline(state.rename_buffer).font(egui::TextStyle::Monospace),
                     );
                     let enter = ui.input(|i| i.key_pressed(Key::Enter));
@@ -195,13 +196,11 @@ fn show_tree(ui: &mut egui::Ui, dir: &std::path::Path, state: &mut TreeState<'_>
                     {
                         let new_path = entry.path.with_file_name(state.rename_buffer.as_str());
                         let _ = fsutil::rename(&entry.path, &new_path);
-                        *state.selected = Some(new_path.to_string_lossy().to_string());
                     }
                     let click_outside =
                         ui.input(|i| i.pointer.any_pressed()) && !resp.contains_pointer();
                     if enter || resp.lost_focus() || click_outside {
                         *state.renaming = None;
-                        *state.selected = None;
                         state.rename_buffer.clear();
                     }
                 } else {
@@ -220,6 +219,9 @@ fn show_tree(ui: &mut egui::Ui, dir: &std::path::Path, state: &mut TreeState<'_>
                         .response
                         .interact(egui::Sense::click())
                         .on_hover_cursor(egui::CursorIcon::PointingHand);
+                    if resp.clicked() {
+                        header_clicked = true;
+                    }
                     if resp.hovered() {
                         ui.painter().rect_filled(
                             resp.rect,
@@ -258,6 +260,9 @@ fn show_tree(ui: &mut egui::Ui, dir: &std::path::Path, state: &mut TreeState<'_>
                     });
                 }
             });
+            if header_clicked {
+                header_resp.toggle();
+            }
             let now_open = header_resp.is_open();
             header_resp.body(|ui| {
                 show_tree(ui, &entry.path, state);
@@ -277,7 +282,7 @@ fn show_tree(ui: &mut egui::Ui, dir: &std::path::Path, state: &mut TreeState<'_>
                         *state.rename_buffer = entry.name.clone();
                     }
                     let resp = ui.add_sized(
-                        ui.available_size(),
+                        egui::vec2(ui.available_width(), 20.0),
                         TextEdit::singleline(state.rename_buffer).font(egui::TextStyle::Monospace),
                     );
                     let enter = ui.input(|i| i.key_pressed(Key::Enter));
@@ -287,7 +292,6 @@ fn show_tree(ui: &mut egui::Ui, dir: &std::path::Path, state: &mut TreeState<'_>
                     {
                         let new_path = entry.path.with_file_name(state.rename_buffer.as_str());
                         let _ = fsutil::rename(&entry.path, &new_path);
-                        *state.selected = Some(new_path.to_string_lossy().to_string());
                     }
                     let click_outside =
                         ui.input(|i| i.pointer.any_pressed()) && !resp.contains_pointer();

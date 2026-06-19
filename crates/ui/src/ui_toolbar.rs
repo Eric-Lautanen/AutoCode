@@ -152,6 +152,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                                     if let Some(sess) = state.active_session_mut() {
                                         sess.provider_label = key;
                                         sess.model = model;
+                                        state.session_meta_dirty = true;
                                     }
                                 }
                             });
@@ -194,10 +195,11 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                                         state.providers.get_mut(&state.active_provider)
                                     {
                                         prov.model.clone_from(model_id);
-                                        prov.fill_from_manifest();
+                                        prov.fill_from_config();
                                     }
                                     if let Some(sess) = state.active_session_mut() {
                                         sess.model.clone_from(model_id);
+                                        state.session_meta_dirty = true;
                                     }
                                 }
                             });
@@ -223,7 +225,13 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     // Settings (lights up when settings window is open).
                     if lit_btn(ui, "Settings", state.settings_open).clicked() {
-                        state.settings_open = !state.settings_open;
+                        let just_closed = ui.ctx().data_mut(|d| {
+                            d.remove_temp::<bool>(egui::Id::new("settings_closed_this_frame"))
+                                .unwrap_or(false)
+                        });
+                        if !just_closed {
+                            state.settings_open = !state.settings_open;
+                        }
                     }
 
                     // Explorer toggle (lights up when explorer is open).

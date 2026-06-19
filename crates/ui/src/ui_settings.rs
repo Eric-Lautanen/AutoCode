@@ -51,7 +51,7 @@ pub fn show_window(ctx: &egui::Context, state: &mut AppState, settings: &mut Set
         s.spacing.window_margin = egui::Margin::ZERO;
     });
 
-    egui::Window::new("Settings")
+    let window_resp = egui::Window::new("Settings")
         .title_bar(false)
         .open(&mut open)
         .resizable(true)
@@ -178,8 +178,19 @@ pub fn show_window(ctx: &egui::Context, state: &mut AppState, settings: &mut Set
                 });
         });
 
+    // Close on click anywhere outside the window.
+    if !request_close
+        && let Some(resp) = &window_resp
+        && ctx.input(|i| i.pointer.any_pressed())
+        && let Some(p) = ctx.input(|i| i.pointer.interact_pos())
+        && !resp.response.rect.contains(p)
+    {
+        request_close = true;
+    }
+
     if request_close {
         state.settings_open = false;
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new("settings_closed_this_frame"), true));
         let _ = provider_file::save_providers_file(&state.providers);
     }
     if !state.settings_open {
@@ -268,8 +279,10 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
     let mut disable_switch_key: Option<String> = None;
     let mut provider_dirty = false;
 
+    let card_max_w = ui.available_width();
     for key in keys {
         ui.push_id(("provider", &key), |ui| {
+            ui.set_max_width(card_max_w);
             let is_active = state.active_provider == key;
             let p = match state.providers.get_mut(&key) {
                 Some(p) => p,
@@ -424,7 +437,10 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                     .changed()
                                 {
                                     p.model = model;
-                                    p.fill_from_manifest();
+                                    p.fill_from_config();
+                                    if is_active {
+                                        state.session_meta_dirty = true;
+                                    }
                                 }
                                 let p_clone = p.clone();
                                 let key_for_fetch = key.clone();
@@ -481,25 +497,32 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                                             } else if ui.small_button("+ Add").clicked() {
                                                                 saved.push(m.clone());
                                                                 let defs = autocode_core::state::model_or_safe(&p.kind, m);
-                                                                let entry = autocode_core::provider_file::ModelEntry {
-                                                                    id: m.clone(),
-                                                                    context_window: defs.context_window,
-                                                                    max_output_tokens: defs.max_output_tokens,
-                                                                    max_output_tokens_thinking: defs.max_output_tokens_thinking,
-                                                                    thinking_api: defs.thinking_api.clone(),
-                                                                    reasoning_efforts: defs.reasoning_efforts.clone(),
-                                                                    supports_cache_control: defs.supports_cache_control,
-                                                                    requests_per_hour: defs.requests_per_hour,
-                                                                    handoff_percent: p.handoff_percent,
-                                                                };
+                                                                 let entry = autocode_core::provider_file::ModelEntry {
+                                                                     id: m.clone(),
+                                                                     context_window: defs.context_window,
+                                                                     max_output_tokens: defs.max_output_tokens,
+                                                                     max_output_tokens_thinking: defs.max_output_tokens_thinking,
+                                                                     thinking_api: defs.thinking_api.clone(),
+                                                                     reasoning_efforts: defs.reasoning_efforts.clone(),
+                                                                     supports_cache_control: defs.supports_cache_control,
+                                                                     requests_per_hour: defs.requests_per_hour,
+                                                                     handoff_percent: p.handoff_percent,
+                                                                     temperature: p.temperature,
+                                                                     top_p: p.top_p,
+                                                                     frequency_penalty: p.frequency_penalty,
+                                                                     presence_penalty: p.presence_penalty,
+                                                                 };
                                                                 let cm = p.models_config.get_or_insert_with(std::collections::HashMap::new);
                                                                 cm.insert(m.clone(), entry);
                                                                 provider_dirty = true;
                                                             }
-                                                            if ui.small_button("Select").clicked() {
-                                                                p.model = m.clone();
-                                                                p.fill_from_manifest();
-                                                            }
+                                                              if ui.small_button("Select").clicked() {
+                                                                  p.model = m.clone();
+                                                                  p.fill_from_config();
+                                                                  if state.active_provider == key {
+                                                                      state.session_meta_dirty = true;
+                                                                  }
+                                                              }
                                                         });
                                                     });
                                                 }
@@ -541,17 +564,21 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                         .and_then(|m| m.get(&name)).cloned()
                                         .unwrap_or_else(|| {
                                             let defs = autocode_core::state::model_or_safe(&p.kind, &name);
-                                            autocode_core::provider_file::ModelEntry {
-                                                id: name.clone(),
-                                                context_window: defs.context_window,
-                                                max_output_tokens: defs.max_output_tokens,
-                                                max_output_tokens_thinking: defs.max_output_tokens_thinking,
-                                                thinking_api: defs.thinking_api.clone(),
-                                                reasoning_efforts: defs.reasoning_efforts.clone(),
-                                                supports_cache_control: defs.supports_cache_control,
-                                                requests_per_hour: defs.requests_per_hour,
-                                                handoff_percent: p.handoff_percent,
-                                            }
+                                             autocode_core::provider_file::ModelEntry {
+                                                 id: name.clone(),
+                                                 context_window: defs.context_window,
+                                                 max_output_tokens: defs.max_output_tokens,
+                                                 max_output_tokens_thinking: defs.max_output_tokens_thinking,
+                                                 thinking_api: defs.thinking_api.clone(),
+                                                 reasoning_efforts: defs.reasoning_efforts.clone(),
+                                                 supports_cache_control: defs.supports_cache_control,
+                                                 requests_per_hour: defs.requests_per_hour,
+                                                 handoff_percent: p.handoff_percent,
+                                                 temperature: p.temperature,
+                                                 top_p: p.top_p,
+                                                 frequency_penalty: p.frequency_penalty,
+                                                 presence_penalty: p.presence_penalty,
+                                             }
                                         });
                                     let mut cfg_changed = false;
 
@@ -570,7 +597,10 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                             if !name.is_empty() {
                                                 if ui.small_button("\u{2605}").on_hover_text("Select this model").clicked() {
                                                     p.model = name.clone();
-                                                    p.fill_from_manifest();
+                                                    p.fill_from_config();
+                                                    if state.active_provider == key {
+                                                        state.session_meta_dirty = true;
+                                                    }
                                                 }
                                             }
                                             if ui.small_button("x").clicked() {
@@ -589,14 +619,15 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                                     .spacing([12.0, 6.0])
                                                     .min_col_width(60.0)
                                                     .show(ui, |ui| {
-                                                        ui.label(helpers::field_label("Context Window"));
+                                                        ui.label(helpers::field_label("Context Window"))
+                                                            .on_hover_text("Maximum tokens the model can see (prompt + response). Higher = more context but slower.");
                                                         ui.horizontal(|ui| {
                                                             let mut val = mc.context_window as i32;
                                                             if ui.add(
                                                                 egui::DragValue::new(&mut val)
                                                                     .speed(1000).range(1024..=2_000_000)
                                                                     .suffix(" tokens"),
-                                                            ).changed() {
+                                                            ).on_hover_text("Max context length in tokens").changed() {
                                                                 mc.context_window = val.max(1024) as u32;
                                                                 if is_active { p.max_context_tokens = mc.context_window; }
                                                                 cfg_changed = true;
@@ -604,14 +635,15 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                                         });
                                                         ui.end_row();
 
-                                                        ui.label(helpers::field_label("Max Output"));
+                                                        ui.label(helpers::field_label("Max Output"))
+                                                            .on_hover_text("Maximum tokens the model can generate in a single response.");
                                                         ui.horizontal(|ui| {
                                                             let mut val = mc.max_output_tokens as i32;
                                                             if ui.add(
                                                                 egui::DragValue::new(&mut val)
                                                                     .speed(1000).range(256..=2_000_000)
                                                                     .suffix(" tokens"),
-                                                            ).changed() {
+                                                            ).on_hover_text("Max response length in tokens").changed() {
                                                                 mc.max_output_tokens = val.max(256) as u32;
                                                                 if is_active { p.max_output_tokens = mc.max_output_tokens; }
                                                                 cfg_changed = true;
@@ -619,14 +651,15 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                                         });
                                                         ui.end_row();
 
-                                                        ui.label(helpers::field_label("Max (Thinking)"));
+                                                        ui.label(helpers::field_label("Max (Thinking)"))
+                                                            .on_hover_text("Max tokens for reasoning/thinking output. Only used when thinking mode is enabled.");
                                                         ui.horizontal(|ui| {
                                                             let mut val = mc.max_output_tokens_thinking.unwrap_or(mc.max_output_tokens * 2) as i32;
                                                             if ui.add(
                                                                 egui::DragValue::new(&mut val)
                                                                     .speed(1000).range(256..=2_000_000)
                                                                     .suffix(" tokens"),
-                                                            ).changed() {
+                                                            ).on_hover_text("Thinking/reasoning token budget").changed() {
                                                                 mc.max_output_tokens_thinking = Some(val.max(256) as u32);
                                                                 if is_active { p.max_output_tokens_thinking = val.max(256) as u32; }
                                                                 cfg_changed = true;
@@ -634,7 +667,8 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                                         });
                                                         ui.end_row();
 
-                                                        ui.label(helpers::field_label("Thinking API"));
+                                                        ui.label(helpers::field_label("Thinking API"))
+                                                            .on_hover_text("Which API protocol the model uses for reasoning. DeepSeek/OpenAI send reasoning_content, Anthropic uses thinking blocks.");
                                                         ui.horizontal(|ui| {
                                                             let current_ta = autocode_core::state::parse_thinking_api(&mc.thinking_api);
                                                             let current_label = current_ta.label();
@@ -656,14 +690,15 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                                         });
                                                         ui.end_row();
 
-                                                        ui.label(helpers::field_label("Handoff"));
+                                                        ui.label(helpers::field_label("Handoff"))
+                                                            .on_hover_text("Trigger handoff when context usage reaches this percentage. Prevents hitting the context limit mid-task.");
                                                         ui.horizontal(|ui| {
                                                             let mut pct = mc.handoff_percent as f32;
                                                             ui.add(
                                                                 egui::Slider::new(&mut pct, 10.0..=95.0)
                                                                     .step_by(5.0).show_value(false)
                                                                     .trailing_fill(true),
-                                                            );
+                                                            ).on_hover_text("Handoff threshold % of context window");
                                                             let new_pct = pct as u8;
                                                             mc.handoff_percent = new_pct;
                                                             if is_active { p.handoff_percent = new_pct; }
@@ -685,13 +720,75 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                                         });
                                                         ui.end_row();
 
-                                                        ui.label(helpers::field_label("Rate Limit"));
+                                                        ui.label(helpers::field_label("Temperature"))
+                                                            .on_hover_text("Controls randomness: 0 = deterministic, 1 = balanced, 2 = very creative. Lower for code, higher for brainstorming.");
+                                                        ui.horizontal(|ui| {
+                                                            let mut val = mc.temperature;
+                                                            if ui.add(
+                                                                egui::DragValue::new(&mut val)
+                                                                    .speed(0.05).range(0.0..=2.0)
+                                                                    .suffix(""),
+                                                            ).on_hover_text("0 = conservative, 2 = creative").changed() {
+                                                                mc.temperature = val.clamp(0.0, 2.0);
+                                                                if is_active { p.temperature = mc.temperature; }
+                                                                cfg_changed = true;
+                                                            }
+                                                        });
+                                                        ui.end_row();
+
+                                                        ui.label(helpers::field_label("Top P"))
+                                                            .on_hover_text("Nucleus sampling: cumulatively picks tokens until probability P is reached. 1.0 = disabled (consider all tokens). Lower = more focused.");
+                                                        ui.horizontal(|ui| {
+                                                            let mut val = mc.top_p;
+                                                            if ui.add(
+                                                                egui::DragValue::new(&mut val)
+                                                                    .speed(0.05).range(0.01..=1.0),
+                                                            ).on_hover_text("1.0 = disabled, lower = more focused output").changed() {
+                                                                mc.top_p = val.clamp(0.01, 1.0);
+                                                                if is_active { p.top_p = mc.top_p; }
+                                                                cfg_changed = true;
+                                                            }
+                                                        });
+                                                        ui.end_row();
+
+                                                        ui.label(helpers::field_label("Freq Penalty"))
+                                                            .on_hover_text("Penalizes repeating the same words. Positive values reduce repetition. Range: -2 (encourage repetition) to +2 (strongly discourage).");
+                                                        ui.horizontal(|ui| {
+                                                            let mut val = mc.frequency_penalty;
+                                                            if ui.add(
+                                                                egui::DragValue::new(&mut val)
+                                                                    .speed(0.1).range(-2.0..=2.0),
+                                                            ).on_hover_text("-2 to +2. Higher = less repetition.").changed() {
+                                                                mc.frequency_penalty = val.clamp(-2.0, 2.0);
+                                                                if is_active { p.frequency_penalty = mc.frequency_penalty; }
+                                                                cfg_changed = true;
+                                                            }
+                                                        });
+                                                        ui.end_row();
+
+                                                        ui.label(helpers::field_label("Pres Penalty"))
+                                                            .on_hover_text("Penalizes repeating the same topics/concepts. Positive values encourage the model to talk about new subjects. Range: -2 to +2.");
+                                                        ui.horizontal(|ui| {
+                                                            let mut val = mc.presence_penalty;
+                                                            if ui.add(
+                                                                egui::DragValue::new(&mut val)
+                                                                    .speed(0.1).range(-2.0..=2.0),
+                                                            ).on_hover_text("-2 to +2. Higher = more topic diversity.").changed() {
+                                                                mc.presence_penalty = val.clamp(-2.0, 2.0);
+                                                                if is_active { p.presence_penalty = mc.presence_penalty; }
+                                                                cfg_changed = true;
+                                                            }
+                                                        });
+                                                        ui.end_row();
+
+                                                        ui.label(helpers::field_label("Rate Limit"))
+                                                            .on_hover_text("Max API requests per hour. 0 = unlimited. Use to stay within a provider's rate tier.");
                                                         ui.horizontal(|ui| {
                                                             let mut val = mc.requests_per_hour.unwrap_or(0) as i32;
                                                             if ui.add(
                                                                 egui::DragValue::new(&mut val)
                                                                     .speed(100).range(0..=1000000),
-                                                            ).changed() {
+                                                            ).on_hover_text("0 = no limit").changed() {
                                                                 mc.requests_per_hour = if val <= 0 { None } else { Some(val as u32) };
                                                                 if is_active { p.requests_per_hour = mc.requests_per_hour; }
                                                                 cfg_changed = true;
@@ -755,6 +852,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
     }
     if let Some((label, model)) = set_active_key {
         state.active_provider = label.clone();
+        state.session_meta_dirty = true;
         if let Some(sess) = state.active_session_mut() {
             sess.provider_label = label;
             sess.model = model;
@@ -1107,6 +1205,41 @@ fn show_prompt(ui: &mut egui::Ui, state: &mut AppState) {
     if ui.button("Reset to Default").clicked() {
         state.handoff_trigger_prompt =
             autocode_core::state::DEFAULT_HANDOFF_TRIGGER_PROMPT.to_string();
+    }
+
+    ui.add_space(16.0);
+
+    // -- Handoff continuation prompt --------------------------------------
+    ui.label(
+        RichText::new("Handoff Continuation Prompt")
+            .size(14.0)
+            .strong()
+            .color(Palette::TEXT_PRIMARY),
+    );
+    ui.add_space(4.0);
+    ui.label(
+        RichText::new(
+            "Used as the first message in a new session when a forced handoff \
+             occurs (e.g. context exhausted) and there are active project-level \
+             tasks. Instructs the model to pick up where things left off.",
+        )
+        .size(11.0)
+        .color(Palette::TEXT_MUTED),
+    );
+    ui.add_space(8.0);
+
+    ui.add(
+        TextEdit::multiline(&mut state.handoff_continuation_prompt)
+            .desired_rows(6)
+            .desired_width(ui.available_width())
+            .font(egui::TextStyle::Monospace)
+            .text_color(Palette::TEXT_PRIMARY),
+    );
+
+    ui.add_space(8.0);
+    if ui.button("Reset to Default").clicked() {
+        state.handoff_continuation_prompt =
+            autocode_core::state::DEFAULT_HANDOFF_CONTINUATION_PROMPT.to_string();
     }
 
     ui.add_space(10.0);
