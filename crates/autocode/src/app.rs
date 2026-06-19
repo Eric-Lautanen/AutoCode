@@ -173,14 +173,13 @@ impl eframe::App for AutocodeApp {
             .unwrap_or_else(|| "AutoCode -- Autonomous AI Coder".into());
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
 
-        ctx.set_debug_on_hover(self.state.debug_mode);
         ctx.options_mut(|o| {
             o.warn_on_id_clash = self.state.debug_mode;
         });
-        ctx.global_style_mut(|s| {
-            s.debug.show_interactive_widgets = self.state.inspection_open;
-            s.debug.show_widget_hits = self.state.inspection_open;
-        });
+        #[cfg(debug_assertions)]
+        if self.state.debug_mode {
+            ctx.set_debug_on_hover(true);
+        }
         if let Some(rx) = &self.sysinfo_rx {
             if let Ok(info) = rx.try_recv() {
                 self.state.sysinfo = info;
