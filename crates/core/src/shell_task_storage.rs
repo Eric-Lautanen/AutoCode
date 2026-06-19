@@ -74,14 +74,14 @@ pub fn prune_tasks(data_dir_name: &str, max_count: usize) {
                 continue;
             }
             let id = name.trim_end_matches(".json").to_string();
-            if !keep.contains(&id) {
-                if let Err(e) = fsutil::remove_file(&entry.path()) {
-                    eprintln!(
-                        "[shell_task_storage] Failed to remove pruned task file {:?}: {}",
-                        entry.path(),
-                        e
-                    );
-                }
+            if !keep.contains(&id)
+                && let Err(e) = fsutil::remove_file(&entry.path())
+            {
+                eprintln!(
+                    "[shell_task_storage] Failed to remove pruned task file {:?}: {}",
+                    entry.path(),
+                    e
+                );
             }
         }
     }

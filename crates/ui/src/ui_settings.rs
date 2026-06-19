@@ -554,10 +554,9 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                             });
                             if !saved.is_empty() {
                                 let mut remove_idx: Option<usize> = None;
-                                let len = saved.len();
                                 let model_col_w = ui.available_width() - 50.0;
-                                for i in 0..len {
-                                    let name = saved[i].clone();
+                                let names: Vec<String> = saved.clone();
+                                for (i, name) in names.into_iter().enumerate() {
                                     let is_active = p.model == name;
                                     let mut mc = p.models_config.as_ref()
                                         .and_then(|m| m.get(&name)).cloned()
@@ -593,15 +592,14 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                             if resp.changed() {
                                                 saved[i] = new_name;
                                             }
-                                            if !name.is_empty() {
-                                                if ui.small_button("\u{2605}").on_hover_text("Select this model").clicked() {
+                                            if !name.is_empty()
+                                                && ui.small_button("\u{2605}").on_hover_text("Select this model").clicked() {
                                                     p.model = name.clone();
                                                     p.fill_from_config();
                                                     if state.active_provider == key {
                                                         state.session_meta_dirty = true;
                                                     }
                                                 }
-                                            }
                                             if ui.small_button("x").clicked() {
                                                 remove_idx = Some(i);
                                             }

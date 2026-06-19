@@ -25,10 +25,11 @@ impl PathCache {
     }
 
     fn insert(&mut self, key: String, value: std::path::PathBuf) {
-        if self.map.len() >= PATH_CACHE_MAX && !self.map.contains_key(&key) {
-            if let Some(oldest) = self.order.pop_front() {
-                self.map.remove(&oldest);
-            }
+        if self.map.len() >= PATH_CACHE_MAX
+            && !self.map.contains_key(&key)
+            && let Some(oldest) = self.order.pop_front()
+        {
+            self.map.remove(&oldest);
         }
         if !self.map.contains_key(&key) {
             self.order.push_back(key.clone());
@@ -295,10 +296,10 @@ fn push_runtime(state: &mut AppState, runtime: &ChatRuntime, msg: ChatMessage) {
 /// Push an error to a runtime's session, replacing any existing error messages
 /// so they don't stack up across retries.
 fn push_error(state: &mut AppState, runtime: &ChatRuntime, content: String) {
-    if let Some(sid) = runtime.active_session_id.as_deref() {
-        if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
-            sess.messages.retain(|m| m.role != Role::Error);
-        }
+    if let Some(sid) = runtime.active_session_id.as_deref()
+        && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
+    {
+        sess.messages.retain(|m| m.role != Role::Error);
     }
     push_runtime(state, runtime, ChatMessage::new(Role::Error, content));
 }
@@ -608,9 +609,9 @@ fn context_usage_info_for_session(
             };
             state.providers.get(label)
         })
-        .and_then(|p| {
+        .map(|p| {
             let defs = autocode_core::state::model_or_safe(&p.kind, &p.model);
-            Some(defs.max_output_tokens as usize)
+            defs.max_output_tokens as usize
         })
         .unwrap_or(4096);
     (used, max, pct.min(100), max_output)
@@ -701,10 +702,10 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
     }
     // Clear stale error messages — they should only show during the backoff
     // period, not when a retry actually fires.
-    if let Some(sid) = runtime.active_session_id.as_deref() {
-        if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
-            sess.messages.retain(|m| m.role != Role::Error);
-        }
+    if let Some(sid) = runtime.active_session_id.as_deref()
+        && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
+    {
+        sess.messages.retain(|m| m.role != Role::Error);
     }
     // Sync web rate limit from state so provider uses the latest value.
     crate::provider::set_web_rate_limit_ms(state.web_rate_limit_ms);
@@ -898,7 +899,8 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
             }
             // Tier 3: Improved heuristic fallback (JSON-optimized) on the
             // already-serialized body. Avoids redundant re-serialization from ApiMessages.
-            let count = core_helpers::estimate_full_request_tokens(
+
+            core_helpers::estimate_full_request_tokens(
                 &messages
                     .iter()
                     .map(|m| autocode_core::state::ChatMessage {
@@ -922,8 +924,7 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
                     .collect::<Vec<_>>(),
                 Some(&tools_json),
                 Some(&provider.model),
-            );
-            count
+            )
         };
         // Store the estimate back on the session so the toolbar meter,
         // handoff threshold, and pre-flight all use the same number.
@@ -1542,8 +1543,8 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
             // Step 2: filter out tool calls that still have no name after
             // inference. Malformed / hallucinated tool calls (empty name +
             // empty args) would otherwise create an infinite retry loop.
-            let dropped = tool_calls.iter().filter(|tc| tc.name.is_empty()).count();
-            if dropped > 0 {}
+            let _dropped = tool_calls.iter().filter(|tc| tc.name.is_empty()).count();
+
             tool_calls.retain(|tc| !tc.name.is_empty());
 
             // Step 3: handle the case where ALL tool calls were invalid.
@@ -1674,10 +1675,9 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     if let Some(pid) = meta_pid
                         && let Some(proj) = state.projects.iter().find(|p| p.id == pid)
                         && let Some(s) = state.sessions.iter().find(|s| s.id == meta_sid)
+                        && let Err(e) = autocode_core::session_storage::save_session_meta(proj, s)
                     {
-                        if let Err(e) = autocode_core::session_storage::save_session_meta(proj, s) {
-                            eprintln!("[chat] Failed to save session meta: {}", e);
-                        }
+                        eprintln!("[chat] Failed to save session meta: {}", e);
                     }
                 }
             }
@@ -1903,14 +1903,13 @@ fn poll_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
 
                 if has_handoff && state.handoff_enabled && !runtime.handoff_in_progress {
                     // Extract the AI-generated next_prompt from the handoff tool call args.
-                    if let Some(tr) = results.iter().find(|r| r.content.starts_with("HANDOFF:")) {
-                        if let Ok(args) =
+                    if let Some(tr) = results.iter().find(|r| r.content.starts_with("HANDOFF:"))
+                        && let Ok(args) =
                             serde_json::from_str::<serde_json::Value>(&tr.tool_call.arguments)
-                        {
-                            runtime.handoff_next_prompt = args
-                                .get("next_prompt")
-                                .and_then(|v| v.as_str().map(String::from));
-                        }
+                    {
+                        runtime.handoff_next_prompt = args
+                            .get("next_prompt")
+                            .and_then(|v| v.as_str().map(String::from));
                     }
                     push_tool_results_to_state(state, runtime, &results);
                     handle_handoff(state, runtime);
@@ -2204,13 +2203,12 @@ fn commit_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) {
         if has_handoff && state.handoff_enabled && !runtime.handoff_in_progress {
             let results = std::mem::take(&mut runtime.pending_tool_results);
             // Extract the AI-generated next_prompt from the handoff tool call args.
-            if let Some(tr) = results.iter().find(|r| r.content.starts_with("HANDOFF:")) {
-                if let Ok(args) = serde_json::from_str::<serde_json::Value>(&tr.tool_call.arguments)
-                {
-                    runtime.handoff_next_prompt = args
-                        .get("next_prompt")
-                        .and_then(|v| v.as_str().map(String::from));
-                }
+            if let Some(tr) = results.iter().find(|r| r.content.starts_with("HANDOFF:"))
+                && let Ok(args) = serde_json::from_str::<serde_json::Value>(&tr.tool_call.arguments)
+            {
+                runtime.handoff_next_prompt = args
+                    .get("next_prompt")
+                    .and_then(|v| v.as_str().map(String::from));
             }
             let count = results.len();
             push_tool_results_to_state(state, runtime, &results);
@@ -2276,10 +2274,9 @@ fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     if let Some(sess) = state.active_session()
         && let Some(pid) = sess.project_id.as_ref()
         && let Some(proj) = state.projects.iter().find(|p| &p.id == pid)
+        && let Err(e) = autocode_core::session_storage::save_session_meta(proj, sess)
     {
-        if let Err(e) = autocode_core::session_storage::save_session_meta(proj, sess) {
-            eprintln!("[chat] Failed to save session meta before handoff: {}", e);
-        }
+        eprintln!("[chat] Failed to save session meta before handoff: {}", e);
     }
     state.flush_pending_writes(true);
     let handoff_was_enabled = state.handoff_enabled;
@@ -2405,7 +2402,6 @@ fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
         );
         push_runtime(state, runtime, msg);
         start_completion(state, runtime);
-        return;
     }
     // Trigger already sent — the model has the warning, it's up to it now.
 }
@@ -2910,6 +2906,7 @@ fn build_tool_meta(tc: &ToolCall, result: &str, duration_ms: u64) -> ToolMeta {
 
 // -- Tool execution (async, runs on background thread) -------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn execute_tool_with_cache(
     tc: &ToolCall,
     project_root: &str,
@@ -3083,17 +3080,17 @@ fn execute_tool_with_cache(
             if core_helpers::is_blocked_path(&path) {
                 return core_helpers::blocked_error(raw_path);
             }
-            if let Some(parent) = path.parent() {
-                if let Err(e) = fsutil::create_dir_all(parent) {
-                    return helpers::tool_error(
-                        &format!(
-                            "Error creating parent directory for {}: {}",
-                            path.display(),
-                            e
-                        ),
-                        "Check that the parent path is writable",
-                    );
-                }
+            if let Some(parent) = path.parent()
+                && let Err(e) = fsutil::create_dir_all(parent)
+            {
+                return helpers::tool_error(
+                    &format!(
+                        "Error creating parent directory for {}: {}",
+                        path.display(),
+                        e
+                    ),
+                    "Check that the parent path is writable",
+                );
             }
             match fsutil::write(&path, content) {
                 Ok(_) => format!("Written {} bytes to {}", content.len(), path.display()),
@@ -3157,7 +3154,7 @@ fn execute_tool_with_cache(
                         "Check permissions; the directory exists but cannot be read",
                     );
                 }
-                return format!("(empty tree)");
+                return "(empty tree)".to_string();
             }
             entries.join("\n")
         }
@@ -3204,17 +3201,17 @@ fn execute_tool_with_cache(
             if core_helpers::is_blocked_path(&to) {
                 return core_helpers::blocked_error(raw_to);
             }
-            if let Some(parent) = to.parent() {
-                if let Err(e) = fsutil::create_dir_all(parent) {
-                    return helpers::tool_error(
-                        &format!(
-                            "Error creating parent directory for {}: {}",
-                            to.display(),
-                            e
-                        ),
-                        "Check that the destination path is writable",
-                    );
-                }
+            if let Some(parent) = to.parent()
+                && let Err(e) = fsutil::create_dir_all(parent)
+            {
+                return helpers::tool_error(
+                    &format!(
+                        "Error creating parent directory for {}: {}",
+                        to.display(),
+                        e
+                    ),
+                    "Check that the destination path is writable",
+                );
             }
             match fsutil::rename(&from, &to) {
                 Ok(_) => format!("Renamed {} -> {}", from.display(), to.display()),

@@ -481,12 +481,12 @@ fn sanitize_tool_calls_for_api(tool_calls: &mut Option<serde_json::Value>) {
             continue;
         }
         // Attempt repair: try to quote-escape and re-parse the raw string.
-        if let Ok(repaired) = serde_json::from_str::<String>(&format!("\"{}\"", args_str)) {
-            if serde_json::from_str::<serde_json::Value>(&repaired).is_ok() {
-                arr[i]["function"]["arguments"] = serde_json::Value::String(repaired);
-                i += 1;
-                continue;
-            }
+        if let Ok(repaired) = serde_json::from_str::<String>(&format!("\"{}\"", args_str))
+            && serde_json::from_str::<serde_json::Value>(&repaired).is_ok()
+        {
+            arr[i]["function"]["arguments"] = serde_json::Value::String(repaired);
+            i += 1;
+            continue;
         }
         // Last resort: find the longest valid JSON prefix.
         let mut end = args_str.len();
@@ -904,6 +904,7 @@ fn apply_timeouts(stream: &TcpStream, is_stream: bool, cfg: &TimeoutConfig) -> s
     stream.set_write_timeout(Some(Duration::from_secs(cfg.request)))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn send_http(
     conn: HttpConn<'_>,
     api_key: &str,
@@ -930,6 +931,7 @@ fn send_http(
     process_http_response(&mut reader, stream, model, tx)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn send_https(
     conn: &HttpConn<'_>,
     api_key: &str,
@@ -1016,10 +1018,7 @@ fn sanitize_for_log(s: &str) -> String {
     let prefixes = ["sk-ant-", "sk-proj-", "sk-"];
     let mut result = s.to_string();
     for prefix in prefixes {
-        loop {
-            let Some(start) = result.find(prefix) else {
-                break;
-            };
+        while let Some(start) = result.find(prefix) {
             let after = start + prefix.len();
             let end = after
                 + result[after..]
@@ -1158,15 +1157,12 @@ fn parse_sse_stream_from_reader<R: BufRead>(
     let mut lines = reader.lines();
     let mut tool_acc: std::collections::HashMap<usize, (String, String, String)> =
         std::collections::HashMap::new();
-    let mut content_count = 0u32;
-    let mut reasoning_count = 0u32;
     let mut prompt_tokens = 0usize;
     let mut completion_tokens = 0usize;
     let mut saw_data_line = false;
     let mut saw_finish = false;
     let mut had_error = false;
     let mut raw_buf = String::new();
-    let mut line_count = 0u32;
     let mut last_log = std::time::Instant::now();
 
     // Validate tool call arguments as valid JSON; repair if possible.
@@ -1175,11 +1171,11 @@ fn parse_sse_stream_from_reader<R: BufRead>(
             return true;
         }
         // Try to quote-escape and re-parse the args as a JSON string.
-        if let Ok(repaired) = serde_json::from_str::<String>(&format!("\"{}\"", args)) {
-            if serde_json::from_str::<serde_json::Value>(&repaired).is_ok() {
-                *args = repaired;
-                return true;
-            }
+        if let Ok(repaired) = serde_json::from_str::<String>(&format!("\"{}\"", args))
+            && serde_json::from_str::<serde_json::Value>(&repaired).is_ok()
+        {
+            *args = repaired;
+            return true;
         }
         // Find the longest valid JSON prefix.
         let max_steps = args.len().min(256);
@@ -1206,8 +1202,7 @@ fn parse_sse_stream_from_reader<R: BufRead>(
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
             Err(e) => return Err(e.into()),
         };
-        line_count += 1;
-        if line_count <= 10 {}
+
         if last_log.elapsed().as_secs() >= 30 {
             last_log = std::time::Instant::now();
         }
@@ -1219,7 +1214,7 @@ fn parse_sse_stream_from_reader<R: BufRead>(
             raw_buf.push('\n');
             continue;
         }
-        if !saw_data_line {}
+
         saw_data_line = true;
         let data = line["data: ".len()..].trim();
         if data == "[DONE]" {
@@ -1238,25 +1233,19 @@ fn parse_sse_stream_from_reader<R: BufRead>(
             completion_tokens = c as usize;
         }
         let delta = &v["choices"][0]["delta"];
-        if let Some(text) = delta["content"].as_str().filter(|s| !s.is_empty()) {
-            if content_count < 3 {}
-            content_count += 1;
-            if tx.send(ProviderEvent::Delta(text.to_string())).is_err() {
-                return Err("channel closed".into());
-            }
+        if let Some(text) = delta["content"].as_str().filter(|s| !s.is_empty())
+            && tx.send(ProviderEvent::Delta(text.to_string())).is_err()
+        {
+            return Err("channel closed".into());
         }
         if let Some(reasoning) = delta["reasoning_content"]
             .as_str()
             .filter(|s| !s.is_empty())
-        {
-            if reasoning_count < 3 {}
-            reasoning_count += 1;
-            if tx
+            && tx
                 .send(ProviderEvent::Reasoning(reasoning.to_string()))
                 .is_err()
-            {
-                return Err("channel closed".into());
-            }
+        {
+            return Err("channel closed".into());
         }
         if let Some(tc_arr) = delta["tool_calls"].as_array() {
             for tc in tc_arr {
@@ -1607,7 +1596,7 @@ pub fn native_post(
         Ok(())
     })();
 
-    read_result.map_err(|e| e)?;
+    read_result?;
 
     let body_bytes = http_response_body(&buffer);
     Ok(String::from_utf8_lossy(&body_bytes).to_string())

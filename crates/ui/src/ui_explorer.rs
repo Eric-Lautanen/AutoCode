@@ -451,10 +451,6 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
                 .and_then(|n| n.to_str())
                 .unwrap_or(file_path);
 
-            // is_modified is computed before the window so click-outside
-            // detection can use it; shadow it here so the inner code is unchanged.
-            let is_modified = is_modified;
-
             Frame::NONE
                 .fill(Palette::BG_SURFACE)
                 .corner_radius(egui::CornerRadius::ZERO)
@@ -504,14 +500,12 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
                                     )
                                     .on_hover_text("Save changes (Ctrl+S)")
                                     .clicked();
-                            if save_clicked || (is_modified && ctrl_s) {
-                                if let Some(path) = &panel.selected_file {
-                                    if let Some(buffer) = &panel.file_edit_buffer {
-                                        if std::fs::write(path, buffer).is_ok() {
-                                            panel.file_content = Some(Ok(buffer.clone()));
-                                        }
-                                    }
-                                }
+                            if (save_clicked || (is_modified && ctrl_s))
+                                && let Some(path) = &panel.selected_file
+                                && let Some(buffer) = &panel.file_edit_buffer
+                                && std::fs::write(path, buffer).is_ok()
+                            {
+                                panel.file_content = Some(Ok(buffer.clone()));
                             }
                             if ui
                                 .add(
@@ -682,22 +676,22 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
                                     // but don't call scroll_to_rect yet — do it after this
                                     // closure so layout is not disturbed.
                                     let pointer_down = ui.input(|i| i.pointer.primary_down());
-                                    if pointer_down {
-                                        if let Some(cursor_range) = &te_output.cursor_range {
-                                            let primary = cursor_range.primary;
-                                            let cursor_local =
-                                                te_output.galley.pos_from_cursor(primary);
-                                            let cursor_top = galley_pos.y + cursor_local.min.y;
-                                            let cursor_bot = galley_pos.y + cursor_local.max.y;
-                                            let clip = clip_rect_before;
-                                            let near_top = cursor_top < clip.min.y + row_h;
-                                            let near_bot = cursor_bot > clip.max.y - row_h;
-                                            if near_top || near_bot {
-                                                scroll_target = Some(egui::Rect::from_min_max(
-                                                    egui::pos2(clip.min.x, cursor_top),
-                                                    egui::pos2(clip.max.x, cursor_bot),
-                                                ));
-                                            }
+                                    if pointer_down
+                                        && let Some(cursor_range) = &te_output.cursor_range
+                                    {
+                                        let primary = cursor_range.primary;
+                                        let cursor_local =
+                                            te_output.galley.pos_from_cursor(primary);
+                                        let cursor_top = galley_pos.y + cursor_local.min.y;
+                                        let cursor_bot = galley_pos.y + cursor_local.max.y;
+                                        let clip = clip_rect_before;
+                                        let near_top = cursor_top < clip.min.y + row_h;
+                                        let near_bot = cursor_bot > clip.max.y - row_h;
+                                        if near_top || near_bot {
+                                            scroll_target = Some(egui::Rect::from_min_max(
+                                                egui::pos2(clip.min.x, cursor_top),
+                                                egui::pos2(clip.max.x, cursor_bot),
+                                            ));
                                         }
                                     }
                                 });
@@ -769,102 +763,100 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
     }
 
     // --- Unsaved-changes confirmation modal ---
-    if panel.show_close_confirm {
-        if let Some(viewer_rect) = window_resp.as_ref().map(|r| r.response.rect) {
-            // Dialog box centered in the viewer.
-            let dialog_size = egui::vec2(320.0, 148.0);
-            let dialog_pos = viewer_rect.center() - dialog_size * 0.5;
+    if panel.show_close_confirm
+        && let Some(viewer_rect) = window_resp.as_ref().map(|r| r.response.rect)
+    {
+        // Dialog box centered in the viewer.
+        let dialog_size = egui::vec2(320.0, 148.0);
+        let dialog_pos = viewer_rect.center() - dialog_size * 0.5;
 
-            egui::Area::new(egui::Id::new("close_confirm_dialog"))
-                .fixed_pos(dialog_pos)
-                .order(egui::Order::Foreground)
-                .show(ctx, |ui| {
-                    Frame::NONE
-                        .fill(Palette::BG_SURFACE)
-                        .corner_radius(egui::CornerRadius::same(4))
-                        .stroke(Stroke::new(1.0, Palette::BORDER))
-                        .inner_margin(Margin::same(20))
-                        .show(ui, |ui| {
-                            ui.set_width(dialog_size.x - 40.0);
-                            ui.spacing_mut().item_spacing.y = 12.0;
+        egui::Area::new(egui::Id::new("close_confirm_dialog"))
+            .fixed_pos(dialog_pos)
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                Frame::NONE
+                    .fill(Palette::BG_SURFACE)
+                    .corner_radius(egui::CornerRadius::same(4))
+                    .stroke(Stroke::new(1.0, Palette::BORDER))
+                    .inner_margin(Margin::same(20))
+                    .show(ui, |ui| {
+                        ui.set_width(dialog_size.x - 40.0);
+                        ui.spacing_mut().item_spacing.y = 12.0;
 
-                            ui.label(
-                                RichText::new("Unsaved changes")
-                                    .size(13.0)
-                                    .strong()
-                                    .color(Palette::TEXT_PRIMARY),
-                            );
-                            ui.label(
-                                RichText::new("You have unsaved changes. Save before closing?")
-                                    .size(12.0)
-                                    .color(Palette::TEXT_MUTED),
-                            );
+                        ui.label(
+                            RichText::new("Unsaved changes")
+                                .size(13.0)
+                                .strong()
+                                .color(Palette::TEXT_PRIMARY),
+                        );
+                        ui.label(
+                            RichText::new("You have unsaved changes. Save before closing?")
+                                .size(12.0)
+                                .color(Palette::TEXT_MUTED),
+                        );
 
-                            ui.add_space(4.0);
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 8.0;
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
 
-                                // Save & close
-                                if ui
-                                    .add(
-                                        egui::Button::new(
-                                            RichText::new("Save & Close")
-                                                .size(12.0)
-                                                .color(Palette::BG_BASE),
-                                        )
-                                        .fill(Palette::ACCENT)
-                                        .stroke(Stroke::NONE)
-                                        .min_size(egui::vec2(96.0, 26.0)),
+                            // Save & close
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        RichText::new("Save & Close")
+                                            .size(12.0)
+                                            .color(Palette::BG_BASE),
                                     )
-                                    .clicked()
+                                    .fill(Palette::ACCENT)
+                                    .stroke(Stroke::NONE)
+                                    .min_size(egui::vec2(96.0, 26.0)),
+                                )
+                                .clicked()
+                            {
+                                if let Some(path) = &panel.selected_file
+                                    && let Some(buffer) = &panel.file_edit_buffer
                                 {
-                                    if let Some(path) = &panel.selected_file {
-                                        if let Some(buffer) = &panel.file_edit_buffer {
-                                            let _ = std::fs::write(path, buffer);
-                                        }
-                                    }
-                                    panel.show_close_confirm = false;
-                                    open = false;
+                                    let _ = std::fs::write(path, buffer);
                                 }
+                                panel.show_close_confirm = false;
+                                open = false;
+                            }
 
-                                // Discard & close
-                                if ui
-                                    .add(
-                                        egui::Button::new(
-                                            RichText::new("Discard")
-                                                .size(12.0)
-                                                .color(Palette::ERROR),
-                                        )
-                                        .fill(Color32::TRANSPARENT)
-                                        .stroke(Stroke::new(1.0, Palette::ERROR))
-                                        .min_size(egui::vec2(72.0, 26.0)),
+                            // Discard & close
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        RichText::new("Discard").size(12.0).color(Palette::ERROR),
                                     )
-                                    .clicked()
-                                {
-                                    panel.show_close_confirm = false;
-                                    open = false;
-                                }
+                                    .fill(Color32::TRANSPARENT)
+                                    .stroke(Stroke::new(1.0, Palette::ERROR))
+                                    .min_size(egui::vec2(72.0, 26.0)),
+                                )
+                                .clicked()
+                            {
+                                panel.show_close_confirm = false;
+                                open = false;
+                            }
 
-                                // Cancel — go back to editing
-                                if ui
-                                    .add(
-                                        egui::Button::new(
-                                            RichText::new("Cancel")
-                                                .size(12.0)
-                                                .color(Palette::TEXT_MUTED),
-                                        )
-                                        .fill(Color32::TRANSPARENT)
-                                        .stroke(Stroke::new(1.0, Palette::BORDER))
-                                        .min_size(egui::vec2(64.0, 26.0)),
+                            // Cancel — go back to editing
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        RichText::new("Cancel")
+                                            .size(12.0)
+                                            .color(Palette::TEXT_MUTED),
                                     )
-                                    .clicked()
-                                {
-                                    panel.show_close_confirm = false;
-                                }
-                            });
+                                    .fill(Color32::TRANSPARENT)
+                                    .stroke(Stroke::new(1.0, Palette::BORDER))
+                                    .min_size(egui::vec2(64.0, 26.0)),
+                                )
+                                .clicked()
+                            {
+                                panel.show_close_confirm = false;
+                            }
                         });
-                });
-        }
+                    });
+            });
     }
 
     if !open {

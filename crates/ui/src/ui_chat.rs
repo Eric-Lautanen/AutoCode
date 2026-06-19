@@ -415,31 +415,31 @@ pub fn show(
         .ctx()
         .data_mut(|d| d.remove_temp::<Option<(String, u64)>>(egui::Id::new("replay_action")))
         .flatten();
-    if let Some((sid, msg_id)) = replay {
-        if let Some(text) = autocode_ai::chat::replay_to_message(state, runtimes, &sid, msg_id) {
-            // Rebuild the display buffer from the truncated session.
-            if let Some(sess) = state.active_session() {
-                panel_state.display_buffer = sess
-                    .messages
-                    .iter()
-                    .filter(|m| m.role != Role::Error)
-                    .cloned()
-                    .collect();
-                panel_state.loaded_min_id = panel_state
-                    .display_buffer
-                    .first()
-                    .map(|m| m.id)
-                    .unwrap_or(0);
-            }
-            // Force Phase 2 to re-read on the next frame as a safety net.
-            panel_state.prev_message_count = usize::MAX;
-            panel_state.input = text;
-            panel_state.scroll_to_bottom = true;
-            ui.ctx().memory_mut(|mem| {
-                mem.request_focus(egui::Id::new(format!("chat_input_{}", sid)));
-            });
-            ui.ctx().request_repaint();
+    if let Some((sid, msg_id)) = replay
+        && let Some(text) = autocode_ai::chat::replay_to_message(state, runtimes, &sid, msg_id)
+    {
+        // Rebuild the display buffer from the truncated session.
+        if let Some(sess) = state.active_session() {
+            panel_state.display_buffer = sess
+                .messages
+                .iter()
+                .filter(|m| m.role != Role::Error)
+                .cloned()
+                .collect();
+            panel_state.loaded_min_id = panel_state
+                .display_buffer
+                .first()
+                .map(|m| m.id)
+                .unwrap_or(0);
         }
+        // Force Phase 2 to re-read on the next frame as a safety net.
+        panel_state.prev_message_count = usize::MAX;
+        panel_state.input = text;
+        panel_state.scroll_to_bottom = true;
+        ui.ctx().memory_mut(|mem| {
+            mem.request_focus(egui::Id::new(format!("chat_input_{}", sid)));
+        });
+        ui.ctx().request_repaint();
     }
 
     ui.separator();
@@ -866,21 +866,20 @@ fn show_assistant_content(
 ) {
     ui.push_id((msg.timestamp, sid), |ui| {
         ui.set_max_width(ui.available_width());
-        if show_reasoning {
-            if let Some(reasoning) = &msg.reasoning_content
-                && !reasoning.is_empty()
-            {
-                ui.add_space(4.0);
-                Frame::NONE
-                    .fill(theme().reason_bg)
-                    .corner_radius(ROUND_SM)
-                    .stroke(Stroke::new(1.0, theme().reason_border))
-                    .inner_margin(Margin::same(8))
-                    .show(ui, |ui| {
-                        render_markdown(ui, reasoning, true);
-                    });
-                ui.add_space(6.0);
-            }
+        if show_reasoning
+            && let Some(reasoning) = &msg.reasoning_content
+            && !reasoning.is_empty()
+        {
+            ui.add_space(4.0);
+            Frame::NONE
+                .fill(theme().reason_bg)
+                .corner_radius(ROUND_SM)
+                .stroke(Stroke::new(1.0, theme().reason_border))
+                .inner_margin(Margin::same(8))
+                .show(ui, |ui| {
+                    render_markdown(ui, reasoning, true);
+                });
+            ui.add_space(6.0);
         }
         render_markdown(ui, &msg.content, true);
     });

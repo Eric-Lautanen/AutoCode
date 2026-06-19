@@ -188,28 +188,14 @@ fn run_command_inner(
                         Ok(0) => break, // EOF
                         Ok(n) => {
                             for &byte in &buf[..n] {
-                                if byte == b'\n' {
-                                    if !partial.is_empty() {
-                                        if tx
-                                            .send(ShellEvent::Output(std::mem::take(&mut partial)))
-                                            .is_err()
-                                        {
-                                            aborted = true;
-                                            break;
-                                        }
-                                    }
-                                } else if byte == b'\r' {
-                                    // Carriage return — progress spinner update.
-                                    // Flush whatever we have so far.
-                                    if !partial.is_empty() {
-                                        if tx
-                                            .send(ShellEvent::Output(std::mem::take(&mut partial)))
-                                            .is_err()
-                                        {
-                                            aborted = true;
-                                            break;
-                                        }
-                                    }
+                                if (byte == b'\n' || byte == b'\r')
+                                    && !partial.is_empty()
+                                    && tx
+                                        .send(ShellEvent::Output(std::mem::take(&mut partial)))
+                                        .is_err()
+                                {
+                                    aborted = true;
+                                    break;
                                 } else {
                                     partial.push(byte as char);
                                 }

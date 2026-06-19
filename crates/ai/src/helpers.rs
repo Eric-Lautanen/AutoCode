@@ -916,7 +916,7 @@ pub fn project_context_string(state: &AppState) -> String {
                 if name.starts_with('.') || name == "node_modules" || name == "target" {
                     return None;
                 }
-                let suffix = if e.file_type().ok().map_or(false, |t| t.is_dir()) {
+                let suffix = if e.file_type().ok().is_some_and(|t| t.is_dir()) {
                     "/"
                 } else {
                     ""

@@ -1555,10 +1555,9 @@ impl AppState {
         // The JSONL message file is created later by flush_pending_writes.
         if let Some(ref pid) = sess.project_id
             && let Some(proj) = self.projects.iter().find(|p| &p.id == pid)
+            && let Err(e) = crate::session_storage::save_session_meta(proj, &sess)
         {
-            if let Err(e) = crate::session_storage::save_session_meta(proj, &sess) {
-                eprintln!("[state] Failed to save new session meta: {}", e);
-            }
+            eprintln!("[state] Failed to save new session meta: {}", e);
         }
         self.active_session_id = Some(sess.id.clone());
         self.sessions.push(sess);

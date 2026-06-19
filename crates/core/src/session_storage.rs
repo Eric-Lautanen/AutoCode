@@ -323,10 +323,10 @@ pub fn save_session_meta(project: &Project, session: &Session) -> std::io::Resul
             let name = entry.file_name().to_string_lossy().into_owned();
             if entry.path().is_dir() && name.starts_with(&prefix) && name != new_dirname {
                 let new_path = parent.join(&new_dirname);
-                if !new_path.exists() {
-                    if let Err(e) = fsutil::rename(&entry.path(), &new_path) {
-                        eprintln!("[session_storage] Failed to rename session dir: {}", e);
-                    }
+                if !new_path.exists()
+                    && let Err(e) = fsutil::rename(&entry.path(), &new_path)
+                {
+                    eprintln!("[session_storage] Failed to rename session dir: {}", e);
                 }
             }
         }
@@ -460,14 +460,15 @@ pub fn delete_session_file(project: &Project, session: &Session) {
     if let Ok(entries) = fsutil::read_dir(&dir) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if entry.path().is_dir() && name.starts_with(&prefix) {
-                if let Err(e) = fsutil::remove_dir(&entry.path()) {
-                    eprintln!(
-                        "[session_storage] Failed to remove session dir {:?}: {}",
-                        entry.path(),
-                        e
-                    );
-                }
+            if entry.path().is_dir()
+                && name.starts_with(&prefix)
+                && let Err(e) = fsutil::remove_dir(&entry.path())
+            {
+                eprintln!(
+                    "[session_storage] Failed to remove session dir {:?}: {}",
+                    entry.path(),
+                    e
+                );
             }
         }
     }
@@ -508,14 +509,13 @@ fn cleanup_orphan_temp_files(dir: &Path, max_age_secs: u64) {
                 .and_then(|s| s.strip_suffix(suffix))
                 && let Ok(ts) = ts_str.parse::<u64>()
                 && now.saturating_sub(ts) > max_age_secs
+                && let Err(e) = fsutil::remove_file(&entry.path())
             {
-                if let Err(e) = fsutil::remove_file(&entry.path()) {
-                    eprintln!(
-                        "[session_storage] Failed to remove orphan temp file {:?}: {}",
-                        entry.path(),
-                        e
-                    );
-                }
+                eprintln!(
+                    "[session_storage] Failed to remove orphan temp file {:?}: {}",
+                    entry.path(),
+                    e
+                );
             }
         }
     }

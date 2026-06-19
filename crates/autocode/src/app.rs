@@ -160,10 +160,10 @@ impl AutocodeApp {
                 // Only write metadata if the session files still exist on disk.
                 // Disk is the source of truth - if the user deleted the session
                 // manually we must not recreate it.
-                if autocode_core::session_storage::session_exists(proj, sess) {
-                    if let Err(e) = autocode_core::session_storage::save_session_meta(proj, sess) {
-                        eprintln!("[app] Failed to save session meta for {}: {}", sess.id, e);
-                    }
+                if autocode_core::session_storage::session_exists(proj, sess)
+                    && let Err(e) = autocode_core::session_storage::save_session_meta(proj, sess)
+                {
+                    eprintln!("[app] Failed to save session meta for {}: {}", sess.id, e);
                 }
             }
         }
@@ -230,10 +230,9 @@ impl eframe::App for AutocodeApp {
             if let Some(sess) = self.state.active_session()
                 && let Some(proj) = self.state.active_project()
                 && autocode_core::session_storage::session_exists(proj, sess)
+                && let Err(e) = autocode_core::session_storage::save_session_meta(proj, sess)
             {
-                if let Err(e) = autocode_core::session_storage::save_session_meta(proj, sess) {
-                    eprintln!("[app] Failed to save session meta: {}", e);
-                }
+                eprintln!("[app] Failed to save session meta: {}", e);
             }
         }
 
@@ -338,10 +337,10 @@ impl eframe::App for AutocodeApp {
                     eprintln!("[app] Failed to create project directories: {}", e);
                 }
                 // Persist project identity to disk so it survives restarts.
-                if let Some(proj) = self.state.projects.last() {
-                    if let Err(e) = autocode_core::session_storage::save_project_identity(proj) {
-                        eprintln!("[app] Failed to save project identity: {}", e);
-                    }
+                if let Some(proj) = self.state.projects.last()
+                    && let Err(e) = autocode_core::session_storage::save_project_identity(proj)
+                {
+                    eprintln!("[app] Failed to save project identity: {}", e);
                 }
                 autocode_core::session_storage::switch_to_project(&mut self.state, &id);
                 self.state.show_explorer = true;

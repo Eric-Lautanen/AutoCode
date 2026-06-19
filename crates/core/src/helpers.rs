@@ -1457,7 +1457,7 @@ mod test_token_estimation {
     fn test_estimate_tokens_simple_words() {
         // "hello world" = 2 words, ~1.5 tokens/word = 3, + overhead = ~6
         let count = estimate_tokens("hello world");
-        assert!(count >= 3 && count <= 10, "got {}", count);
+        assert!((3..=10).contains(&count), "got {}", count);
     }
 
     #[test]
@@ -1471,7 +1471,7 @@ fn main() {
         let count = estimate_tokens(code);
         // Code has more symbols, should use ~3.2 chars/token
         // ~100 chars / 3.2 = ~31 tokens
-        assert!(count >= 20 && count <= 60, "code estimate: {}", count);
+        assert!((20..=60).contains(&count), "code estimate: {}", count);
     }
 
     #[test]
@@ -1479,7 +1479,7 @@ fn main() {
         let prose = "This is a simple sentence with several words in it.";
         let count = estimate_tokens(prose);
         // ~50 chars / 4.0 = ~12 tokens
-        assert!(count >= 8 && count <= 25, "prose estimate: {}", count);
+        assert!((8..=25).contains(&count), "prose estimate: {}", count);
     }
 
     #[test]
@@ -1487,14 +1487,14 @@ fn main() {
         let cjk = "你好世界"; // 4 CJK chars
         let count = estimate_tokens(cjk);
         // ~1.3 tokens per CJK char = ~5 tokens
-        assert!(count >= 3 && count <= 12, "cjk estimate: {}", count);
+        assert!((3..=12).contains(&count), "cjk estimate: {}", count);
     }
 
     #[test]
     fn test_estimate_tokens_mixed_code_prose() {
         let mixed = "Here is some code: fn foo() { return 42; } and more text.";
         let count = estimate_tokens(mixed);
-        assert!(count >= 15 && count <= 50, "mixed estimate: {}", count);
+        assert!((15..=50).contains(&count), "mixed estimate: {}", count);
     }
 
     #[test]
@@ -1503,14 +1503,14 @@ fn main() {
         let symbols = "{}[](),;:+-*/%<>=!&|^~?@#$\\`'";
         let count = estimate_tokens(symbols);
         // Each symbol ~1 token
-        assert!(count >= 20 && count <= 40, "symbols estimate: {}", count);
+        assert!((20..=40).contains(&count), "symbols estimate: {}", count);
     }
 
     #[test]
     fn test_estimate_message_tokens_basic() {
         let msg = ChatMessage::new(crate::state::Role::User, "Hello world");
         let count = estimate_message_tokens(&msg);
-        assert!(count >= 3 && count <= 15);
+        assert!((3..=15).contains(&count));
     }
 
     #[test]
