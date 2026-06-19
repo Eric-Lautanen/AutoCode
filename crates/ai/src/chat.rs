@@ -2065,16 +2065,16 @@ fn poll_live_shell(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
         };
         runtime.pending_tool_results.push(result);
 
-        if runtime.pending_tool_remaining.is_empty() {
-            // If there are incomplete tasks, send a continue message
-            // instead of pushing the error to the model.
-            if state.handoff_enabled
-                && (state.todo_list.has_incomplete() || state.project_task_list.has_incomplete())
-            {
-                runtime.pending_tool_results.clear();
-                auto_continue_impl(state, runtime, "", true);
-                return true;
-            }
+            if runtime.pending_tool_remaining.is_empty() {
+                // If there are incomplete tasks, send a continue message
+                // instead of pushing the error to the model.
+                if state.handoff_enabled
+                    && (state.todo_list.has_incomplete() || state.project_task_list.has_incomplete())
+                {
+                    runtime.pending_tool_results.clear();
+                    auto_continue_impl(state, runtime, "", false);
+                    return true;
+                }
             commit_tool_results(state, runtime);
         } else {
             let root =
@@ -2157,7 +2157,7 @@ fn poll_live_shell(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
             // Shell command failed and there are incomplete tasks —
             // send a continue message instead of showing the error to the model.
             runtime.pending_tool_results.clear();
-            auto_continue_impl(state, runtime, "", true);
+            auto_continue_impl(state, runtime, "", false);
         } else {
             commit_tool_results(state, runtime);
         }
