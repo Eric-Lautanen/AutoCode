@@ -170,5 +170,3 @@ pub fn apply(ctx: &Context) {
     style.visuals = v;
     ctx.set_global_style(style);
 }
-
-

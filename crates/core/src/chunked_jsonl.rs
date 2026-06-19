@@ -1,6 +1,6 @@
-use std::path::{Path, PathBuf};
-use crate::state::ChatMessage;
 use crate::fsutil;
+use crate::state::ChatMessage;
+use std::path::{Path, PathBuf};
 
 pub const MESSAGES_PER_CHUNK: usize = 1000;
 
@@ -128,11 +128,7 @@ pub fn read_all_messages_chunked(dir: &Path) -> Vec<ChatMessage> {
 
 /// Load messages with IDs less than `before_id`, up to `count` messages.
 /// Reads chunks from newest to oldest until we have enough messages.
-pub fn load_messages_chunked_before(
-    dir: &Path,
-    before_id: u64,
-    count: usize,
-) -> Vec<ChatMessage> {
+pub fn load_messages_chunked_before(dir: &Path, before_id: u64, count: usize) -> Vec<ChatMessage> {
     let mut chunks = find_chunk_files(dir);
     chunks.reverse();
     let mut result = Vec::new();
@@ -163,10 +159,7 @@ pub fn load_messages_chunked_before(
 /// Crash-safe: new chunks are written to a temp subdirectory first, old
 /// files are deleted only after the new data is safely on disk, then temp
 /// files are renamed into place.
-pub fn truncate_messages_chunked(
-    dir: &Path,
-    keep_up_to_id: u64,
-) -> std::io::Result<()> {
+pub fn truncate_messages_chunked(dir: &Path, keep_up_to_id: u64) -> std::io::Result<()> {
     let all = read_all_messages_chunked(dir);
     let keep: Vec<ChatMessage> = all.into_iter().filter(|m| m.id <= keep_up_to_id).collect();
 
@@ -181,7 +174,10 @@ pub fn truncate_messages_chunked(
     // Old files can now be safely removed - the new data is on disk.
     for path in find_chunk_files(dir) {
         if let Err(e) = fsutil::remove_file(&path) {
-            eprintln!("[chunked_jsonl] Failed to remove old chunk {:?}: {}", path, e);
+            eprintln!(
+                "[chunked_jsonl] Failed to remove old chunk {:?}: {}",
+                path, e
+            );
         }
     }
 
@@ -194,16 +190,15 @@ pub fn truncate_messages_chunked(
 
     // Clean up the temp subdirectory.
     if let Err(e) = fsutil::remove_dir(&tmp_dir) {
-        eprintln!("[chunked_jsonl] Failed to remove temp dir {:?}: {}", tmp_dir, e);
+        eprintln!(
+            "[chunked_jsonl] Failed to remove temp dir {:?}: {}",
+            tmp_dir, e
+        );
     }
     Ok(())
 }
 
-fn write_messages_to_chunk(
-    dir: &Path,
-    chunk_idx: usize,
-    lines: &[String],
-) -> std::io::Result<()> {
+fn write_messages_to_chunk(dir: &Path, chunk_idx: usize, lines: &[String]) -> std::io::Result<()> {
     use std::io::Write;
     if lines.is_empty() {
         return Ok(());
@@ -245,4 +240,3 @@ fn write_messages_chunked(dir: &Path, messages: &[ChatMessage]) -> std::io::Resu
 
     Ok(())
 }
-

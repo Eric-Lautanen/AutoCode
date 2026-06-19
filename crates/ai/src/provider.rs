@@ -775,9 +775,21 @@ fn build_request_body(
         })
         .collect();
 
-    let top_p = if (req.top_p - 1.0).abs() < f32::EPSILON { None } else { Some(req.top_p) };
-    let frequency_penalty = if req.frequency_penalty.abs() < f32::EPSILON { None } else { Some(req.frequency_penalty) };
-    let presence_penalty = if req.presence_penalty.abs() < f32::EPSILON { None } else { Some(req.presence_penalty) };
+    let top_p = if (req.top_p - 1.0).abs() < f32::EPSILON {
+        None
+    } else {
+        Some(req.top_p)
+    };
+    let frequency_penalty = if req.frequency_penalty.abs() < f32::EPSILON {
+        None
+    } else {
+        Some(req.frequency_penalty)
+    };
+    let presence_penalty = if req.presence_penalty.abs() < f32::EPSILON {
+        None
+    } else {
+        Some(req.presence_penalty)
+    };
 
     let mut body = RequestBody {
         model: &req.model,
@@ -1376,9 +1388,7 @@ fn parse_sse_stream_from_reader<R: BufRead>(
 pub fn fetch_models(provider: &ApiProvider) -> Vec<String> {
     let base = provider.base_url.trim_end_matches('/');
     let url = if !provider.models_list_url.is_empty() {
-        provider
-            .models_list_url
-            .replace("{base_url}", base)
+        provider.models_list_url.replace("{base_url}", base)
     } else {
         format!("{}/models", base)
     };

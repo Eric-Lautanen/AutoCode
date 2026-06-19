@@ -941,7 +941,10 @@ pub fn project_context_string(state: &AppState) -> String {
                 TodoStatus::Cancelled => "[-]",
                 TodoStatus::Pending => "[ ]",
             };
-            ctx.push_str(&format!("  {} {} (priority: {})\n", status_mark, item.content, item.priority));
+            ctx.push_str(&format!(
+                "  {} {} (priority: {})\n",
+                status_mark, item.content, item.priority
+            ));
         }
         ctx.push_str("Use `project_task_list` tool to update these tasks.\n");
     }

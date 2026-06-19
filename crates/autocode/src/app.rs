@@ -55,10 +55,12 @@ impl AutocodeApp {
         let persistence = PersistenceThread::new();
         let batches = state.drain_pending_writes();
         for (dir, msgs) in batches {
-            persistence.send(autocode_core::persistence::PersistenceCommand::AppendMessages {
-                dir,
-                messages: msgs,
-            });
+            persistence.send(
+                autocode_core::persistence::PersistenceCommand::AppendMessages {
+                    dir,
+                    messages: msgs,
+                },
+            );
         }
 
         Self {
@@ -118,10 +120,16 @@ impl AutocodeApp {
         {
             state.active_provider = label.clone();
             // Snapshot the session's per-model params before mutating the provider.
-            let sess_params = state.active_session().map(|s| (
-                s.temperature, s.top_p, s.frequency_penalty, s.presence_penalty,
-                s.requests_per_hour, s.handoff_percent,
-            ));
+            let sess_params = state.active_session().map(|s| {
+                (
+                    s.temperature,
+                    s.top_p,
+                    s.frequency_penalty,
+                    s.presence_penalty,
+                    s.requests_per_hour,
+                    s.handoff_percent,
+                )
+            });
             if let (Some(prov), Some((temp, top_p, freq, pres, rph, handoff))) =
                 (state.providers.get_mut(&label), sess_params)
             {
@@ -165,7 +173,9 @@ impl AutocodeApp {
 impl eframe::App for AutocodeApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Update window title with active session name.
-        let title = self.state.active_session()
+        let title = self
+            .state
+            .active_session()
             .map(|s| {
                 let label = if s.label.is_empty() { &s.id } else { &s.label };
                 format!("AutoCode :: {}", label)
@@ -439,10 +449,16 @@ impl eframe::App for AutocodeApp {
             let handoff_enabled = self.state.handoff_enabled;
             let show_explorer = self.state.show_explorer;
             let settings_open = self.state.settings_open;
-            let provider_params = self.state.active_provider().map(|p| (
-                p.temperature, p.top_p, p.frequency_penalty, p.presence_penalty,
-                p.requests_per_hour, p.handoff_percent,
-            ));
+            let provider_params = self.state.active_provider().map(|p| {
+                (
+                    p.temperature,
+                    p.top_p,
+                    p.frequency_penalty,
+                    p.presence_penalty,
+                    p.requests_per_hour,
+                    p.handoff_percent,
+                )
+            });
             if let Some(sess) = self.state.active_session_mut() {
                 sess.provider_label = prov_label;
                 sess.model = model;

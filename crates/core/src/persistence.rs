@@ -1,10 +1,10 @@
 use std::path::PathBuf;
-use std::sync::mpsc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::thread;
 
-use crate::state::ChatMessage;
 use crate::chunked_jsonl;
+use crate::state::ChatMessage;
 
 /// Commands sent to the background persistence thread.
 pub enum PersistenceCommand {
@@ -16,9 +16,7 @@ pub enum PersistenceCommand {
         messages: Vec<ChatMessage>,
     },
     /// Flush all pending operations and signal completion.
-    Flush {
-        done_tx: mpsc::Sender<()>,
-    },
+    Flush { done_tx: mpsc::Sender<()> },
     /// Shut down the persistence thread.
     Shutdown,
 }
@@ -92,10 +90,12 @@ impl PersistenceThread {
         while let Ok(cmd) = rx.recv() {
             match cmd {
                 PersistenceCommand::AppendMessages { dir, messages } => {
-                    if let Err(e) = chunked_jsonl::append_messages_chunked(
-                        &dir, "", "", &messages,
-                    ) {
-                        eprintln!("[persistence] Failed to append messages to {:?}: {}", dir, e);
+                    if let Err(e) = chunked_jsonl::append_messages_chunked(&dir, "", "", &messages)
+                    {
+                        eprintln!(
+                            "[persistence] Failed to append messages to {:?}: {}",
+                            dir, e
+                        );
                     }
                 }
                 PersistenceCommand::Flush { done_tx } => {

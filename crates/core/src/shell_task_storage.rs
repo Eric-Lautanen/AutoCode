@@ -1,6 +1,6 @@
-use std::path::PathBuf;
-use crate::state::ShellTask;
 use crate::fsutil;
+use crate::state::ShellTask;
+use std::path::PathBuf;
 
 fn tasks_dir(data_dir_name: &str) -> PathBuf {
     fsutil::exe_dir()
@@ -65,8 +65,7 @@ pub fn prune_tasks(data_dir_name: &str, max_count: usize) {
         return;
     }
     tasks.truncate(max_count);
-    let keep: std::collections::HashSet<String> =
-        tasks.into_iter().map(|t| t.id).collect();
+    let keep: std::collections::HashSet<String> = tasks.into_iter().map(|t| t.id).collect();
     let dir = tasks_dir(data_dir_name);
     if let Ok(entries) = fsutil::read_dir(&dir) {
         for entry in entries.flatten() {
@@ -77,7 +76,11 @@ pub fn prune_tasks(data_dir_name: &str, max_count: usize) {
             let id = name.trim_end_matches(".json").to_string();
             if !keep.contains(&id) {
                 if let Err(e) = fsutil::remove_file(&entry.path()) {
-                    eprintln!("[shell_task_storage] Failed to remove pruned task file {:?}: {}", entry.path(), e);
+                    eprintln!(
+                        "[shell_task_storage] Failed to remove pruned task file {:?}: {}",
+                        entry.path(),
+                        e
+                    );
                 }
             }
         }

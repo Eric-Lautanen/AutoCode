@@ -229,7 +229,12 @@ pub fn replay_to_message(
         sess.actual_tokens_used = 0;
 
         let proj = &state.projects[proj_idx];
-        autocode_core::session_storage::truncate_messages_after(proj, sess, message_id.saturating_sub(1)).ok()?;
+        autocode_core::session_storage::truncate_messages_after(
+            proj,
+            sess,
+            message_id.saturating_sub(1),
+        )
+        .ok()?;
         autocode_core::session_storage::save_session_meta(proj, sess).ok()?;
     }
 
@@ -956,11 +961,12 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
         estimated
     };
 
-    let temperature = if thinking && provider.thinking_api == autocode_core::state::ThinkingApi::DeepSeek {
-        0.0
-    } else {
-        provider.temperature.clamp(0.0, 2.0)
-    };
+    let temperature =
+        if thinking && provider.thinking_api == autocode_core::state::ThinkingApi::DeepSeek {
+            0.0
+        } else {
+            provider.temperature.clamp(0.0, 2.0)
+        };
     let top_p = provider.top_p.max(0.01); // must be > 0 for most providers
 
     let req = CompletionRequest {
@@ -1272,7 +1278,8 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 // If there are tasks to continue, send a continue message
                 // instead of retrying silently.
                 if state.handoff_enabled
-                    && (state.todo_list.has_incomplete() || state.project_task_list.has_incomplete())
+                    && (state.todo_list.has_incomplete()
+                        || state.project_task_list.has_incomplete())
                 {
                     runtime.pending_response.clear();
                     runtime.pending_tool_calls.clear();
@@ -1297,17 +1304,26 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                         } else {
                             // Make room by truncating existing backup if needed
                             if current_len > MAX_BACKUP_SIZE / 2 {
-                                runtime.partial_response_backup.truncate(MAX_BACKUP_SIZE / 2);
-                                runtime.partial_response_backup.push_str("\n[...truncated...]");
+                                runtime
+                                    .partial_response_backup
+                                    .truncate(MAX_BACKUP_SIZE / 2);
+                                runtime
+                                    .partial_response_backup
+                                    .push_str("\n[...truncated...]");
                             }
-                            let available = MAX_BACKUP_SIZE.saturating_sub(runtime.partial_response_backup.len());
+                            let available = MAX_BACKUP_SIZE
+                                .saturating_sub(runtime.partial_response_backup.len());
                             if available > 0 {
-                                runtime.partial_response_backup.push_str(&new_partial[..available.min(new_partial.len())]);
+                                runtime
+                                    .partial_response_backup
+                                    .push_str(&new_partial[..available.min(new_partial.len())]);
                             }
                         }
                     } else {
                         let available = MAX_BACKUP_SIZE.min(new_partial.len());
-                        runtime.partial_response_backup.push_str(&new_partial[..available]);
+                        runtime
+                            .partial_response_backup
+                            .push_str(&new_partial[..available]);
                     }
                     runtime.stream_drop_retries += 1;
                 }
@@ -1430,7 +1446,8 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 // instead of retrying silently — the model needs to know
                 // the connection dropped and pick up where it left off.
                 if state.handoff_enabled
-                    && (state.todo_list.has_incomplete() || state.project_task_list.has_incomplete())
+                    && (state.todo_list.has_incomplete()
+                        || state.project_task_list.has_incomplete())
                 {
                     runtime.pending_response.clear();
                     runtime.pending_tool_calls.clear();
@@ -1809,7 +1826,8 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 // If there are incomplete tasks, send a continue message
                 // instead of retrying — the model needs to know to pick up.
                 if state.handoff_enabled
-                    && (state.todo_list.has_incomplete() || state.project_task_list.has_incomplete())
+                    && (state.todo_list.has_incomplete()
+                        || state.project_task_list.has_incomplete())
                 {
                     runtime.pending_response.clear();
                     runtime.pending_tool_calls.clear();
@@ -2392,15 +2410,18 @@ fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     // Trigger already sent — the model has the warning, it's up to it now.
 }
 
-
-
 fn auto_continue(state: &mut AppState, runtime: &mut ChatRuntime, response: &str) {
     auto_continue_impl(state, runtime, response, false)
 }
 
 /// Send a "continue" message when there are incomplete tasks. If
 /// `connection_dropped` is true the message mentions the dropped connection.
-fn auto_continue_impl(state: &mut AppState, runtime: &mut ChatRuntime, response: &str, connection_dropped: bool) {
+fn auto_continue_impl(
+    state: &mut AppState,
+    runtime: &mut ChatRuntime,
+    response: &str,
+    connection_dropped: bool,
+) {
     if runtime.handoff_in_progress {
         return;
     }
@@ -2441,14 +2462,13 @@ fn auto_continue_impl(state: &mut AppState, runtime: &mut ChatRuntime, response:
             prefix, done, total
         )
     } else {
-        format!("{}If you were working on something, continue now. Otherwise update or clear the task list.", prefix)
+        format!(
+            "{}If you were working on something, continue now. Otherwise update or clear the task list.",
+            prefix
+        )
     };
 
-    push_runtime(
-        state,
-        runtime,
-        ChatMessage::new(Role::User, msg),
-    );
+    push_runtime(state, runtime, ChatMessage::new(Role::User, msg));
     start_completion(state, runtime);
 }
 
@@ -2458,51 +2478,76 @@ fn fix_provider_params(state: &mut AppState, err_msg: &str) -> bool {
     let lower = err_msg.to_lowercase();
 
     // Extract param name from error text.
-    let param = if lower.contains("top_p") { "top_p" }
-    else if lower.contains("temperature") && lower.contains("must be") { "temperature" }
-    else if lower.contains("frequency_penalty") { "frequency_penalty" }
-    else if lower.contains("presence_penalty") { "presence_penalty" }
-    else if lower.contains("max_tokens") { "max_tokens" }
-    else { return false };
+    let param = if lower.contains("top_p") {
+        "top_p"
+    } else if lower.contains("temperature") && lower.contains("must be") {
+        "temperature"
+    } else if lower.contains("frequency_penalty") {
+        "frequency_penalty"
+    } else if lower.contains("presence_penalty") {
+        "presence_penalty"
+    } else if lower.contains("max_tokens") {
+        "max_tokens"
+    } else {
+        return false;
+    };
 
     let prov_label = state.active_provider.clone();
-    let model_id = state.active_provider()
+    let model_id = state
+        .active_provider()
         .map(|p| p.model.clone())
         .unwrap_or_default();
-    if model_id.is_empty() { return false }
+    if model_id.is_empty() {
+        return false;
+    }
 
     let changed = match param {
         "top_p" => {
             let v = 0.01;
             if let Some(prov) = state.providers.get_mut(&prov_label) {
                 prov.top_p = v;
-                if let Some(sess) = state.active_session_mut() { sess.top_p = v; }
+                if let Some(sess) = state.active_session_mut() {
+                    sess.top_p = v;
+                }
                 true
-            } else { false }
+            } else {
+                false
+            }
         }
         "temperature" => {
             let v = 0.7;
             if let Some(prov) = state.providers.get_mut(&prov_label) {
                 prov.temperature = v;
-                if let Some(sess) = state.active_session_mut() { sess.temperature = v; }
+                if let Some(sess) = state.active_session_mut() {
+                    sess.temperature = v;
+                }
                 true
-            } else { false }
+            } else {
+                false
+            }
         }
         "frequency_penalty" | "presence_penalty" => {
             let v = 0.0;
             if let Some(prov) = state.providers.get_mut(&prov_label) {
                 prov.frequency_penalty = v;
                 prov.presence_penalty = v;
-                if let Some(sess) = state.active_session_mut() { sess.frequency_penalty = v; sess.presence_penalty = v; }
+                if let Some(sess) = state.active_session_mut() {
+                    sess.frequency_penalty = v;
+                    sess.presence_penalty = v;
+                }
                 true
-            } else { false }
+            } else {
+                false
+            }
         }
         "max_tokens" => {
             let v = 4096u32;
             if let Some(prov) = state.providers.get_mut(&prov_label) {
                 prov.max_output_tokens = v;
                 true
-            } else { false }
+            } else {
+                false
+            }
         }
         _ => false,
     };
@@ -2511,8 +2556,11 @@ fn fix_provider_params(state: &mut AppState, err_msg: &str) -> bool {
         // Persist the fix to the model config so it survives restarts.
         let label = prov_label.clone();
         if let Some(prov) = state.providers.get_mut(&label) {
-            let mut mc = prov.models_config.as_ref()
-                .and_then(|m| m.get(&model_id)).cloned()
+            let mut mc = prov
+                .models_config
+                .as_ref()
+                .and_then(|m| m.get(&model_id))
+                .cloned()
                 .unwrap_or_else(|| {
                     let defs = autocode_core::state::model_or_safe(&prov.kind, &model_id);
                     autocode_core::provider_file::ModelEntry {
@@ -2541,7 +2589,9 @@ fn fix_provider_params(state: &mut AppState, err_msg: &str) -> bool {
                 "max_tokens" => mc.max_output_tokens = 4096,
                 _ => {}
             }
-            let cm = prov.models_config.get_or_insert_with(std::collections::HashMap::new);
+            let cm = prov
+                .models_config
+                .get_or_insert_with(std::collections::HashMap::new);
             cm.insert(model_id, mc);
         }
     }
@@ -2879,8 +2929,7 @@ fn execute_tool_with_cache(
                 Some(p) => p,
                 None => return "Error: missing 'path' argument".to_string(),
             };
-            let path =
-                resolve_path_cached_trait(raw_path, project_root, path_cache, allow_escape);
+            let path = resolve_path_cached_trait(raw_path, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&path) {
                 return core_helpers::blocked_error(raw_path);
             }
@@ -2947,8 +2996,7 @@ fn execute_tool_with_cache(
                 Some(p) => p,
                 None => return "Error: missing 'path' argument".to_string(),
             };
-            let path =
-                resolve_path_cached_trait(raw_path, project_root, path_cache, allow_escape);
+            let path = resolve_path_cached_trait(raw_path, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&path) {
                 return core_helpers::blocked_error(raw_path);
             }
@@ -3001,8 +3049,7 @@ fn execute_tool_with_cache(
                     Some(s) => s,
                     None => continue,
                 };
-                let path =
-                    resolve_path_cached_trait(raw, project_root, path_cache, allow_escape);
+                let path = resolve_path_cached_trait(raw, project_root, path_cache, allow_escape);
                 if core_helpers::is_blocked_path(&path) {
                     out.push_str(&core_helpers::blocked_error(raw));
                     out.push_str("\n---\n");
@@ -3031,19 +3078,19 @@ fn execute_tool_with_cache(
                 None => return "Error: missing 'path' argument".to_string(),
             };
             let content = args["content"].as_str().unwrap_or("");
-            let path = resolve_path_write_cached_trait(
-                raw_path,
-                project_root,
-                path_cache,
-                allow_escape,
-            );
+            let path =
+                resolve_path_write_cached_trait(raw_path, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&path) {
                 return core_helpers::blocked_error(raw_path);
             }
             if let Some(parent) = path.parent() {
                 if let Err(e) = fsutil::create_dir_all(parent) {
                     return helpers::tool_error(
-                        &format!("Error creating parent directory for {}: {}", path.display(), e),
+                        &format!(
+                            "Error creating parent directory for {}: {}",
+                            path.display(),
+                            e
+                        ),
                         "Check that the parent path is writable",
                     );
                 }
@@ -3062,8 +3109,7 @@ fn execute_tool_with_cache(
                 Some(p) => p,
                 None => return "Error: missing 'path' argument".to_string(),
             };
-            let path =
-                resolve_path_cached_trait(raw_path, project_root, path_cache, allow_escape);
+            let path = resolve_path_cached_trait(raw_path, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&path) {
                 return core_helpers::blocked_error(raw_path);
             }
@@ -3093,8 +3139,7 @@ fn execute_tool_with_cache(
 
         "project_tree" => {
             let raw_path = args["path"].as_str().unwrap_or(project_root);
-            let path =
-                resolve_path_cached_trait(raw_path, project_root, path_cache, allow_escape);
+            let path = resolve_path_cached_trait(raw_path, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&path) {
                 return core_helpers::blocked_error(raw_path);
             }
@@ -3122,12 +3167,8 @@ fn execute_tool_with_cache(
                 Some(p) => p,
                 None => return "Error: missing 'path' argument".to_string(),
             };
-            let path = resolve_path_write_cached_trait(
-                raw_path,
-                project_root,
-                path_cache,
-                allow_escape,
-            );
+            let path =
+                resolve_path_write_cached_trait(raw_path, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&path) {
                 return core_helpers::blocked_error(raw_path);
             }
@@ -3154,24 +3195,23 @@ fn execute_tool_with_cache(
                 Some(p) => p,
                 None => return "Error: missing 'to' argument".to_string(),
             };
-            let from =
-                resolve_path_cached_trait(raw_from, project_root, path_cache, allow_escape);
+            let from = resolve_path_cached_trait(raw_from, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&from) {
                 return core_helpers::blocked_error(raw_from);
             }
-            let to = resolve_path_write_cached_trait(
-                raw_to,
-                project_root,
-                path_cache,
-                allow_escape,
-            );
+            let to =
+                resolve_path_write_cached_trait(raw_to, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&to) {
                 return core_helpers::blocked_error(raw_to);
             }
             if let Some(parent) = to.parent() {
                 if let Err(e) = fsutil::create_dir_all(parent) {
                     return helpers::tool_error(
-                        &format!("Error creating parent directory for {}: {}", to.display(), e),
+                        &format!(
+                            "Error creating parent directory for {}: {}",
+                            to.display(),
+                            e
+                        ),
                         "Check that the destination path is writable",
                     );
                 }
@@ -3195,12 +3235,8 @@ fn execute_tool_with_cache(
                 Some(p) => p,
                 None => return "Error: missing 'path' argument".to_string(),
             };
-            let path = resolve_path_write_cached_trait(
-                raw_path,
-                project_root,
-                path_cache,
-                allow_escape,
-            );
+            let path =
+                resolve_path_write_cached_trait(raw_path, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&path) {
                 return core_helpers::blocked_error(raw_path);
             }
@@ -3216,12 +3252,8 @@ fn execute_tool_with_cache(
                 None => return "Error: missing 'pattern' argument".to_string(),
             };
             let search_root = args["path"].as_str().unwrap_or(project_root);
-            let search_path = resolve_path_cached_trait(
-                search_root,
-                project_root,
-                path_cache,
-                allow_escape,
-            );
+            let search_path =
+                resolve_path_cached_trait(search_root, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&search_path) {
                 return core_helpers::blocked_error(search_root);
             }
@@ -3254,12 +3286,8 @@ fn execute_tool_with_cache(
             let old_text = helpers::strip_line_numbers(raw_old_text);
             let new_text = helpers::strip_line_numbers(raw_new_text);
 
-            let path = resolve_path_write_cached_trait(
-                raw_path,
-                project_root,
-                path_cache,
-                allow_escape,
-            );
+            let path =
+                resolve_path_write_cached_trait(raw_path, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&path) {
                 return core_helpers::blocked_error(raw_path);
             }
@@ -3323,12 +3351,8 @@ fn execute_tool_with_cache(
             let end_line = args["end_line"].as_u64().unwrap_or(0) as usize;
             let new_text = args["new_text"].as_str().unwrap_or("");
 
-            let path = resolve_path_write_cached_trait(
-                raw_path,
-                project_root,
-                path_cache,
-                allow_escape,
-            );
+            let path =
+                resolve_path_write_cached_trait(raw_path, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&path) {
                 return core_helpers::blocked_error(raw_path);
             }
@@ -3572,9 +3596,7 @@ fn execute_tool_with_cache(
             let search_path = Some(
                 args["path"]
                     .as_str()
-                    .map(|p| {
-                        resolve_path_cached_trait(p, project_root, path_cache, allow_escape)
-                    })
+                    .map(|p| resolve_path_cached_trait(p, project_root, path_cache, allow_escape))
                     .unwrap_or_else(|| std::path::PathBuf::from(&project_root)),
             );
             if let Some(ref sp) = search_path

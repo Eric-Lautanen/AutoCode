@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::fsutil;
-use crate::state::{ApiProvider, ProviderKind, SecretString, ThinkingApi, model_or_safe, provider_manifest};
+use crate::state::{
+    ApiProvider, ProviderKind, SecretString, ThinkingApi, model_or_safe, provider_manifest,
+};
 
 // ── File format (serialized to providers.json) ──────────────────────────
 
@@ -57,9 +59,15 @@ pub struct ModelEntry {
     pub presence_penalty: f32,
 }
 
-fn default_handoff_pct() -> u8 { 80 }
-fn default_temperature() -> f32 { 0.2 }
-fn default_top_p() -> f32 { 1.0 }
+fn default_handoff_pct() -> u8 {
+    80
+}
+fn default_temperature() -> f32 {
+    0.2
+}
+fn default_top_p() -> f32 {
+    1.0
+}
 
 fn default_thinking_api() -> String {
     "off".into()
@@ -106,7 +114,11 @@ fn convert_to_providers(file: &ProviderFile) -> HashMap<String, ApiProvider> {
     for entry in &file.providers {
         let kind = ProviderKind::new(&entry.kind);
         let base_url = entry.base_url.clone();
-        let default_model = entry.models.first().map(|m| m.id.clone()).unwrap_or_default();
+        let default_model = entry
+            .models
+            .first()
+            .map(|m| m.id.clone())
+            .unwrap_or_default();
 
         // Build model configs (override the manifest defaults with any
         // user-saved config for each model).
@@ -149,7 +161,9 @@ fn convert_to_providers(file: &ProviderFile) -> HashMap<String, ApiProvider> {
             && let Some(pm) = provider_manifest(&ap.kind)
         {
             let base = ap.base_url.trim_end_matches('/');
-            ap.models_list_url = pm.models_endpoint.clone()
+            ap.models_list_url = pm
+                .models_endpoint
+                .clone()
                 .map(|t| t.replace("{base_url}", base))
                 .unwrap_or_else(|| format!("{}/models", base));
         }
@@ -196,24 +210,27 @@ fn convert_from_providers(providers: &HashMap<String, ApiProvider>) -> ProviderF
             result
         } else {
             // Legacy: no per-model configs; build from manifest defaults.
-            ap.saved_models.iter().map(|m_id| {
-                let defs = model_or_safe(&ap.kind, m_id);
-                ModelEntry {
-                    id: m_id.clone(),
-                    context_window: defs.context_window,
-                    max_output_tokens: defs.max_output_tokens,
-                    max_output_tokens_thinking: defs.max_output_tokens_thinking,
-                    thinking_api: defs.thinking_api.clone(),
-                    reasoning_efforts: defs.reasoning_efforts.clone(),
-                    supports_cache_control: defs.supports_cache_control,
-                    requests_per_hour: defs.requests_per_hour,
-                    handoff_percent: ap.handoff_percent,
-                    temperature: ap.temperature,
-                    top_p: ap.top_p,
-                    frequency_penalty: ap.frequency_penalty,
-                    presence_penalty: ap.presence_penalty,
-                }
-            }).collect()
+            ap.saved_models
+                .iter()
+                .map(|m_id| {
+                    let defs = model_or_safe(&ap.kind, m_id);
+                    ModelEntry {
+                        id: m_id.clone(),
+                        context_window: defs.context_window,
+                        max_output_tokens: defs.max_output_tokens,
+                        max_output_tokens_thinking: defs.max_output_tokens_thinking,
+                        thinking_api: defs.thinking_api.clone(),
+                        reasoning_efforts: defs.reasoning_efforts.clone(),
+                        supports_cache_control: defs.supports_cache_control,
+                        requests_per_hour: defs.requests_per_hour,
+                        handoff_percent: ap.handoff_percent,
+                        temperature: ap.temperature,
+                        top_p: ap.top_p,
+                        frequency_penalty: ap.frequency_penalty,
+                        presence_penalty: ap.presence_penalty,
+                    }
+                })
+                .collect()
         };
 
         entries.push(ProviderEntry {

@@ -270,7 +270,9 @@ pub fn show(
                     ui.set_min_width(inner_max_w - 12.0);
                     ui.set_max_width(inner_max_w - 12.0);
                     if !panel_state.display_buffer.is_empty() {
-                        if panel_state.oldest_disk_id > 0 && panel_state.loaded_min_id > panel_state.oldest_disk_id {
+                        if panel_state.oldest_disk_id > 0
+                            && panel_state.loaded_min_id > panel_state.oldest_disk_id
+                        {
                             if ui.button("Load full history...").clicked() {
                                 panel_state.wants_older_messages = true;
                             }
@@ -336,12 +338,14 @@ pub fn show(
                                 render_markdown_streaming(ui, &r.pending_response, true);
                                 ui.label(RichText::new("|").color(theme().accent).size(13.0));
                             } else if !r.live_shell_buf.is_empty() {
-                                render_shell_terminal(ui, &r.live_shell_buf, active_sid.as_deref().unwrap_or(""));
+                                render_shell_terminal(
+                                    ui,
+                                    &r.live_shell_buf,
+                                    active_sid.as_deref().unwrap_or(""),
+                                );
                             }
                         }
                     }
-
-
                 });
             }); // end ScrollArea
 
@@ -503,12 +507,17 @@ fn load_new_session(state: &mut AppState, panel_state: &mut ChatPanelState) -> O
                 }
                 // Find the oldest non-Error message ID on disk for the
                 // "Load full history" button check.
-                let sess_dir = autocode_core::session_storage::session_messages_dir(new_proj, new_sess);
+                let sess_dir =
+                    autocode_core::session_storage::session_messages_dir(new_proj, new_sess);
                 if autocode_core::chunked_jsonl::has_chunked_files(&sess_dir) {
-                    let on_disk = autocode_core::session_storage::load_all_messages(new_proj, new_sess);
-                    panel_state.oldest_disk_id = on_disk.iter()
+                    let on_disk =
+                        autocode_core::session_storage::load_all_messages(new_proj, new_sess);
+                    panel_state.oldest_disk_id = on_disk
+                        .iter()
                         .filter(|m| m.role != Role::Error && m.role != Role::System)
-                        .map(|m| m.id).min().unwrap_or(0);
+                        .map(|m| m.id)
+                        .min()
+                        .unwrap_or(0);
                 } else {
                     panel_state.oldest_disk_id = 0;
                 }
@@ -771,7 +780,8 @@ fn show_session_tabs(
         let max_offset = tab_scroll.content_size.x - tab_scroll.inner_rect.width();
         if sa_state.offset.x < max_offset - 20.0 {
             sa_state.offset.x = max_offset;
-            ui.ctx().data_mut(|d| d.insert_persisted(egui::Id::new("session_tabs"), sa_state));
+            ui.ctx()
+                .data_mut(|d| d.insert_persisted(egui::Id::new("session_tabs"), sa_state));
         }
     }
 }
@@ -821,7 +831,8 @@ fn show_user_bubble(ui: &mut egui::Ui, msg: &ChatMessage, panel_w: f32) -> bool 
                     overlay_size,
                 );
                 let overlay_id = ui.make_persistent_id(("resend", msg.timestamp));
-                let overlay_resp = ui.interact(overlay_rect, overlay_id, egui::Sense::click())
+                let overlay_resp = ui
+                    .interact(overlay_rect, overlay_id, egui::Sense::click())
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
                     .on_hover_text("Edit and resend from this message");
 
@@ -846,7 +857,13 @@ fn show_user_bubble(ui: &mut egui::Ui, msg: &ChatMessage, panel_w: f32) -> bool 
     clicked.into_inner()
 }
 
-fn show_assistant_content(ui: &mut egui::Ui, msg: &ChatMessage, _idx: usize, sid: &str, show_reasoning: bool) {
+fn show_assistant_content(
+    ui: &mut egui::Ui,
+    msg: &ChatMessage,
+    _idx: usize,
+    sid: &str,
+    show_reasoning: bool,
+) {
     ui.push_id((msg.timestamp, sid), |ui| {
         ui.set_max_width(ui.available_width());
         if show_reasoning {

@@ -172,9 +172,15 @@ pub fn load_project_meta(project: &Project) -> Option<crate::state::ProjectMeta>
     }
 }
 
-fn default_sess_temperature() -> f32 { 0.2 }
-fn default_sess_top_p() -> f32 { 1.0 }
-fn default_handoff_pct_session() -> u8 { 80 }
+fn default_sess_temperature() -> f32 {
+    0.2
+}
+fn default_sess_top_p() -> f32 {
+    1.0
+}
+fn default_handoff_pct_session() -> u8 {
+    80
+}
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct SessionMeta {
@@ -263,12 +269,7 @@ pub fn append_messages_to_jsonl(
         })
         .collect();
 
-    chunked_jsonl::append_messages_chunked(
-        &dir,
-        &session.id,
-        &session.label,
-        &sanitized,
-    )
+    chunked_jsonl::append_messages_chunked(&dir, &session.id, &session.label, &sanitized)
 }
 
 /// Save session metadata inside the session's subdirectory.
@@ -320,10 +321,7 @@ pub fn save_session_meta(project: &Project, session: &Session) -> std::io::Resul
     if let Ok(entries) = fsutil::read_dir(&parent) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if entry.path().is_dir()
-                && name.starts_with(&prefix)
-                && name != new_dirname
-            {
+            if entry.path().is_dir() && name.starts_with(&prefix) && name != new_dirname {
                 let new_path = parent.join(&new_dirname);
                 if !new_path.exists() {
                     if let Err(e) = fsutil::rename(&entry.path(), &new_path) {
@@ -464,7 +462,11 @@ pub fn delete_session_file(project: &Project, session: &Session) {
             let name = entry.file_name().to_string_lossy().to_string();
             if entry.path().is_dir() && name.starts_with(&prefix) {
                 if let Err(e) = fsutil::remove_dir(&entry.path()) {
-                    eprintln!("[session_storage] Failed to remove session dir {:?}: {}", entry.path(), e);
+                    eprintln!(
+                        "[session_storage] Failed to remove session dir {:?}: {}",
+                        entry.path(),
+                        e
+                    );
                 }
             }
         }
@@ -508,7 +510,11 @@ fn cleanup_orphan_temp_files(dir: &Path, max_age_secs: u64) {
                 && now.saturating_sub(ts) > max_age_secs
             {
                 if let Err(e) = fsutil::remove_file(&entry.path()) {
-                    eprintln!("[session_storage] Failed to remove orphan temp file {:?}: {}", entry.path(), e);
+                    eprintln!(
+                        "[session_storage] Failed to remove orphan temp file {:?}: {}",
+                        entry.path(),
+                        e
+                    );
                 }
             }
         }
@@ -589,9 +595,7 @@ fn load_project_meta_raw(dir: &Path) -> Option<crate::state::ProjectMeta> {
 /// Discover projects from disk by scanning AutoCode_data/projects/.
 /// Returns projects that have identity data in meta.json (or old project.json).
 pub fn discover_projects_from_disk() -> Vec<Project> {
-    let proj_dir = fsutil::exe_dir()
-        .join("AutoCode_data")
-        .join("projects");
+    let proj_dir = fsutil::exe_dir().join("AutoCode_data").join("projects");
     if !proj_dir.exists() {
         return Vec::new();
     }
@@ -632,35 +636,36 @@ pub fn discover_sessions_from_disk(project: &Project) -> Vec<Session> {
             }
             let meta_path = path.join("session.json");
             if let Ok(content) = fsutil::read_to_string(&meta_path)
-                && let Ok(meta) = serde_json::from_str::<SessionMeta>(&content) {
-                    sessions.push(Session {
-                        id: meta.id,
-                        project_id: Some(project.id.clone()),
-                        messages: Vec::new(),
-                        next_message_id: meta.next_message_id,
-                        created_at: meta.created_at,
-                        label: meta.label,
-                        actual_tokens_used: meta.actual_tokens_used,
-                        provider_label: meta.provider_label,
-                        model: meta.model,
-                        todo_list: meta.todo_list,
-                        show_todo: meta.show_todo,
-                        todo_user_dismissed: meta.todo_user_dismissed,
-                        session_named: meta.session_named,
-                        handoff_enabled: meta.handoff_enabled,
-                        show_explorer: meta.show_explorer,
-                        settings_open: meta.settings_open,
-                        closed: true,
-                        estimated_full_tokens: 0,
-                        estimated_messages_tokens: 0,
-                        temperature: meta.temperature,
-                        top_p: meta.top_p,
-                        frequency_penalty: meta.frequency_penalty,
-                        presence_penalty: meta.presence_penalty,
-                        requests_per_hour: meta.requests_per_hour,
-                        handoff_percent: meta.handoff_percent,
-                    });
-                }
+                && let Ok(meta) = serde_json::from_str::<SessionMeta>(&content)
+            {
+                sessions.push(Session {
+                    id: meta.id,
+                    project_id: Some(project.id.clone()),
+                    messages: Vec::new(),
+                    next_message_id: meta.next_message_id,
+                    created_at: meta.created_at,
+                    label: meta.label,
+                    actual_tokens_used: meta.actual_tokens_used,
+                    provider_label: meta.provider_label,
+                    model: meta.model,
+                    todo_list: meta.todo_list,
+                    show_todo: meta.show_todo,
+                    todo_user_dismissed: meta.todo_user_dismissed,
+                    session_named: meta.session_named,
+                    handoff_enabled: meta.handoff_enabled,
+                    show_explorer: meta.show_explorer,
+                    settings_open: meta.settings_open,
+                    closed: true,
+                    estimated_full_tokens: 0,
+                    estimated_messages_tokens: 0,
+                    temperature: meta.temperature,
+                    top_p: meta.top_p,
+                    frequency_penalty: meta.frequency_penalty,
+                    presence_penalty: meta.presence_penalty,
+                    requests_per_hour: meta.requests_per_hour,
+                    handoff_percent: meta.handoff_percent,
+                });
+            }
         }
     }
     sessions.sort_by_key(|a| a.created_at);

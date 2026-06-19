@@ -4,7 +4,8 @@
 use crate::helpers;
 use autocode_ai::provider;
 use autocode_core::{
-    provider_file, state::{AppState, Project, Session, ThinkingApi},
+    provider_file,
+    state::{AppState, Project, Session, ThinkingApi},
     theme::{Palette, ROUND_MD, ROUND_SM},
 };
 use egui::{
@@ -162,19 +163,17 @@ pub fn show_window(ctx: &egui::Context, state: &mut AppState, settings: &mut Set
             ScrollArea::vertical()
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
-                    Frame::NONE
-                        .inner_margin(Margin::same(16))
-                        .show(ui, |ui| {
-                            ui.set_max_width(680.0);
-                            match settings.tab {
+                    Frame::NONE.inner_margin(Margin::same(16)).show(ui, |ui| {
+                        ui.set_max_width(680.0);
+                        match settings.tab {
                             Tab::Providers => show_providers(ui, state, settings),
                             Tab::Projects => show_projects(ui, state),
                             Tab::Prompt => show_prompt(ui, state),
                             Tab::Session => show_session_settings(ui, state),
                             Tab::Timeouts => show_timeouts(ui, state),
                             Tab::About => show_about(ui, state),
-                            }
-                        });
+                        }
+                    });
                 });
         });
 
@@ -1615,5 +1614,3 @@ fn show_about(ui: &mut egui::Ui, state: &mut AppState) {
             );
         });
 }
-
-

@@ -178,11 +178,19 @@ pub fn project_tree(dir: &Path) -> Vec<String> {
     results
 }
 
-fn walk_tree(path: &Path, root: &Path, gitignore: &Gitignore, results: &mut Vec<String>, depth: usize) {
+fn walk_tree(
+    path: &Path,
+    root: &Path,
+    gitignore: &Gitignore,
+    results: &mut Vec<String>,
+    depth: usize,
+) {
     if depth > 20 {
         return;
     }
-    let Ok(entries) = fsutil::read_dir(path) else { return };
+    let Ok(entries) = fsutil::read_dir(path) else {
+        return;
+    };
     for entry in entries.flatten() {
         let full_path = entry.path();
         let name = match full_path.file_name().and_then(|n| n.to_str()) {

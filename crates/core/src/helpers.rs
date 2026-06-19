@@ -1210,41 +1210,41 @@ pub fn sanitize_display_text(s: &str) -> String {
                 // Tags (U+E0000-U+E007F) — strip
                 0xE0000..=0xE007F => None,
                 // Misc symbols that often render as tofu
-                0x26A0 => Some('!'),  // ⚠ -> !
-                0x26A1 => Some('!'),  // ⚡ -> !
-                0x2714 => Some('*'),  // ✔ -> *
-                0x2716 => Some('x'),  // ✖ -> x
-                0x2713 => Some('*'),  // ✓ -> *
-                0x274C => Some('x'),  // ❌ -> x
-                0x2705 => Some('*'),  // ✅ -> *
-                0x2192 => Some('>'),  // → -> >
-                0x2190 => Some('<'),  // ← -> <
-                0x2191 => Some('^'),  // ↑ -> ^
-                0x2193 => Some('v'),  // ↓ -> v
-                0x27A1 => Some('>'),  // ➡ -> >
-                0x2B05 => Some('<'),  // ⬅ -> <
-                0x2B06 => Some('^'),  // ⬆ -> ^
-                0x2B07 => Some('v'),  // ⬇ -> v
+                0x26A0 => Some('!'), // ⚠ -> !
+                0x26A1 => Some('!'), // ⚡ -> !
+                0x2714 => Some('*'), // ✔ -> *
+                0x2716 => Some('x'), // ✖ -> x
+                0x2713 => Some('*'), // ✓ -> *
+                0x274C => Some('x'), // ❌ -> x
+                0x2705 => Some('*'), // ✅ -> *
+                0x2192 => Some('>'), // → -> >
+                0x2190 => Some('<'), // ← -> <
+                0x2191 => Some('^'), // ↑ -> ^
+                0x2193 => Some('v'), // ↓ -> v
+                0x27A1 => Some('>'), // ➡ -> >
+                0x2B05 => Some('<'), // ⬅ -> <
+                0x2B06 => Some('^'), // ⬆ -> ^
+                0x2B07 => Some('v'), // ⬇ -> v
                 // Miscellaneous Symbols and Arrows (U+2B00-U+2BFF) — catch remaining
                 0x2B00..=0x2BFF => None,
                 // General Punctuation smart quotes / dashes
-                0x2013 => Some('-'),  // En dash
-                0x2014 => Some('-'),  // Em dash
+                0x2013 => Some('-'),           // En dash
+                0x2014 => Some('-'),           // Em dash
                 0x2018 | 0x2019 => Some('\''), // Smart quotes single
                 0x201C | 0x201D => Some('"'),  // Smart quotes double
-                0x2026 => Some('.'), // Ellipsis -> .
+                0x2026 => Some('.'),           // Ellipsis -> .
                 // Keep anything in egui's safe ranges
-                _ if u <= 0x007F => Some(c),                // ASCII
+                _ if u <= 0x007F => Some(c),                    // ASCII
                 _ if (0x00A0..=0x024F).contains(&u) => Some(c), // Latin + extended
                 _ if (0x0370..=0x03FF).contains(&u) => Some(c), // Greek
                 _ if (0x0400..=0x052F).contains(&u) => Some(c), // Cyrillic
-                _ if (0x2000..=0x206F).contains(&u) => None, // Other punctuation
+                _ if (0x2000..=0x206F).contains(&u) => None,    // Other punctuation
                 _ if (0x2100..=0x23FF).contains(&u) => Some(c), // Letterlike + technical
                 _ if (0x2500..=0x257F).contains(&u) => Some(c), // Box drawing
                 _ if (0x2580..=0x259F).contains(&u) => Some(c), // Block elements
                 _ if (0x25A0..=0x25FF).contains(&u) => Some(c), // Geometric shapes
-                _ if (0x2600..=0x26FF).contains(&u) => None, // Misc symbols
-                _ if (0x2700..=0x27BF).contains(&u) => None, // Dingbats
+                _ if (0x2600..=0x26FF).contains(&u) => None,    // Misc symbols
+                _ if (0x2700..=0x27BF).contains(&u) => None,    // Dingbats
                 _ if (0xFE20..=0xFE23).contains(&u) => Some(c), // Combining ligatures
                 // CJK / Hangul — keep
                 _ if (0x2E80..=0x9FFF).contains(&u) => Some(c),

@@ -35,34 +35,40 @@ impl Worker {
     ) -> Self {
         let thread = thread::Builder::new()
             .name(thread_name.clone())
-            .spawn(move || loop {
-                let msg = {
-                    let lock = receiver.lock().unwrap();
-                    lock.recv()
-                };
-                match msg {
-                    Ok(Message::Job(job)) => {
-                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
-                        if let Err(panic_payload) = result {
-                            let payload = if let Some(s) = panic_payload.downcast_ref::<String>() {
-                                s.clone()
-                            } else if let Some(s) = panic_payload.downcast_ref::<&str>() {
-                                s.to_string()
-                            } else {
-                                "unknown panic payload".to_string()
-                            };
-                            let info = PanicInfo {
-                                thread_name: thread_name.clone(),
-                                payload,
-                            };
-                            let _ = panic_tx.send(info);
+            .spawn(move || {
+                loop {
+                    let msg = {
+                        let lock = receiver.lock().unwrap();
+                        lock.recv()
+                    };
+                    match msg {
+                        Ok(Message::Job(job)) => {
+                            let result =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(job));
+                            if let Err(panic_payload) = result {
+                                let payload =
+                                    if let Some(s) = panic_payload.downcast_ref::<String>() {
+                                        s.clone()
+                                    } else if let Some(s) = panic_payload.downcast_ref::<&str>() {
+                                        s.to_string()
+                                    } else {
+                                        "unknown panic payload".to_string()
+                                    };
+                                let info = PanicInfo {
+                                    thread_name: thread_name.clone(),
+                                    payload,
+                                };
+                                let _ = panic_tx.send(info);
+                            }
                         }
+                        Ok(Message::Shutdown) | Err(_) => break,
                     }
-                    Ok(Message::Shutdown) | Err(_) => break,
                 }
             })
             .expect("failed to spawn provider pool thread");
-        Self { thread: Some(thread) }
+        Self {
+            thread: Some(thread),
+        }
     }
 }
 

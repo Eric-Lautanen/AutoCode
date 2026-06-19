@@ -2,8 +2,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU16, Ordering};
 
 use autocode_core::{
-    chunked_jsonl,
-    fsutil,
+    chunked_jsonl, fsutil,
     session_storage::{self, SessionMeta},
     state::{ChatMessage, Project, Role},
 };
@@ -82,7 +81,11 @@ fn test_long_running_simulation() {
             let msgs: Vec<ChatMessage> = (0..100u64)
                 .map(|i| ChatMessage {
                     id: i + 1,
-                    role: if i % 2 == 0 { Role::User } else { Role::Assistant },
+                    role: if i % 2 == 0 {
+                        Role::User
+                    } else {
+                        Role::Assistant
+                    },
                     content: format!("Message {} of session {} day {}", i, s, day),
                     timestamp: 0,
                     token_count: 10,
@@ -107,7 +110,10 @@ fn test_long_running_simulation() {
     let projects = session_storage::discover_projects_from_disk();
     assert!(!projects.is_empty(), "projects should be discoverable");
 
-    let loaded_project = projects.iter().find(|p| p.data_dir_name == "long_run_test").unwrap();
+    let loaded_project = projects
+        .iter()
+        .find(|p| p.data_dir_name == "long_run_test")
+        .unwrap();
     let sessions = session_storage::discover_sessions_from_disk(loaded_project);
     assert_eq!(sessions.len(), 70, "all 70 sessions must be discoverable");
 
@@ -115,13 +121,22 @@ fn test_long_running_simulation() {
     for sess in &sessions {
         let msg_dir = session_storage::session_messages_dir(loaded_project, sess);
         let msgs = chunked_jsonl::read_all_messages_chunked(&msg_dir);
-        assert_eq!(msgs.len(), 100, "session {} should have 100 messages", sess.label);
+        assert_eq!(
+            msgs.len(),
+            100,
+            "session {} should have 100 messages",
+            sess.label
+        );
     }
 
     // Verify app.ron-like state stays tiny.
     let meta_path = session_storage::project_meta_path(loaded_project);
     let meta_size = std::fs::metadata(&meta_path).map(|m| m.len()).unwrap_or(0);
-    assert!(meta_size < 1024, "project meta must stay under 1KB (was {})", meta_size);
+    assert!(
+        meta_size < 1024,
+        "project meta must stay under 1KB (was {})",
+        meta_size
+    );
 }
 
 // ── 4.2 Crash Recovery Test ──────────────────────────────────────────
@@ -137,7 +152,11 @@ fn test_crash_recovery() {
     let msgs: Vec<ChatMessage> = (1..=50u64)
         .map(|i| ChatMessage {
             id: i,
-            role: if i % 2 == 0 { Role::Assistant } else { Role::User },
+            role: if i % 2 == 0 {
+                Role::Assistant
+            } else {
+                Role::User
+            },
             content: format!("Message {}", i),
             timestamp: 0,
             token_count: 5,
@@ -153,11 +172,16 @@ fn test_crash_recovery() {
 
     // Phase 2: Simulate crash — re-discover from disk.
     let projects = session_storage::discover_projects_from_disk();
-    let loaded_project = projects.iter().find(|p| p.data_dir_name == "crash_recovery_test")
+    let loaded_project = projects
+        .iter()
+        .find(|p| p.data_dir_name == "crash_recovery_test")
         .expect("project must survive crash");
     let sessions = session_storage::discover_sessions_from_disk(loaded_project);
     assert_eq!(sessions.len(), 1, "session must survive crash");
-    assert_eq!(sessions[0].label, "main_session", "session label must survive crash");
+    assert_eq!(
+        sessions[0].label, "main_session",
+        "session label must survive crash"
+    );
 
     // Load session and verify messages.
     let mut sess = sessions.into_iter().next().unwrap();

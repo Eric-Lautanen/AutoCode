@@ -1,11 +1,11 @@
 use egui::{Color32, CornerRadius, Frame, Margin, RichText, Stroke, Vec2};
 
 use crate::helpers;
+use autocode_core::theme::Palette;
 use autocode_core::{
     session_storage,
     state::{AppState, ProjectMeta, TodoItem, TodoStatus},
 };
-use autocode_core::theme::Palette;
 
 pub fn show_window(ctx: &egui::Context, state: &mut AppState) {
     if !state.show_project_tasks {

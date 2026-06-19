@@ -229,7 +229,9 @@ impl Serialize for ProviderKind {
         match self.manifest_id() {
             "openrouter" => serializer.serialize_unit_variant("ProviderKind", 0, "OpenRouter"),
             "nvidia-nim" => serializer.serialize_unit_variant("ProviderKind", 1, "NvidiaNim"),
-            "openai-compatible" => serializer.serialize_unit_variant("ProviderKind", 2, "OpenAiCompatible"),
+            "openai-compatible" => {
+                serializer.serialize_unit_variant("ProviderKind", 2, "OpenAiCompatible")
+            }
             "opencode-go" => serializer.serialize_unit_variant("ProviderKind", 3, "OpenCodeGo"),
             other => serializer.collect_str(other),
         }
@@ -253,7 +255,10 @@ impl<'de> Deserialize<'de> for ProviderKind {
             fn visit_str<E: serde::de::Error>(self, s: &str) -> Result<ProviderKind, E> {
                 Ok(ProviderKind::new(s))
             }
-            fn visit_borrowed_str<E: serde::de::Error>(self, s: &'de str) -> Result<ProviderKind, E> {
+            fn visit_borrowed_str<E: serde::de::Error>(
+                self,
+                s: &'de str,
+            ) -> Result<ProviderKind, E> {
                 Ok(ProviderKind::new(s))
             }
             fn visit_string<E: serde::de::Error>(self, s: String) -> Result<ProviderKind, E> {
@@ -455,26 +460,32 @@ impl ApiProvider {
             })
             .unwrap_or_default();
 
-        let models_config: Option<std::collections::HashMap<String, crate::provider_file::ModelEntry>> =
-            Some(saved_models.iter().map(|id| {
-                let defs = model_or_safe(&kind, id);
-                let entry = crate::provider_file::ModelEntry {
-                    id: id.clone(),
-                    context_window: defs.context_window,
-                    max_output_tokens: defs.max_output_tokens,
-                    max_output_tokens_thinking: defs.max_output_tokens_thinking,
-                    thinking_api: defs.thinking_api.clone(),
-                    reasoning_efforts: defs.reasoning_efforts.clone(),
-                    supports_cache_control: defs.supports_cache_control,
-                    requests_per_hour: defs.requests_per_hour,
-                    handoff_percent: 80,
-                    temperature: 0.2,
-                    top_p: 1.0,
-                    frequency_penalty: 0.0,
-                    presence_penalty: 0.0,
-                };
-                (id.clone(), entry)
-            }).collect());
+        let models_config: Option<
+            std::collections::HashMap<String, crate::provider_file::ModelEntry>,
+        > = Some(
+            saved_models
+                .iter()
+                .map(|id| {
+                    let defs = model_or_safe(&kind, id);
+                    let entry = crate::provider_file::ModelEntry {
+                        id: id.clone(),
+                        context_window: defs.context_window,
+                        max_output_tokens: defs.max_output_tokens,
+                        max_output_tokens_thinking: defs.max_output_tokens_thinking,
+                        thinking_api: defs.thinking_api.clone(),
+                        reasoning_efforts: defs.reasoning_efforts.clone(),
+                        supports_cache_control: defs.supports_cache_control,
+                        requests_per_hour: defs.requests_per_hour,
+                        handoff_percent: 80,
+                        temperature: 0.2,
+                        top_p: 1.0,
+                        frequency_penalty: 0.0,
+                        presence_penalty: 0.0,
+                    };
+                    (id.clone(), entry)
+                })
+                .collect(),
+        );
 
         Self {
             kind,
@@ -553,7 +564,9 @@ impl ApiProvider {
     /// falling back to the baked-in manifest if no saved config exists.
     pub fn fill_from_config(&mut self) {
         let model_id = self.model.clone();
-        let mc = self.models_config.as_ref()
+        let mc = self
+            .models_config
+            .as_ref()
             .and_then(|m| m.get(&model_id))
             .cloned();
         if let Some(entry) = mc {
@@ -566,9 +579,15 @@ impl ApiProvider {
     fn apply_model_entry(&mut self, mc: &crate::provider_file::ModelEntry) {
         self.max_context_tokens = mc.context_window;
         self.max_output_tokens = mc.max_output_tokens;
-        self.max_output_tokens_thinking = mc.max_output_tokens_thinking.unwrap_or(mc.max_output_tokens * 2);
+        self.max_output_tokens_thinking = mc
+            .max_output_tokens_thinking
+            .unwrap_or(mc.max_output_tokens * 2);
         self.thinking_api = parse_thinking_api(&mc.thinking_api);
-        self.reasoning_effort = mc.reasoning_efforts.first().cloned().unwrap_or_else(|| "high".into());
+        self.reasoning_effort = mc
+            .reasoning_efforts
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "high".into());
         self.requests_per_hour = mc.requests_per_hour;
         self.handoff_percent = mc.handoff_percent;
         self.temperature = mc.temperature;
@@ -1316,7 +1335,11 @@ impl AppState {
         // Discover projects and sessions from disk (source of truth).
         let disk_projects = crate::session_storage::discover_projects_from_disk();
         for dp in disk_projects {
-            if !state.projects.iter().any(|p| p.data_dir_name == dp.data_dir_name) {
+            if !state
+                .projects
+                .iter()
+                .any(|p| p.data_dir_name == dp.data_dir_name)
+            {
                 let pid = dp.id.clone();
                 state.projects.push(dp);
                 if let Some(proj) = state.projects.iter().find(|p| p.id == pid) {
@@ -1339,13 +1362,18 @@ impl AppState {
             for key in &manifest_keys {
                 let kind = ProviderKind((*key).clone());
                 let label = kind.label().to_string();
-                state.providers.entry(label).or_insert_with(|| ApiProvider::new(kind));
+                state
+                    .providers
+                    .entry(label)
+                    .or_insert_with(|| ApiProvider::new(kind));
             }
             // Also create the default openai-compatible provider.
             let compat_key = "OpenAI-Compatible";
             if !state.providers.contains_key(compat_key) {
                 let kind = ProviderKind::new("openai-compatible");
-                state.providers.insert(compat_key.to_string(), ApiProvider::new(kind));
+                state
+                    .providers
+                    .insert(compat_key.to_string(), ApiProvider::new(kind));
             }
             // Write the initial providers to disk.
             if let Err(e) = crate::provider_file::save_providers_file(&state.providers) {
@@ -1566,7 +1594,10 @@ impl AppState {
                 continue;
             };
             if let Err(e) = crate::session_storage::append_messages_to_jsonl(proj, sess, msgs) {
-                eprintln!("[state] Failed to append messages to JSONL for session {}: {}", sess.id, e);
+                eprintln!(
+                    "[state] Failed to append messages to JSONL for session {}: {}",
+                    sess.id, e
+                );
             }
         }
         self.pending_writes.last_write = std::time::Instant::now();

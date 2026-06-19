@@ -44,7 +44,10 @@ pub fn sanitize_shell(command: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn run_command_in_dir(command: &str, cwd: Option<&str>) -> Result<(ShellTask, Receiver<ShellEvent>), String> {
+pub fn run_command_in_dir(
+    command: &str,
+    cwd: Option<&str>,
+) -> Result<(ShellTask, Receiver<ShellEvent>), String> {
     sanitize_shell(command)?;
 
     let (tx, rx) = mpsc::channel();
@@ -123,14 +126,20 @@ fn run_command_inner(
         if let Some(ref d) = cwd {
             cmd.current_dir(d);
         }
-        cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
     } else {
         let mut cmd = Command::new("sh");
         cmd.args(["-c", command]);
         if let Some(ref d) = cwd {
             cmd.current_dir(d);
         }
-        cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
     };
 
     match result {
@@ -181,9 +190,10 @@ fn run_command_inner(
                             for &byte in &buf[..n] {
                                 if byte == b'\n' {
                                     if !partial.is_empty() {
-                                        if tx.send(ShellEvent::Output(
-                                            std::mem::take(&mut partial),
-                                        )).is_err() {
+                                        if tx
+                                            .send(ShellEvent::Output(std::mem::take(&mut partial)))
+                                            .is_err()
+                                        {
                                             aborted = true;
                                             break;
                                         }
@@ -192,9 +202,10 @@ fn run_command_inner(
                                     // Carriage return — progress spinner update.
                                     // Flush whatever we have so far.
                                     if !partial.is_empty() {
-                                        if tx.send(ShellEvent::Output(
-                                            std::mem::take(&mut partial),
-                                        )).is_err() {
+                                        if tx
+                                            .send(ShellEvent::Output(std::mem::take(&mut partial)))
+                                            .is_err()
+                                        {
                                             aborted = true;
                                             break;
                                         }
@@ -203,7 +214,9 @@ fn run_command_inner(
                                     partial.push(byte as char);
                                 }
                             }
-                            if aborted { break; }
+                            if aborted {
+                                break;
+                            }
                         }
                         Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
                         Err(_) => break,
