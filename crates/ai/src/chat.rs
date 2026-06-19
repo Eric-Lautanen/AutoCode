@@ -2441,26 +2441,24 @@ fn auto_continue_impl(
     runtime.continuation_chain += 1;
 
     let prefix = if connection_dropped {
-        "Our connection dropped. "
+        &state.connection_drop_prompt
     } else {
         ""
     };
+    let sep = if prefix.is_empty() { "" } else { " " };
     let msg = if has_todo_incomplete {
         let (done, total) = state.todo_list.progress();
         format!(
-            "{}You have unfinished tasks ({}/{} complete). Update the todo list and continue working.",
-            prefix, done, total
+            "{prefix}{sep}You have unfinished tasks ({done}/{total} complete). Update the todo list and continue working.",
         )
     } else if has_project_tasks_incomplete {
         let (done, total) = state.project_task_list.progress();
         format!(
-            "{}Project tasks remain ({}/{} complete). Update the task list and continue working.",
-            prefix, done, total
+            "{prefix}{sep}Project tasks remain ({done}/{total} complete). Update the task list and continue working.",
         )
     } else {
         format!(
-            "{}If you were working on something, continue now. Otherwise update or clear the task list.",
-            prefix
+            "{prefix}{sep}If you were working on something, continue now. Otherwise update or clear the task list.",
         )
     };
 

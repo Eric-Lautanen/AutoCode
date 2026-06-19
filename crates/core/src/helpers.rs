@@ -616,6 +616,9 @@ pub fn default_handoff_percent() -> u8 {
 pub fn default_handoff_trigger_prompt_string() -> String {
     crate::state::DEFAULT_HANDOFF_TRIGGER_PROMPT.to_string()
 }
+pub fn default_connection_drop_prompt_string() -> String {
+    crate::state::DEFAULT_CONNECTION_DROP_PROMPT.to_string()
+}
 pub fn default_handoff_enabled() -> bool {
     true
 }

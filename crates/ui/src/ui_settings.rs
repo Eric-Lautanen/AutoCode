@@ -1239,6 +1239,40 @@ fn show_prompt(ui: &mut egui::Ui, state: &mut AppState) {
             autocode_core::state::DEFAULT_HANDOFF_CONTINUATION_PROMPT.to_string();
     }
 
+    ui.add_space(16.0);
+
+    // -- Connection drop prompt --------------------------------------------
+    ui.label(
+        RichText::new("Connection Drop Prompt")
+            .size(14.0)
+            .strong()
+            .color(Palette::TEXT_PRIMARY),
+    );
+    ui.add_space(4.0);
+    ui.label(
+        RichText::new(
+            "Prepended when the connection drops and tasks are incomplete. \
+             Tells the model to pick up where it left off.",
+        )
+        .size(11.0)
+        .color(Palette::TEXT_MUTED),
+    );
+    ui.add_space(8.0);
+
+    ui.add(
+        TextEdit::multiline(&mut state.connection_drop_prompt)
+            .desired_rows(4)
+            .desired_width(ui.available_width())
+            .font(egui::TextStyle::Monospace)
+            .text_color(Palette::TEXT_PRIMARY),
+    );
+
+    ui.add_space(8.0);
+    if ui.button("Reset to Default").clicked() {
+        state.connection_drop_prompt =
+            autocode_core::state::DEFAULT_CONNECTION_DROP_PROMPT.to_string();
+    }
+
     ui.add_space(10.0);
     ui.separator();
     ui.add_space(8.0);

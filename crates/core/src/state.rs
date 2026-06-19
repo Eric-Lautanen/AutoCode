@@ -1153,6 +1153,9 @@ pub struct AppState {
     #[serde(default = "crate::helpers::default_handoff_continuation_prompt_string")]
     pub handoff_continuation_prompt: String,
 
+    #[serde(default = "crate::helpers::default_connection_drop_prompt_string")]
+    pub connection_drop_prompt: String,
+
     #[serde(default = "crate::helpers::default_handoff_enabled")]
     pub handoff_enabled: bool,
 
@@ -1295,6 +1298,7 @@ impl Default for AppState {
             system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
             handoff_trigger_prompt: DEFAULT_HANDOFF_TRIGGER_PROMPT.to_string(),
             handoff_continuation_prompt: DEFAULT_HANDOFF_CONTINUATION_PROMPT.to_string(),
+            connection_drop_prompt: DEFAULT_CONNECTION_DROP_PROMPT.to_string(),
             handoff_enabled: false,
             shell_tasks: Vec::new(),
             show_explorer: true,
@@ -1673,3 +1677,6 @@ Do NOT continue working or write any more code. Use the handoff tool now.";
 pub const DEFAULT_HANDOFF_CONTINUATION_PROMPT: &str = "\
 Project tasks remain. Review the project task list and create a \
 session-level todo list to accomplish them. Continue working.";
+
+pub const DEFAULT_CONNECTION_DROP_PROMPT: &str = "\
+Connection dropped. Continue with your progress.";
