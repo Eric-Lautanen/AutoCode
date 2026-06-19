@@ -6,6 +6,9 @@ Write code, run commands, edit files, search your codebase, and iterate — all 
 
 > **[v0.2.0 Pre-Release](https://github.com/Eric-Lautanen/AutoCode/releases/tag/v0.2.0)** — Download the latest build for Windows, Linux, and macOS
 
+> **⚠️ WARNING — No Permission, No Prompts, No Hand-Holding**
+> This thing does what you tell it. It reads, writes, deletes, and runs code on your machine with **zero confirmation prompts**. There is no "Are you sure?" popup. No safety rail. No second opinion. If you tell it to `rm -rf /`, it will try its hardest. You are piloting a chainsaw, not a scalpel. Use at your own risk — seriously.
+
 ![Screenshot](assets/screenshot.png)
 
 ## Features
