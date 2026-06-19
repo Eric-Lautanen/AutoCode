@@ -854,7 +854,7 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
     // Pre-flight context check: estimate if this request fits within the
     // model's context window before sending. Prevents opaque API errors.
     let _estimated = {
-        let tools_json = tool_definitions(true);
+        let tools_json = tool_definitions(provider.supports_strict_tools());
         let msgs: Vec<serde_json::Value> = messages
             .iter()
             .map(|m| {

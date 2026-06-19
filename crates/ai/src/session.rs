@@ -43,7 +43,7 @@ pub fn prepare_request_messages_for_session(
     state: &mut AppState,
     session_id: &str,
 ) -> Vec<ApiMessage> {
-    let supports_cache = {
+    let (supports_cache, supports_strict) = {
         let sess = state.sessions.iter().find(|s| s.id == session_id);
         let prov_label = sess
             .map(|s| {
@@ -54,11 +54,12 @@ pub fn prepare_request_messages_for_session(
                 }
             })
             .unwrap_or_else(|| state.active_provider.clone());
-        state
-            .providers
-            .get(&prov_label)
+        let p = state.providers.get(&prov_label);
+        let cache = p
             .map(|p| autocode_core::state::model_or_safe(&p.kind, &p.model).supports_cache_control)
-            .unwrap_or(false)
+            .unwrap_or(false);
+        let strict = p.map(|p| p.supports_strict_tools()).unwrap_or(true);
+        (cache, strict)
     };
 
     // Load full history from disk (the source of truth).
@@ -131,7 +132,7 @@ pub fn prepare_request_messages_for_session(
             .filter(|m| m.role != Role::Error)
             .cloned()
             .collect();
-        let tools = tool_definitions(true);
+        let tools = tool_definitions(supports_strict);
         let model = state
             .sessions
             .iter()
