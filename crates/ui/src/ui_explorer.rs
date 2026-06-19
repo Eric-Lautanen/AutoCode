@@ -565,166 +565,157 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
                         );
                     });
                 }
-            } else {
-                match &panel.file_content {
-                    Some(Ok(_)) => {
-                        let buffer = panel.file_edit_buffer.as_mut().unwrap();
-                        let line_count = buffer.lines().count().max(1);
-                        let digits = line_count.ilog10() as usize + 1;
-                        let gutter_w = 12.0 + digits as f32 * 8.0;
-                        let font_id = FontId::monospace(13.0);
-                        let char_width = ui.fonts_mut(|f| f.glyph_width(&font_id, 'W'));
-                        let max_line_len =
-                            buffer.lines().map(|l| l.chars().count()).max().unwrap_or(0);
-                        let right_pad = 48.0;
-                        // gutter_gap is the space between the gutter separator and the text column.
-                        // It must exactly match the left Margin on the TextEdit below.
-                        let gutter_gap = 8.0f32;
-                        let max_content_width =
-                            gutter_w + gutter_gap + max_line_len as f32 * char_width + right_pad;
-                        let scroll_out = ScrollArea::both()
-                            .id_salt("file_viewer_scroll")
-                            .auto_shrink([false; 2])
-                            .scroll_offset(panel.viewer_scroll)
-                            .scroll_source(egui::scroll_area::ScrollSource {
-                                drag: false,
-                                ..Default::default()
-                            })
-                            .show(ui, |ui| {
-                                ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
-                                ui.set_min_width(max_content_width);
+            } else if panel.file_content.as_ref().is_some_and(|r| r.is_ok()) {
+                if let Some(buffer) = panel.file_edit_buffer.as_mut() {
+                    let line_count = buffer.lines().count().max(1);
+                    let digits = line_count.ilog10() as usize + 1;
+                    let gutter_w = 12.0 + digits as f32 * 8.0;
+                    let font_id = FontId::monospace(13.0);
+                    let char_width = ui.fonts_mut(|f| f.glyph_width(&font_id, 'W'));
+                    let max_line_len = buffer.lines().map(|l| l.chars().count()).max().unwrap_or(0);
+                    let right_pad = 48.0;
+                    // gutter_gap is the space between the gutter separator and the text column.
+                    // It must exactly match the left Margin on the TextEdit below.
+                    let gutter_gap = 8.0f32;
+                    let max_content_width =
+                        gutter_w + gutter_gap + max_line_len as f32 * char_width + right_pad;
+                    let scroll_out = ScrollArea::both()
+                        .id_salt("file_viewer_scroll")
+                        .auto_shrink([false; 2])
+                        .scroll_offset(panel.viewer_scroll)
+                        .scroll_source(egui::scroll_area::ScrollSource {
+                            drag: false,
+                            ..Default::default()
+                        })
+                        .show(ui, |ui| {
+                            ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+                            ui.set_min_width(max_content_width);
 
-                                let row_h = ui.fonts_mut(|f| f.row_height(&font_id));
-                                let bottom_pad = 2.0 * row_h;
+                            let row_h = ui.fonts_mut(|f| f.row_height(&font_id));
+                            let bottom_pad = 2.0 * row_h;
 
-                                // Strategy: reserve the gutter column, then place the TextEdit
-                                // immediately to its right using TextEdit::show() (not ui.add()).
-                                // show() returns TextEditOutput::galley_pos — the exact screen-space
-                                // origin where the galley is painted — and the galley itself with per-row
-                                // layout. We use galley_pos.y as the y-anchor for gutter numbers,
-                                // so they are always pixel-perfect regardless of margin/font rounding.
-                                // We need to auto-scroll after the horizontal_top layout
-                                // is fully complete — calling scroll_to_rect *inside* the
-                                // closure clips the painter mid-draw and hides the gutter.
-                                // Capture what we need here and scroll after the closure.
-                                let mut scroll_target: Option<egui::Rect> = None;
-                                let clip_rect_before = ui.clip_rect();
+                            // Strategy: reserve the gutter column, then place the TextEdit
+                            // immediately to its right using TextEdit::show() (not ui.add()).
+                            // show() returns TextEditOutput::galley_pos — the exact screen-space
+                            // origin where the galley is painted — and the galley itself with per-row
+                            // layout. We use galley_pos.y as the y-anchor for gutter numbers,
+                            // so they are always pixel-perfect regardless of margin/font rounding.
+                            // We need to auto-scroll after the horizontal_top layout
+                            // is fully complete — calling scroll_to_rect *inside* the
+                            // closure clips the painter mid-draw and hides the gutter.
+                            // Capture what we need here and scroll after the closure.
+                            let mut scroll_target: Option<egui::Rect> = None;
+                            let clip_rect_before = ui.clip_rect();
 
-                                ui.horizontal_top(|ui| {
-                                    // Reserve the gutter column. Height uses row_h estimate — it only
-                                    // affects the painted gutter background, not the number positions.
-                                    let content_h = line_count as f32 * row_h;
-                                    let (gutter_rect, _) = ui.allocate_exact_size(
-                                        egui::vec2(gutter_w, content_h + bottom_pad),
-                                        egui::Sense::hover(),
+                            ui.horizontal_top(|ui| {
+                                // Reserve the gutter column. Height uses row_h estimate — it only
+                                // affects the painted gutter background, not the number positions.
+                                let content_h = line_count as f32 * row_h;
+                                let (gutter_rect, _) = ui.allocate_exact_size(
+                                    egui::vec2(gutter_w, content_h + bottom_pad),
+                                    egui::Sense::hover(),
+                                );
+
+                                // Use a context-level painter with an explicit clip set to the
+                                // gutter rect. ui.painter() is clipped to the current child's
+                                // allocated rect at clone-time, which can be too small or already
+                                // scrolled out of the visible area. Painting directly on the
+                                // context layer bypasses that and always renders correctly.
+                                let mut ctx_painter = ui.ctx().layer_painter(egui::LayerId::new(
+                                    egui::Order::Middle,
+                                    egui::Id::new("gutter_layer"),
+                                ));
+                                ctx_painter.set_clip_rect(clip_rect_before);
+                                ctx_painter.rect_filled(
+                                    gutter_rect,
+                                    egui::CornerRadius::ZERO,
+                                    Palette::BG_SURFACE,
+                                );
+                                ctx_painter.line_segment(
+                                    [gutter_rect.right_top(), gutter_rect.right_bottom()],
+                                    Stroke::new(1.0, Palette::BORDER),
+                                );
+
+                                // Zero out all TextEdit margins so galley_pos.x == te_rect.left().
+                                // Setting left=gutter_gap here would shift the text right by that
+                                // amount, but we already consumed gutter_w in allocate_exact_size,
+                                // so we use Margin::ZERO and rely on the gutter allocation for spacing.
+                                ui.add_space(gutter_gap);
+                                let text_width = max_line_len as f32 * char_width + right_pad;
+                                let te_output = TextEdit::multiline(buffer)
+                                    .font(font_id.clone())
+                                    .text_color(Palette::TEXT_CODE)
+                                    .frame(egui::Frame::NONE)
+                                    .margin(Margin::ZERO)
+                                    .desired_width(text_width)
+                                    .show(ui);
+
+                                // galley_pos is the exact screen-space position of the galley origin.
+                                // Each PlacedRow has a `pos: Pos2` giving its offset within the
+                                // galley (per the row-relative coordinate system from PR #5411).
+                                // Screen y = galley_pos.y + placed_row.pos.y.
+                                let galley_pos = te_output.galley_pos;
+                                for (i, row) in te_output.galley.rows.iter().enumerate() {
+                                    ctx_painter.text(
+                                        egui::pos2(
+                                            gutter_rect.right() - 4.0,
+                                            galley_pos.y + row.pos.y,
+                                        ),
+                                        egui::Align2::RIGHT_TOP,
+                                        format!("{:>width$}", i + 1, width = digits),
+                                        font_id.clone(),
+                                        Palette::TEXT_MUTED,
                                     );
-
-                                    // Use a context-level painter with an explicit clip set to the
-                                    // gutter rect. ui.painter() is clipped to the current child's
-                                    // allocated rect at clone-time, which can be too small or already
-                                    // scrolled out of the visible area. Painting directly on the
-                                    // context layer bypasses that and always renders correctly.
-                                    let mut ctx_painter =
-                                        ui.ctx().layer_painter(egui::LayerId::new(
-                                            egui::Order::Middle,
-                                            egui::Id::new("gutter_layer"),
-                                        ));
-                                    ctx_painter.set_clip_rect(clip_rect_before);
-                                    ctx_painter.rect_filled(
-                                        gutter_rect,
-                                        egui::CornerRadius::ZERO,
-                                        Palette::BG_SURFACE,
-                                    );
-                                    ctx_painter.line_segment(
-                                        [gutter_rect.right_top(), gutter_rect.right_bottom()],
-                                        Stroke::new(1.0, Palette::BORDER),
-                                    );
-
-                                    // Zero out all TextEdit margins so galley_pos.x == te_rect.left().
-                                    // Setting left=gutter_gap here would shift the text right by that
-                                    // amount, but we already consumed gutter_w in allocate_exact_size,
-                                    // so we use Margin::ZERO and rely on the gutter allocation for spacing.
-                                    ui.add_space(gutter_gap);
-                                    let text_width = max_line_len as f32 * char_width + right_pad;
-                                    let te_output = TextEdit::multiline(buffer)
-                                        .font(font_id.clone())
-                                        .text_color(Palette::TEXT_CODE)
-                                        .frame(egui::Frame::NONE)
-                                        .margin(Margin::ZERO)
-                                        .desired_width(text_width)
-                                        .show(ui);
-
-                                    // galley_pos is the exact screen-space position of the galley origin.
-                                    // Each PlacedRow has a `pos: Pos2` giving its offset within the
-                                    // galley (per the row-relative coordinate system from PR #5411).
-                                    // Screen y = galley_pos.y + placed_row.pos.y.
-                                    let galley_pos = te_output.galley_pos;
-                                    for (i, row) in te_output.galley.rows.iter().enumerate() {
-                                        ctx_painter.text(
-                                            egui::pos2(
-                                                gutter_rect.right() - 4.0,
-                                                galley_pos.y + row.pos.y,
-                                            ),
-                                            egui::Align2::RIGHT_TOP,
-                                            format!("{:>width$}", i + 1, width = digits),
-                                            font_id.clone(),
-                                            Palette::TEXT_MUTED,
-                                        );
-                                    }
-
-                                    // Compute the scroll target while we still have te_output,
-                                    // but don't call scroll_to_rect yet — do it after this
-                                    // closure so layout is not disturbed.
-                                    let pointer_down = ui.input(|i| i.pointer.primary_down());
-                                    if pointer_down
-                                        && let Some(cursor_range) = &te_output.cursor_range
-                                    {
-                                        let primary = cursor_range.primary;
-                                        let cursor_local =
-                                            te_output.galley.pos_from_cursor(primary);
-                                        let cursor_top = galley_pos.y + cursor_local.min.y;
-                                        let cursor_bot = galley_pos.y + cursor_local.max.y;
-                                        let clip = clip_rect_before;
-                                        let near_top = cursor_top < clip.min.y + row_h;
-                                        let near_bot = cursor_bot > clip.max.y - row_h;
-                                        if near_top || near_bot {
-                                            scroll_target = Some(egui::Rect::from_min_max(
-                                                egui::pos2(clip.min.x, cursor_top),
-                                                egui::pos2(clip.max.x, cursor_bot),
-                                            ));
-                                        }
-                                    }
-                                });
-
-                                // Safe to scroll now — layout and painting are complete.
-                                if let Some(rect) = scroll_target {
-                                    ui.scroll_to_rect(rect, None);
                                 }
 
-                                ui.add_space(bottom_pad);
+                                // Compute the scroll target while we still have te_output,
+                                // but don't call scroll_to_rect yet — do it after this
+                                // closure so layout is not disturbed.
+                                let pointer_down = ui.input(|i| i.pointer.primary_down());
+                                if pointer_down && let Some(cursor_range) = &te_output.cursor_range
+                                {
+                                    let primary = cursor_range.primary;
+                                    let cursor_local = te_output.galley.pos_from_cursor(primary);
+                                    let cursor_top = galley_pos.y + cursor_local.min.y;
+                                    let cursor_bot = galley_pos.y + cursor_local.max.y;
+                                    let clip = clip_rect_before;
+                                    let near_top = cursor_top < clip.min.y + row_h;
+                                    let near_bot = cursor_bot > clip.max.y - row_h;
+                                    if near_top || near_bot {
+                                        scroll_target = Some(egui::Rect::from_min_max(
+                                            egui::pos2(clip.min.x, cursor_top),
+                                            egui::pos2(clip.max.x, cursor_bot),
+                                        ));
+                                    }
+                                }
                             });
-                        // Mirror the live offset back into our ephemeral field so the
-                        // next frame's .scroll_offset() call starts from where the user
-                        // actually is. Because we always override the ScrollArea with
-                        // .scroll_offset(panel.viewer_scroll), egui's internally stored
-                        // offset is overwritten every frame and never has a chance to
-                        // diverge or leak into the ron persistence file.
-                        panel.viewer_scroll = scroll_out.state.offset;
-                    }
-                    Some(Err(e)) => {
-                        ui.add_space(12.0);
-                        ui.label(RichText::new(e).color(Palette::ERROR));
-                    }
-                    None => {
-                        ui.centered_and_justified(|ui| {
-                            ui.label(
-                                RichText::new("No file selected")
-                                    .color(Palette::TEXT_MUTED)
-                                    .size(13.0),
-                            );
+
+                            // Safe to scroll now — layout and painting are complete.
+                            if let Some(rect) = scroll_target {
+                                ui.scroll_to_rect(rect, None);
+                            }
+
+                            ui.add_space(bottom_pad);
                         });
-                    }
+                    // Mirror the live offset back into our ephemeral field so the
+                    // next frame's .scroll_offset() call starts from where the user
+                    // actually is. Because we always override the ScrollArea with
+                    // .scroll_offset(panel.viewer_scroll), egui's internally stored
+                    // offset is overwritten every frame and never has a chance to
+                    // diverge or leak into the ron persistence file.
+                    panel.viewer_scroll = scroll_out.state.offset;
                 }
+            } else if let Some(Err(e)) = &panel.file_content {
+                ui.add_space(12.0);
+                ui.label(RichText::new(e).color(Palette::ERROR));
+            } else {
+                ui.centered_and_justified(|ui| {
+                    ui.label(
+                        RichText::new("No file selected")
+                            .color(Palette::TEXT_MUTED)
+                            .size(13.0),
+                    );
+                });
             }
         });
 

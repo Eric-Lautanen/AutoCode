@@ -314,7 +314,10 @@ pub fn show(
                     }
 
                     if is_live_session {
-                        let r = runtime.as_mut().unwrap();
+                        let r = match runtime.as_mut() {
+                            Some(r) => r,
+                            None => return,
+                        };
                         let has_streaming =
                             !r.pending_response.is_empty() || !r.live_shell_buf.is_empty();
 
@@ -365,7 +368,9 @@ pub fn show(
                 if overshoot > 0 {
                     let tail = panel_state.display_buffer.split_off(overshoot);
                     panel_state.display_buffer = tail;
-                    panel_state.display_buffer.shrink_to(0);
+                    if let Some(sess) = state.active_session() {
+                        panel_state.prev_message_count = sess.messages.len();
+                    }
                 }
             }
         }

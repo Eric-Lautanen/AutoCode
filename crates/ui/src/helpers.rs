@@ -10,7 +10,12 @@ use autocode_core::theme::Palette;
 
 pub fn format_time(ts: u64) -> String {
     let secs = ts % 86400;
-    format!("{:02}:{:02}Z", secs / 3600, (secs % 3600) / 60)
+    format!(
+        "{:02}:{:02}:{:02}Z",
+        secs / 3600,
+        (secs % 3600) / 60,
+        secs % 60
+    )
 }
 
 // -- Tool result parsing -------------------------------------------------------
@@ -61,7 +66,7 @@ pub fn extract_tool_summary(content: &str) -> Option<String> {
             .and_then(|l| l.strip_prefix("Exit code: "))
             .or_else(|| {
                 rest.lines()
-                    .next()
+                    .last()
                     .and_then(|l| l.strip_prefix("exit_code: "))
             })
             .and_then(|c| c.parse::<i32>().ok())
@@ -216,6 +221,23 @@ pub fn parse_inline_formatting(text: &str) -> String {
                 result.push_str("**");
                 byte_pos = after_star + 1;
                 continue;
+            } else if after_star < byte_len {
+                let content_start = after_star;
+                let mut search = content_start;
+                let mut found = false;
+                while search < byte_len {
+                    let sc = text[search..].chars().next().unwrap_or('\0');
+                    if sc == '*' && search > content_start {
+                        result.push_str(&text[content_start..search]);
+                        byte_pos = search + 1;
+                        found = true;
+                        break;
+                    }
+                    search += sc.len_utf8();
+                }
+                if found {
+                    continue;
+                }
             }
         }
 
