@@ -14,7 +14,7 @@
 | Category | What it does |
 |----------|-------------|
 | **AI Coding** | Read, write, edit (7-strategy fuzzy patching), search, and execute code via 20 built-in tools |
-| **Multi-Provider** | OpenRouter, NVIDIA NIM, OpenAI-Compatible, OpenCode Go — per-model context/output/thinking configs |
+| **Multi-Provider** | Built-in configs for popular providers + add any OpenAI-compatible provider via Settings |
 | **Streaming** | Real-time SSE with auto-recovery, exponential backoff, auto-continue on drop |
 | **Sessions** | Named sessions per project (up to 50), JSONL history, lazy-load display buffer, per-project tab colors |
 | **Token Management** | 3-tier counting (API → tiktoken → heuristic), auto-handoff at configurable threshold |
@@ -134,16 +134,11 @@ Settings are persisted across restarts. Most settings in `app.ron`; **provider c
 | `handoff` | Signal context limit and continue in new session |
 | `name_session` | Auto-label the current session |
 
-## Bootstrapped Providers
+## Adding Providers
 
-Four built-in provider configs. You can also add any OpenAI-compatible provider via Settings.
+AutoCode ships with built-in configs for popular providers. You can also add any OpenAI-compatible provider via **Settings → Providers** — just set a Base URL, API key, and model name. Models change frequently; edit `providers.json` or use the UI to add/update models at any time.
 
-| Provider | Default Model |
-|----------|---------------|
-| OpenRouter | deepseek/deepseek-v4-flash |
-| NVIDIA NIM | z-ai/glm-5.1 |
-| OpenAI-Compatible | gpt-5.5 |
-| OpenCode Go | glm-5.1 |
+**Built-in:** OpenRouter, NVIDIA NIM, OpenAI-Compatible, OpenCode Go
 
 ## Project Structure
 
@@ -154,7 +149,7 @@ Four built-in provider configs. You can also add any OpenAI-compatible provider 
 Cargo.toml                               # workspace root, resolver = "2"
 ├── .cargo/config.toml                    # +crt-static for MSVC + musl targets
 ├── assets/
-│   ├── providers.json                    # provider/model manifest (4 providers, ~64 models)
+│   ├── providers.json                    # built-in provider configs (edit or add your own)
 │   ├── icon.icns / icon.ico              # macOS / Windows icons
 │   └── linux/                           # Linux icons (16–512px)
 ├── crates/
