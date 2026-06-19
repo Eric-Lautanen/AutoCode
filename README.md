@@ -1,7 +1,5 @@
 # AutoCode
 
-> **Status:** Near release and fully functional, but development is on hold for now
-
 **AutoCode** is an autonomous AI coding agent — a native desktop application written in **Rust** that connects to large language models (LLMs) and gives them full access to your filesystem and shell, enabling them to independently perform software engineering tasks.
 
 Write code, run commands, edit files, search your codebase, and iterate — all through a chat interface where the AI operates as your autonomous agent. Not a harness or scaffold — a single self-contained binary.
@@ -38,59 +36,64 @@ Built in **Rust** (edition 2024, minimum Rust 1.95) with the **egui** (0.34) imm
 Cargo.toml                               # workspace root, resolver = "2"
 ├── .cargo/config.toml                    # +crt-static for MSVC + musl targets
 ├── assets/
-│   ├── providers.json                    # editable provider/model manifest (4 providers)
+│   ├── providers.json                    # editable provider/model manifest (4 providers, ~42 models)
 │   ├── icon.icns / icon.ico              # macOS / Windows icons
 │   └── linux/                           # Linux icons (16–512px)
 ├── crates/
-│   ├── autocode/          — binary entry (~494 lines)
-│   │   ├── main.rs         (46)    # entry point, rustls init, eframe::run_native
-│   │   ├── app.rs         (443)   # AutocodeApp (eframe::App), frame loop, state wiring
+│   ├── autocode/          — binary entry (~583 lines)
+│   │   ├── main.rs         (51)    # entry point, rustls init, eframe::run_native (1400x900)
+│   │   ├── app.rs         (527)   # AutocodeApp (eframe::App), frame loop, state wiring
 │   │   ├── build.rs        (4)    # embed Windows icon resource
 │   │   └── helpers.rs      (1)    # reserved
-│   ├── core/               — core types, utilities, infrastructure (~5,073 lines)
-│   │   ├── state.rs      (1438)  # AppState, Project, Session, ChatMessage, ApiProvider,
+│   ├── core/               — core types, utilities, infrastructure (~5,617 lines)
+│   │   ├── state.rs      (1495)  # AppState, Project, Session, ChatMessage, ApiProvider,
 │   │   │                           SecretString, DesignSettings (72 fields), TodoItem, manifest
-│   │   ├── helpers.rs    (1440)  # ID gen, token estimation (heuristic + tiktoken + regex),
-│   │   │                           path resolution + traversal guard, tiny regex engine, panic_msg
-│   │   ├── fsutil.rs      (138)   # exe_dir, \\?\ extended paths, atomic read/write, TEMP_FILES
-│   │   ├── theme.rs      (218)   # dark Visuals+Style, Palette (20 colors), hash-based project_accent
-│   │   ├── extract.rs     (327)   # HTML scraping (scraper), DuckDuckGo results, domain blacklist
-│   │   ├── sysinfo.rs     (742)   # OS/CPU/GPU/RAM/shell/tool detection, has_opengl
-│   │   ├── session_storage.rs (645) # JSON/JSONL persistence, atomic writes, orphan scavenge,
+│   │   ├── helpers.rs    (1436)  # ID gen, token estimation (heuristic + tiktoken + regex),
+│   │   │                           path resolution + traversal guard, tiny regex engine
+│   │   ├── fsutil.rs      (148)   # exe_dir, \\?\ extended paths, atomic read/write, TEMP_FILES
+│   │   ├── theme.rs      (140)   # dark Visuals+Style, Palette (20 colors), hash-based project_accent
+│   │   ├── extract.rs     (298)   # HTML scraping (scraper), DuckDuckGo results, domain blacklist
+│   │   ├── sysinfo.rs     (689)   # OS/CPU/GPU/RAM/shell/tool detection (Win32 FFI, /proc, lspci)
+│   │   ├── session_storage.rs (628) # JSON/JSONL persistence, atomic writes, orphan scavenge,
 │   │   │                           load_messages_before, truncate_messages_after
+│   │   ├── chunked_jsonl.rs (215) # Chunked JSONL (1000 msg/chunk), rotation for large sessions
+│   │   ├── persistence.rs  (152)  # Background persistence thread for offloading JSONL writes
+│   │   ├── provider_file.rs (225) # User-editable providers.json schema (ProviderEntry, ModelEntry)
+│   │   ├── shell_task_storage.rs (82) # Shell task persistence (save/load/delete as JSON files)
 │   │   └── tokenizer/
-│   │       └── mod.rs     (107)    # Tokenizer trait, TiktokenTokenizer, HeuristicTokenizer
-│   ├── ai/                 — AI provider client + chat orchestration (~6,347 lines)
-│   │   ├── chat.rs       (3423)  # orchestration: send_message, SSE polling, 20 tool handlers,
+│   │       └── mod.rs      (88)    # Tokenizer trait, TiktokenTokenizer, HeuristicTokenizer
+│   ├── ai/                 — AI provider client + chat orchestration (~6,481 lines)
+│   │   ├── chat.rs       (3558)  # orchestration: send_message, SSE polling, 20 tool handlers,
 │   │   │                           retry/backoff, auto-continuation, handoff, session auto-naming,
 │   │   │                           replay, partial-response recovery, live shell streaming
-│   │   ├── provider.rs   (1759)  # raw TCP+rustls HTTP client, SSE parsing, 20 tool definitions,
+│   │   ├── provider.rs   (1722)  # raw TCP+rustls HTTP client, SSE parsing, 20 tool definitions,
 │   │   │                           model list fetch, counting API, rotating browser profiles (8)
-│   │   ├── session.rs    (171)   # system prompt seeding + sysinfo, message prep with dedup,
+│   │   ├── session.rs    (168)   # system prompt seeding + sysinfo, message prep with dedup,
 │   │   │                           orphan-tool stripping, cache_control, full-history estimate
-│   │   └── helpers.rs    (981)   # fuzzy find-replace (7 strategies), Levenshtein/Jaro-Winkler/
-│   │                             token-set similarity, todo parsing, line-number stripping,
-│   │                             project task parsing
-│   ├── fs/                 — filesystem tools (~910 lines)
-│   │   ├── shell.rs       (176)   # background shell via channels (cmd/sh), temp script cleanup
-│   │   ├── explorer.rs    (509)   # gitignore-aware list_dir/glob/grep/find_project_root,
-│   │   │                           recursive grep with size/binary limits, case-insensitive,
-│   │   │                           project_tree implementation
-│   │   └── helpers.rs    (216)   # file extraction from code fences, glob matching (*/**/?)
-│   └── ui/                 — egui UI panels (~6,114 lines)
-│       ├── ui_chat.rs    (2270)  # chat panel: tabs, bubbles, markdown, diff, streaming, shell,
+│   │   ├── helpers.rs    (895)   # fuzzy find-replace (7 strategies), Levenshtein/Jaro-Winkler/
+│   │   │                           token-set similarity, todo parsing, line-number stripping,
+│   │   │                           project task parsing
+│   │   └── thread_pool.rs (125)  # Background thread pool for concurrent jobs with panic isolation
+│   ├── fs/                 — filesystem tools (~915 lines)
+│   │   ├── shell.rs       (234)   # background shell via channels (cmd with CREATE_NO_WINDOW, sh),
+│   │   │                           temp script cleanup, PID reporting, stderr capture
+│   │   ├── explorer.rs    (467)   # gitignore-aware list_dir/glob/grep/find_project_root,
+│   │   │                           recursive grep with size/binary limits, project_tree (depth 20)
+│   │   └── helpers.rs    (206)   # file extraction from code fences, glob matching (*/**/?)
+│   └── ui/                 — egui UI panels (~5,944 lines)
+│       ├── ui_chat.rs    (2198)  # chat panel: tabs, bubbles, markdown, diff, streaming, shell,
 │       │                           structured tool cards, per-project tab colors, replay button
-│       ├── ui_settings.rs(1448)  # 6-tab settings window (Providers/Projects/Prompt/Session/
+│       ├── ui_settings.rs(1501)  # 6-tab settings window (Providers/Projects/Prompt/Session/
 │       │                           Timeouts/About)
-│       ├── ui_explorer.rs (921)  # file tree (all files shown), preview (text+image with edit/
+│       ├── ui_explorer.rs (864)  # file tree (all files shown), preview (text+image with edit/
 │       │                           save), rename/delete context menu, gutter line numbers
-│       ├── ui_toolbar.rs  (366)  # project/session/provider/model pickers, budget meter, blink-dot
-│       ├── ui_todo.rs     (303)  # floating session task list, progress bar, priority dots, auto-close
-│       ├── ui_project_tasks.rs (313)  # floating project task list, progress bar, auto-close, disk persist
-│       └── helpers.rs     (478)  # time formatting, tool result parsing, markdown, LayoutJob,
+│       ├── ui_toolbar.rs  (340)  # project/session/provider/model pickers, budget meter, blink-dot
+│       ├── ui_todo.rs     (285)  # floating session task list, progress bar, priority dots, auto-close
+│       ├── ui_project_tasks.rs (297)  # floating project task list, progress bar, auto-close, disk persist
+│       └── helpers.rs     (445)  # time formatting, tool result parsing, markdown, LayoutJob,
 │                                 screen pixel sampling (Windows FFI), todo_scroll_area
 ```
-**Total: ~18,940 lines of Rust source across 30 files.**
+**Total: ~19,540 lines of Rust source across 35 files.**
 
 ### Key Architecture Decisions
 
@@ -234,4 +237,24 @@ The app ships with four built-in provider configurations. You can also add any O
 
 ## License
 
-This project is currently unlicensed. All rights reserved.
+MIT License
+
+Copyright (c) 2025 Eric Lautanen
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
