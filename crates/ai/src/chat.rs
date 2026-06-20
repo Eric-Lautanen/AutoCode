@@ -3648,15 +3648,20 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                 None => return "Error: missing 'keyword' argument".to_string(),
             };
             if keyword.is_empty() {
-                return "Error: keyword cannot be empty".to_string();
+                let dir = autocode_fs::skills::skills_dir(std::path::Path::new(project_root));
+                let skills = autocode_fs::skills::list_skills_with_info(&dir);
+                if skills.is_empty() {
+                    return "No skill files found.".to_string();
+                }
+                let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
+                return format!("Available skills: {}", names.join(", "));
             }
 
             let dir = autocode_fs::skills::skills_dir(std::path::Path::new(project_root));
             let skills = autocode_fs::skills::list_skills_with_info(&dir);
             if skills.is_empty() {
                 return format!(
-                    "No skills directory found at {} (or it's empty). \
-                     Create .md files there to add skills.",
+                    "No skills directory found at {} (or it's empty).",
                     dir.display()
                 );
             }
@@ -3704,10 +3709,12 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                 if fuzzy.len() == 1 || fuzzy[0].1 - fuzzy[1].1 >= 0.15 {
                     return read_one(fuzzy[0].0);
                 }
-                let candidates: Vec<&str> = fuzzy.iter().take(5).map(|(s, _)| s.name.as_str()).collect();
+                let candidates: Vec<&str> =
+                    fuzzy.iter().take(5).map(|(s, _)| s.name.as_str()).collect();
                 return format!(
                     "Multiple skills match '{}': {}. Call get_skill again with the exact name.",
-                    keyword, candidates.join(", ")
+                    keyword,
+                    candidates.join(", ")
                 );
             }
 
@@ -3718,14 +3725,16 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                 let candidates: Vec<&str> = sub.iter().take(5).map(|s| s.name.as_str()).collect();
                 return format!(
                     "Multiple skills match '{}': {}. Call get_skill again with the exact name.",
-                    keyword, candidates.join(", ")
+                    keyword,
+                    candidates.join(", ")
                 );
             }
 
             let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
             format!(
                 "No skill matching '{}'. Available skills: {}",
-                keyword, names.join(", ")
+                keyword,
+                names.join(", ")
             )
         }
 
