@@ -1246,6 +1246,31 @@ fn render_structured_tool_result(
                 });
             }
         }
+        "get_skill" => {
+            let keyword = meta.file_path.as_deref().unwrap_or("");
+            let bytes = meta.byte_count.unwrap_or(0);
+            let header = if meta.is_error {
+                format!("[skill] \"{}\" — not found", keyword)
+            } else {
+                format!("[skill] Loaded \"{}\" — {} bytes", keyword, bytes)
+            };
+            ui.label(
+                RichText::new(header)
+                    .size(12.0)
+                    .color(if meta.is_error {
+                        theme().system_badge
+                    } else {
+                        theme().accent
+                    })
+                    .strong(),
+            );
+            if !meta.is_error {
+                let body = helpers::get_tool_body(msg);
+                ui.push_id(format!("skill_{}", msg.timestamp), |ui| {
+                    render_code_block(ui, "markdown", &body);
+                });
+            }
+        }
         _ => {
             render_markdown(ui, &msg.content, false);
         }

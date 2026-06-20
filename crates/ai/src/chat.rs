@@ -1536,6 +1536,8 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                         tc.name = "name_session".into();
                     } else if args.get("start_line").is_some() {
                         tc.name = "patch_lines".into();
+                    } else if args.get("keyword").and_then(|v| v.as_str()).is_some() {
+                        tc.name = "get_skill".into();
                     }
                     if !tc.name.is_empty() {}
                 }
@@ -1733,6 +1735,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     "list_dir",
                     "glob",
                     "todo_list",
+                    "get_skill",
                 ];
                 // Non-shell tools run in this batch; use a shorter timeout for
                 // pure file operations vs web/network tools that may take longer.
@@ -2825,6 +2828,20 @@ fn build_tool_meta(tc: &ToolCall, result: &str, duration_ms: u64) -> ToolMeta {
                 ..Default::default()
             }
         }
+        "get_skill" => {
+            let keyword = args["keyword"].as_str().unwrap_or("").to_string();
+            let not_found = result.starts_with("No skill matching")
+                || result.starts_with("No skills directory")
+                || result.starts_with("Multiple skills match");
+            ToolMeta {
+                tool_name: "get_skill".into(),
+                file_path: Some(keyword),
+                byte_count: Some(result.len()),
+                is_error: is_error || not_found,
+                duration_ms: Some(duration_ms),
+                ..Default::default()
+            }
+        }
         "list_dir" => {
             let path = args["path"].as_str().unwrap_or("").to_string();
             let entry_count = result.lines().count();
@@ -3623,6 +3640,93 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                     results.join("\n")
                 )
             }
+        }
+
+        "get_skill" => {
+            let keyword = match args["keyword"].as_str() {
+                Some(k) => k.trim(),
+                None => return "Error: missing 'keyword' argument".to_string(),
+            };
+            if keyword.is_empty() {
+                return "Error: keyword cannot be empty".to_string();
+            }
+
+            let dir = autocode_fs::skills::skills_dir(std::path::Path::new(project_root));
+            let skills = autocode_fs::skills::list_skills_with_info(&dir);
+            if skills.is_empty() {
+                return format!(
+                    "No skills directory found at {} (or it's empty). \
+                     Create .md files there to add skills.",
+                    dir.display()
+                );
+            }
+
+            let read_one = |s: &autocode_fs::skills::SkillInfo| -> String {
+                match autocode_fs::skills::read_skill(&dir, &s.name) {
+                    Ok(content) => content,
+                    Err(e) => format!("Error reading skill '{}': {}", s.name, e),
+                }
+            };
+
+            // Single pass: exact, fuzzy, and substring match simultaneously.
+            let kw_lower = keyword.to_lowercase();
+            let kw_short = keyword.len() < 3;
+            let mut exact: Option<&autocode_fs::skills::SkillInfo> = None;
+            let mut fuzzy: Vec<(&autocode_fs::skills::SkillInfo, f64)> = Vec::new();
+            let mut sub: Vec<&autocode_fs::skills::SkillInfo> = Vec::new();
+
+            for s in skills.iter() {
+                let n_lower = s.name.to_lowercase();
+                let d_lower = s.description.to_lowercase();
+
+                if n_lower == kw_lower || d_lower == kw_lower {
+                    exact = Some(s);
+                    break;
+                }
+
+                let ns = helpers::similarity_score(&s.name, keyword);
+                let ds = helpers::similarity_score(&s.description, keyword);
+                if ns >= 0.35 || ds >= 0.35 {
+                    fuzzy.push((s, ns.max(ds)));
+                }
+
+                if !kw_short && (n_lower.contains(&kw_lower) || d_lower.contains(&kw_lower)) {
+                    sub.push(s);
+                }
+            }
+
+            if let Some(s) = exact {
+                return read_one(s);
+            }
+
+            if !fuzzy.is_empty() {
+                fuzzy.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                if fuzzy.len() == 1 || fuzzy[0].1 - fuzzy[1].1 >= 0.15 {
+                    return read_one(fuzzy[0].0);
+                }
+                let candidates: Vec<&str> = fuzzy.iter().take(5).map(|(s, _)| s.name.as_str()).collect();
+                return format!(
+                    "Multiple skills match '{}': {}. Call get_skill again with the exact name.",
+                    keyword, candidates.join(", ")
+                );
+            }
+
+            if !sub.is_empty() {
+                if sub.len() == 1 {
+                    return read_one(sub[0]);
+                }
+                let candidates: Vec<&str> = sub.iter().take(5).map(|s| s.name.as_str()).collect();
+                return format!(
+                    "Multiple skills match '{}': {}. Call get_skill again with the exact name.",
+                    keyword, candidates.join(", ")
+                );
+            }
+
+            let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
+            format!(
+                "No skill matching '{}'. Available skills: {}",
+                keyword, names.join(", ")
+            )
         }
 
         "handoff" => {

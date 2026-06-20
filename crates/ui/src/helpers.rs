@@ -102,6 +102,11 @@ pub fn extract_tool_summary(content: &str) -> Option<String> {
             .strip_prefix("Tool `create_dir` result:\n")
             .unwrap_or("");
         Some(format!("[File] Created directory: {}", rest.trim()))
+    } else if content.starts_with("Tool `get_skill` result:\n") {
+        let rest = content
+            .strip_prefix("Tool `get_skill` result:\n")
+            .unwrap_or("");
+        Some(format!("[skill] {} bytes", rest.len()))
     } else {
         None
     }
