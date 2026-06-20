@@ -1283,8 +1283,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 // If there are tasks to continue, send a continue message
                 // instead of retrying silently. This nudge resumes the same
                 // session, so it doesn't depend on the handoff toggle.
-                if state.todo_list.has_incomplete() || state.project_task_list.has_incomplete()
-                {
+                if state.todo_list.has_incomplete() || state.project_task_list.has_incomplete() {
                     runtime.pending_response.clear();
                     runtime.pending_tool_calls.clear();
                     runtime.assistant_tool_calls_json = None;
@@ -1451,8 +1450,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 // the connection dropped and pick up where it left off.
                 // This resumes the same session, so it doesn't depend on
                 // the handoff toggle.
-                if state.todo_list.has_incomplete() || state.project_task_list.has_incomplete()
-                {
+                if state.todo_list.has_incomplete() || state.project_task_list.has_incomplete() {
                     runtime.pending_response.clear();
                     runtime.pending_tool_calls.clear();
                     runtime.assistant_tool_calls_json = None;
@@ -1831,8 +1829,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 // instead of retrying — the model needs to know to pick up.
                 // This resumes the same session, so it doesn't depend on
                 // the handoff toggle.
-                if state.todo_list.has_incomplete() || state.project_task_list.has_incomplete()
-                {
+                if state.todo_list.has_incomplete() || state.project_task_list.has_incomplete() {
                     runtime.pending_response.clear();
                     runtime.pending_tool_calls.clear();
                     runtime.assistant_tool_calls_json = None;
