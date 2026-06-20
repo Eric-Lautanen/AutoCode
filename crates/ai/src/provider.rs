@@ -547,6 +547,10 @@ pub enum ProviderEvent {
     Done {
         prompt_tokens: usize,
         completion_tokens: usize,
+        /// Raw provider `finish_reason` ("stop", "length", "tool_calls", ...),
+        /// when available. Lets callers tell a genuine stop apart from a
+        /// response that was cut off by the output token limit.
+        finish_reason: Option<String>,
     },
     Error(String),
 }
@@ -1177,9 +1181,13 @@ fn process_http_response<R: BufRead>(
             }
             let p = v["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as usize;
             let c = v["usage"]["completion_tokens"].as_u64().unwrap_or(0) as usize;
+            let fr = v["choices"][0]["finish_reason"]
+                .as_str()
+                .map(|s| s.to_string());
             let _ = tx.send(ProviderEvent::Done {
                 prompt_tokens: p,
                 completion_tokens: c,
+                finish_reason: fr,
             });
         }
     }
@@ -1199,6 +1207,7 @@ fn parse_sse_stream_from_reader<R: BufRead>(
     let mut saw_data_line = false;
     let mut saw_finish = false;
     let mut had_error = false;
+    let mut finish_reason: Option<String> = None;
     let mut raw_buf = String::new();
     let mut last_log = std::time::Instant::now();
 
@@ -1315,6 +1324,7 @@ fn parse_sse_stream_from_reader<R: BufRead>(
             }
         }
         if let Some(reason) = v["choices"][0]["finish_reason"].as_str() {
+            finish_reason = Some(reason.to_string());
             if reason == "tool_calls" {
                 let mut indices: Vec<usize> = tool_acc.keys().cloned().collect();
                 indices.sort();
@@ -1404,6 +1414,7 @@ fn parse_sse_stream_from_reader<R: BufRead>(
         let _ = tx.send(ProviderEvent::Done {
             prompt_tokens,
             completion_tokens,
+            finish_reason,
         });
     }
     Ok(())

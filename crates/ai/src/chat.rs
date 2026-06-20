@@ -1130,6 +1130,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
     let mut done = false;
     let mut events_this_frame: u32 = 0;
     let mut disconnected = false;
+    let mut last_finish_reason: Option<String> = None;
 
     loop {
         match rx.try_recv() {
@@ -1169,10 +1170,12 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
             Ok(ProviderEvent::Done {
                 prompt_tokens,
                 completion_tokens,
+                finish_reason,
             }) => {
                 let _resp_preview: String = runtime.pending_response.chars().take(200).collect();
                 let _reason_len = runtime.reasoning_buf.len();
                 done = true;
+                last_finish_reason = finish_reason;
                 runtime.retry_count = 0;
                 if let Some(sid) = runtime.active_session_id.as_deref()
                     && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
@@ -1278,10 +1281,9 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
             if is_stream_drop {
                 // Check for incomplete tasks BEFORE saving partial response.
                 // If there are tasks to continue, send a continue message
-                // instead of retrying silently.
-                if state.handoff_enabled
-                    && (state.todo_list.has_incomplete()
-                        || state.project_task_list.has_incomplete())
+                // instead of retrying silently. This nudge resumes the same
+                // session, so it doesn't depend on the handoff toggle.
+                if state.todo_list.has_incomplete() || state.project_task_list.has_incomplete()
                 {
                     runtime.pending_response.clear();
                     runtime.pending_tool_calls.clear();
@@ -1290,7 +1292,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     runtime.partial_response_backup.clear();
                     runtime.retry_count = 0;
                     runtime.provider_error = None;
-                    auto_continue_impl(state, runtime, "", true);
+                    auto_continue_impl(state, runtime, "", true, false);
                     return true;
                 }
                 if has_partial {
@@ -1447,9 +1449,9 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 // If there are incomplete tasks, send a continue message
                 // instead of retrying silently — the model needs to know
                 // the connection dropped and pick up where it left off.
-                if state.handoff_enabled
-                    && (state.todo_list.has_incomplete()
-                        || state.project_task_list.has_incomplete())
+                // This resumes the same session, so it doesn't depend on
+                // the handoff toggle.
+                if state.todo_list.has_incomplete() || state.project_task_list.has_incomplete()
                 {
                     runtime.pending_response.clear();
                     runtime.pending_tool_calls.clear();
@@ -1458,7 +1460,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     runtime.partial_response_backup.clear();
                     runtime.retry_count = 0;
                     runtime.provider_error = None;
-                    auto_continue_impl(state, runtime, "", true);
+                    auto_continue_impl(state, runtime, "", true, false);
                     return true;
                 }
                 // Forever retry: exponential backoff 5s → 180s cap, never gives up.
@@ -1574,7 +1576,8 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     }
                     push_runtime(state, runtime, msg);
                     auto_execute(state, runtime, &response);
-                    auto_continue(state, runtime, &response);
+                    let truncated = last_finish_reason.as_deref() == Some("length");
+                    auto_continue(state, runtime, &response, truncated);
                     return true;
                 }
             }
@@ -1826,9 +1829,9 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 // Done received with no content and no tool calls.
                 // If there are incomplete tasks, send a continue message
                 // instead of retrying — the model needs to know to pick up.
-                if state.handoff_enabled
-                    && (state.todo_list.has_incomplete()
-                        || state.project_task_list.has_incomplete())
+                // This resumes the same session, so it doesn't depend on
+                // the handoff toggle.
+                if state.todo_list.has_incomplete() || state.project_task_list.has_incomplete()
                 {
                     runtime.pending_response.clear();
                     runtime.pending_tool_calls.clear();
@@ -1836,7 +1839,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     runtime.stream_drop_retries = 0;
                     runtime.partial_response_backup.clear();
                     runtime.retry_count = 0;
-                    auto_continue_impl(state, runtime, "", true);
+                    auto_continue_impl(state, runtime, "", true, false);
                     return true;
                 }
                 let max_retries = state.max_retries;
@@ -1882,7 +1885,14 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
 
             auto_execute(state, runtime, &full_response);
 
-            auto_continue(state, runtime, &full_response);
+            // A "length" finish_reason means the provider cut the model off
+            // before it chose to stop — treat that as incomplete even if the
+            // text doesn't happen to match a continuation phrase.
+            let truncated = last_finish_reason.as_deref() == Some("length");
+            if truncated {
+                runtime.status = "Response truncated by output limit -- continuing...".into();
+            }
+            auto_continue(state, runtime, &full_response, truncated);
         }
     }
 
@@ -2394,23 +2404,25 @@ fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     // Trigger already sent — the model has the warning, it's up to it now.
 }
 
-fn auto_continue(state: &mut AppState, runtime: &mut ChatRuntime, response: &str) {
-    auto_continue_impl(state, runtime, response, false)
+fn auto_continue(state: &mut AppState, runtime: &mut ChatRuntime, response: &str, truncated: bool) {
+    auto_continue_impl(state, runtime, response, false, truncated)
 }
 
-/// Send a "continue" message when there are incomplete tasks. If
-/// `connection_dropped` is true the message mentions the dropped connection.
+/// Send a "continue" message when there are incomplete tasks, the response
+/// was cut off by the output token limit, or the text itself signals the
+/// model meant to keep going. If `connection_dropped` is true the message
+/// mentions the dropped connection. This resumes work in the *same* session
+/// and is intentionally independent of the handoff toggle — handoff only
+/// controls whether a *new* session gets spun up, not whether an unfinished
+/// turn gets nudged to continue.
 fn auto_continue_impl(
     state: &mut AppState,
     runtime: &mut ChatRuntime,
     response: &str,
     connection_dropped: bool,
+    truncated: bool,
 ) {
     if runtime.handoff_in_progress {
-        return;
-    }
-    // Only auto-continue when handoff mode is enabled.
-    if !state.handoff_enabled {
         return;
     }
     let has_todo_incomplete = state.todo_list.has_incomplete();
@@ -2418,6 +2430,7 @@ fn auto_continue_impl(
         state.project_task_list.has_incomplete() && !state.todo_list.has_incomplete();
     if !has_todo_incomplete
         && !has_project_tasks_incomplete
+        && !truncated
         && !helpers::is_incomplete_task_response(response)
     {
         return;
@@ -2443,6 +2456,10 @@ fn auto_continue_impl(
         let (done, total) = state.project_task_list.progress();
         format!(
             "{prefix}{sep}Project tasks remain ({done}/{total} complete). Update the task list and continue working.",
+        )
+    } else if truncated {
+        format!(
+            "{prefix}{sep}Your last response was cut off by the output token limit. Continue exactly where you left off.",
         )
     } else {
         format!(

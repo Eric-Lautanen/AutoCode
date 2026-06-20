@@ -1325,7 +1325,7 @@ impl Default for AppState {
             handoff_trigger_prompt: DEFAULT_HANDOFF_TRIGGER_PROMPT.to_string(),
             handoff_continuation_prompt: DEFAULT_HANDOFF_CONTINUATION_PROMPT.to_string(),
             connection_drop_prompt: DEFAULT_CONNECTION_DROP_PROMPT.to_string(),
-            handoff_enabled: false,
+            handoff_enabled: true,
             shell_tasks: Vec::new(),
             show_explorer: true,
             explorer_width: 240.0,
