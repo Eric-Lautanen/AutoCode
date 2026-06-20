@@ -726,23 +726,24 @@ fn show_session_tabs(
                                     if tab_resp.clicked() {
                                         state.active_session_id = Some(id.clone());
                                     }
-                                    // Show close button when the pointer is over this tab.
-                                    let tab_hovered = ui.ctx().input(|i| i.pointer.hover_pos())
-                                        .map(|p| tab_resp.rect.expand(8.0).contains(p))
-                                        .unwrap_or(false);
-                                    if active || tab_hovered {
-                                        ui.add_space(4.0);
-                                        let close = ui.add(
-                                            egui::Button::new(
-                                                RichText::new("x").size(11.0).color(
-                                                    if active { tab_accent } else { theme().text_muted }
-                                                ),
-                                            )
-                                            .fill(Color32::TRANSPARENT)
-                                            .stroke(Stroke::NONE)
-                                            .min_size(Vec2::new(20.0, 18.0)),
+                                    // Close button: always reserve space so tabs stay the same size,
+                                    // but only paint the X when the tab is active or hovered.
+                                    ui.add_space(4.0);
+                                    let (close_rect, close_resp) = ui.allocate_exact_size(
+                                        Vec2::new(20.0, 18.0),
+                                        egui::Sense::click(),
+                                    );
+                                    let show_close = active || tab_resp.hovered() || close_resp.hovered();
+                                    if show_close {
+                                        ui.painter().text(
+                                            close_rect.center(),
+                                            egui::Align2::CENTER_CENTER,
+                                            "x",
+                                            egui::FontId::proportional(11.0),
+                                            if active { tab_accent } else { theme().text_muted },
                                         );
-                                        if close.on_hover_text("Close session").clicked() {
+                                    }
+                                    if close_resp.on_hover_text("Close session").clicked() {
                                             autocode_ai::chat::abort_for_session(runtimes, &id);
                                             panel_state.scroll_offsets.remove(&id);
                                             let was_used = state.sessions.iter()
@@ -769,7 +770,6 @@ fn show_session_tabs(
                                             }
                                             runtimes.remove(&id);
                                         }
-                                    }
                 });
             }); // end push_id("chat_content", ...)
                     });
@@ -1950,32 +1950,52 @@ fn show_input_row(
                     }
 
                     // Thinking mode toggle + reasoning effort between input and action buttons.
-                    let provider_key = state.active_provider.clone();
-                    let (thinking, effort, thinking_supported, provider_kind, model) = state
-                        .active_provider()
-                        .map(|p| {
-                            (
-                                p.thinking_mode,
-                                p.reasoning_effort.clone(),
-                                p.thinking_api.supports_thinking(),
-                                p.kind.clone(),
-                                p.model.clone(),
-                            )
-                        })
-                        .unwrap_or((
-                            false,
-                            "high".into(),
-                            false,
-                            // No active provider — dead path, buttons stay greyed.
-                            // Use first manifest key as a placeholder fallback.
-                            autocode_core::state::ProviderKind::new(
-                                autocode_core::state::provider_ids()
-                                    .first()
-                                    .map(|s| s.as_str())
-                                    .unwrap_or("openai-compatible"),
-                            ),
-                            String::new(),
-                        ));
+                    let (thinking, effort, thinking_supported, provider_kind, model) = 'rd: {
+                        // Prefer per-session values so each session remembers its thinking state.
+                        if let Some(sid) = state.active_session_id.as_ref()
+                            && let Some(sess) = state.sessions.iter().find(|s| &s.id == sid)
+                        {
+                            let p = state.active_provider();
+                            let supported = p
+                                .map(|p| p.thinking_api.supports_thinking())
+                                .unwrap_or(false);
+                            let kind = p.map(|p| p.kind.clone()).unwrap_or_else(|| {
+                                autocode_core::state::ProviderKind::new(
+                                    autocode_core::state::provider_ids()
+                                        .first()
+                                        .map(|s| s.as_str())
+                                        .unwrap_or("openai-compatible"),
+                                )
+                            });
+                            let model = p.map(|p| p.model.clone()).unwrap_or_default();
+                            let effort = if sess.reasoning_effort.is_empty() {
+                                p.map(|p| p.reasoning_effort.clone())
+                                    .unwrap_or_else(|| "high".into())
+                            } else {
+                                sess.reasoning_effort.clone()
+                            };
+                            break 'rd (sess.thinking_mode, effort, supported, kind, model);
+                        }
+                        let p = state.active_provider();
+                        (
+                            p.as_ref().map(|p| p.thinking_mode).unwrap_or(false),
+                            p.as_ref()
+                                .map(|p| p.reasoning_effort.clone())
+                                .unwrap_or_else(|| "high".into()),
+                            p.as_ref()
+                                .map(|p| p.thinking_api.supports_thinking())
+                                .unwrap_or(false),
+                            p.map(|p| p.kind.clone()).unwrap_or_else(|| {
+                                autocode_core::state::ProviderKind::new(
+                                    autocode_core::state::provider_ids()
+                                        .first()
+                                        .map(|s| s.as_str())
+                                        .unwrap_or("openai-compatible"),
+                                )
+                            }),
+                            p.as_ref().map(|p| p.model.clone()).unwrap_or_default(),
+                        )
+                    };
 
                     // Changed from ui.vertical to ui.horizontal with center alignment
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -2056,9 +2076,10 @@ fn show_input_row(
                                 "Thinking not supported by this API"
                             })
                             .clicked()
-                            && let Some(p) = state.providers.get_mut(&provider_key)
+                            && let Some(sid) = state.active_session_id.as_ref()
+                            && let Some(sess) = state.sessions.iter_mut().find(|s| &s.id == sid)
                         {
-                            p.thinking_mode = !p.thinking_mode;
+                            sess.thinking_mode = !sess.thinking_mode;
                         }
 
                         // Reasoning effort selector (always visible, greyed if unsupported/off)
@@ -2088,7 +2109,6 @@ fn show_input_row(
                             )
                             .on_hover_text("Reasoning effort");
 
-                        let provider_key_popup = provider_key.clone();
                         let popup_id = egui::Popup::default_response_id(&effort_resp);
                         let available_efforts =
                             autocode_core::state::reasoning_efforts_for_provider(
@@ -2110,10 +2130,11 @@ fn show_input_row(
                                     };
                                     let selected = effort == *label;
                                     if ui.selectable_label(selected, &display).clicked() {
-                                        if let Some(p) =
-                                            state.providers.get_mut(&provider_key_popup)
+                                        if let Some(sid) = state.active_session_id.as_ref()
+                                            && let Some(sess) =
+                                                state.sessions.iter_mut().find(|s| &s.id == sid)
                                         {
-                                            p.reasoning_effort = label.clone();
+                                            sess.reasoning_effort = label.clone();
                                         }
                                         egui::Popup::close_id(ui.ctx(), popup_id);
                                     }
