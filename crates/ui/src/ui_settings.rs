@@ -362,6 +362,12 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
 
                     ui.add_space(8.0);
 
+                    CollapsingHeader::new("Settings")
+                        .id_salt(format!("provider_body_{}", key))
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            ui.add_space(4.0);
+
                     // ── Connection ─────────────────────────────────────
                     CollapsingHeader::new("Connection")
                         .id_salt(format!("conn_{}", key))
@@ -839,7 +845,8 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                 .size(11.0).color(Palette::TEXT_MUTED));
                         }
                     });
-                });
+                        }); // provider body collapsing header
+                }); // Frame.show
 
             ui.add_space(8.0);
         });
