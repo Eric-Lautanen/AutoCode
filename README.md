@@ -30,7 +30,7 @@
 
 Skill files live in the `skills/` directory at project root and ship with the binary. Each file uses YAML frontmatter with a `description` field (fallback to first `# Heading`). The agent discovers skills via `get_skill` — filename, description, and heading are matched by exact, fuzzy, and substring search. Call `get_skill` with an empty keyword to list everything available.
 
-Built-in skills (23 so far) cover task decomposition, codebase orientation, debugging, refactoring, testing, API design, data modeling, error handling, Git workflows, environment/config, security, logging, performance, documentation, language conventions, code review, dependency management, shell usage, web research, file editing strategy, and more.
+Built-in skills (43 so far) cover task decomposition, codebase orientation, debugging, refactoring, testing, API design, data modeling, error handling, Git workflows, environment/config, security, logging, performance, documentation, language conventions, code review, dependency management, shell usage, web research, file editing strategy, and more.
 
 ## Quick Start
 
@@ -159,7 +159,7 @@ Cargo.toml                               # workspace root, resolver = "2"
 │   ├── providers.json                    # built-in provider configs (edit or add your own)
 │   ├── icon.icns / icon.ico              # macOS / Windows icons
 │   └── linux/                           # Linux icons (16–512px)
-├── skills/               — skill .md files indexed by YAML `description` (scanned at runtime, 23 shipped)
+├── skills/               — skill .md files indexed by YAML `description` (scanned at runtime, 43 shipped)
 ├── crates/
 │   ├── autocode/        — binary (~583 lines)
 │   │   ├── main.rs       (51)    # entry, rustls init, eframe::run_native
