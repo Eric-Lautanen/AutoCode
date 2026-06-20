@@ -824,7 +824,39 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
         messages.push(ApiMessage::user(continuation_prompt));
     }
 
-    let thinking = provider.thinking_mode && provider.thinking_api.supports_thinking();
+    // Read thinking/reasoning from the session so each session remembers
+    // its own settings. Falls back to provider defaults for legacy sessions.
+    let session_thinking_mode = state
+        .sessions
+        .iter()
+        .find(|s| s.id == session_id)
+        .map(|s| s.thinking_mode)
+        .unwrap_or(false);
+    let session_reasoning_effort: std::borrow::Cow<'_, str> = state
+        .sessions
+        .iter()
+        .find(|s| s.id == session_id)
+        .and_then(|s| {
+            if s.reasoning_effort.is_empty() {
+                None
+            } else {
+                Some(std::borrow::Cow::Borrowed(s.reasoning_effort.as_str()))
+            }
+        })
+        .unwrap_or_else(|| {
+            if provider.reasoning_effort.is_empty() {
+                let defs = autocode_core::state::model_or_safe(&provider.kind, &provider.model);
+                defs.reasoning_efforts
+                    .first()
+                    .cloned()
+                    .map(std::borrow::Cow::Owned)
+                    .unwrap_or_else(|| std::borrow::Cow::Borrowed("high"))
+            } else {
+                std::borrow::Cow::Borrowed(&provider.reasoning_effort)
+            }
+        });
+
+    let thinking = session_thinking_mode && provider.thinking_api.supports_thinking();
     let defs = autocode_core::state::model_or_safe(&provider.kind, &provider.model);
     let thinking_api = provider.thinking_api.clone();
     // Some providers always do reasoning through their proxy — can't disable.
@@ -842,14 +874,7 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
         let t = provider.max_output_tokens;
         if t > 0 { t } else { defs.max_output_tokens }
     };
-    let reasoning_effort = if provider.reasoning_effort.is_empty() {
-        defs.reasoning_efforts
-            .first()
-            .cloned()
-            .unwrap_or_else(|| "high".into())
-    } else {
-        provider.reasoning_effort.clone()
-    };
+    let reasoning_effort = session_reasoning_effort.to_string();
 
     // Pre-flight context check: estimate if this request fits within the
     // model's context window before sending. Prevents opaque API errors.

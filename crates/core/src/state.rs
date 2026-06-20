@@ -806,6 +806,13 @@ pub struct Session {
     pub requests_per_hour: Option<u32>,
     #[serde(default = "crate::helpers::default_handoff_percent")]
     pub handoff_percent: u8,
+
+    /// Per-session thinking mode — persists across sessions
+    /// so each session remembers whether thinking was on/off.
+    #[serde(default)]
+    pub thinking_mode: bool,
+    #[serde(default)]
+    pub reasoning_effort: String,
 }
 
 impl Session {
@@ -836,6 +843,8 @@ impl Session {
             presence_penalty: 0.0,
             requests_per_hour: None,
             handoff_percent: 80,
+            thinking_mode: false,
+            reasoning_effort: "medium".into(),
         }
     }
 

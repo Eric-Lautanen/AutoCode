@@ -223,6 +223,12 @@ pub struct SessionMeta {
     pub requests_per_hour: Option<u32>,
     #[serde(default = "default_handoff_pct_session")]
     pub handoff_percent: u8,
+
+    /// Per-session thinking mode and reasoning effort.
+    #[serde(default)]
+    pub thinking_mode: bool,
+    #[serde(default)]
+    pub reasoning_effort: String,
 }
 
 fn atomic_write(path: &Path, contents: &str) -> std::io::Result<()> {
@@ -299,6 +305,8 @@ pub fn save_session(project: &Project, session: &Session) -> std::io::Result<()>
         presence_penalty: session.presence_penalty,
         requests_per_hour: session.requests_per_hour,
         handoff_percent: session.handoff_percent,
+        thinking_mode: session.thinking_mode,
+        reasoning_effort: session.reasoning_effort.clone(),
     };
     atomic_write_json(&meta_path, &meta)
 }
@@ -357,6 +365,8 @@ pub fn save_session_meta(project: &Project, session: &Session) -> std::io::Resul
         presence_penalty: session.presence_penalty,
         requests_per_hour: session.requests_per_hour,
         handoff_percent: session.handoff_percent,
+        thinking_mode: session.thinking_mode,
+        reasoning_effort: session.reasoning_effort.clone(),
     };
     atomic_write_json(&meta_path, &meta)
 }
@@ -401,6 +411,8 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
                 session.presence_penalty = meta.presence_penalty;
                 session.requests_per_hour = meta.requests_per_hour;
                 session.handoff_percent = meta.handoff_percent;
+                session.thinking_mode = meta.thinking_mode;
+                session.reasoning_effort = meta.reasoning_effort;
                 // Recompute token estimates from loaded messages so the UI shows
                 // accurate context usage immediately after startup, rather than
                 // falling back to the less-accurate per-message token_count().
@@ -664,6 +676,8 @@ pub fn discover_sessions_from_disk(project: &Project) -> Vec<Session> {
                     presence_penalty: meta.presence_penalty,
                     requests_per_hour: meta.requests_per_hour,
                     handoff_percent: meta.handoff_percent,
+                    thinking_mode: meta.thinking_mode,
+                    reasoning_effort: meta.reasoning_effort,
                 });
             }
         }
