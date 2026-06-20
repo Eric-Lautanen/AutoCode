@@ -28,9 +28,9 @@
 
 ## Skills
 
-Drop `.md` files into the `skills/` folder next to the executable (or in the project root). Each file's first `# Heading` is indexed as its description. On `get_skill`, the agent searches filenames and headings — exact, fuzzy, and substring — for the best match. No source edits needed; just add a file and rebuild.
+Skill files live in the `skills/` directory at project root and ship with the binary. Each file uses YAML frontmatter with a `description` field (fallback to first `# Heading`). The agent discovers skills via `get_skill` — filename, description, and heading are matched by exact, fuzzy, and substring search. Call `get_skill` with an empty keyword to list everything available.
 
-Built-in skills cover egui 0.34 migration, Rust error handling, Python, JavaScript testing, Git, React, Docker, and testing practices.
+Built-in skills (23 so far) cover task decomposition, codebase orientation, debugging, refactoring, testing, API design, data modeling, error handling, Git workflows, environment/config, security, logging, performance, documentation, language conventions, code review, dependency management, shell usage, web research, file editing strategy, and more.
 
 ## Quick Start
 
@@ -135,7 +135,7 @@ Settings are persisted across restarts. Most settings in `app.ron`; **provider c
 | `glob` | Find files matching a glob pattern |
 | `web_search` | Search the web (DuckDuckGo, cached) |
 | `fetch_url` | Fetch a URL's text content with HTML extraction |
-| `get_skill` | Look up a skill by topic — matches filenames and file headings (exact, fuzzy, substring) |
+| `get_skill` | Look up guidance by topic — matches filenames, YAML descriptions, and headings (exact, fuzzy, substring). Empty keyword lists all skills. |
 | `todo_list` | Create/update session-level task list with priorities |
 | `project_task_list` | Create/update project-level task list (persists across sessions) |
 | `handoff` | Signal context limit and continue in new session |
@@ -159,7 +159,7 @@ Cargo.toml                               # workspace root, resolver = "2"
 │   ├── providers.json                    # built-in provider configs (edit or add your own)
 │   ├── icon.icns / icon.ico              # macOS / Windows icons
 │   └── linux/                           # Linux icons (16–512px)
-├── skills/               — skill .md files (scanned at runtime, 8 built-in)
+├── skills/               — skill .md files indexed by YAML `description` (scanned at runtime, 23 shipped)
 ├── crates/
 │   ├── autocode/        — binary (~583 lines)
 │   │   ├── main.rs       (51)    # entry, rustls init, eframe::run_native
@@ -189,7 +189,7 @@ Cargo.toml                               # workspace root, resolver = "2"
 │   ├── fs/               — filesystem tools (~980 lines)
 │   │   ├── shell.rs     (199) # background shell via channels (cmd/sh)
 │   │   ├── explorer.rs  (467) # gitignore-aware list_dir/glob/grep/project_tree
-│   │   ├── skills.rs    (101) # runtime skills directory scanning + heading extraction
+│   │   ├── skills.rs    (167) # runtime skills directory scanning + YAML description extraction
 │   │   └── helpers.rs   (206) # code fence extraction, glob matching
 │   └── ui/               — egui panels (~5,971 lines)
 │       ├── ui_chat.rs  (2198) # chat bubbles, markdown, diff, streaming, tool cards
