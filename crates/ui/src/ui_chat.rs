@@ -368,9 +368,6 @@ pub fn show(
                 if overshoot > 0 {
                     let tail = panel_state.display_buffer.split_off(overshoot);
                     panel_state.display_buffer = tail;
-                    if let Some(sess) = state.active_session() {
-                        panel_state.prev_message_count = sess.messages.len();
-                    }
                 }
             }
         }

@@ -171,7 +171,7 @@ fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: Chat
     {
         msg.id = sess.next_message_id;
         sess.next_message_id += 1;
-        // Error messages are display-only — never persist to disk.
+        // Error messages are display-only - never persist to disk.
         if msg.role != Role::Error {
             state
                 .pending_writes
@@ -179,6 +179,23 @@ fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: Chat
                 .push((sid.to_string(), msg.clone()));
         }
         sess.messages.push(msg);
+        // Update token estimate so the toolbar meter and auto-handoff
+        // threshold reflect the new message immediately.
+        let model = if sess.model.is_empty() {
+            None
+        } else {
+            Some(sess.model.as_str())
+        };
+        let filtered: Vec<autocode_core::state::ChatMessage> = sess
+            .messages
+            .iter()
+            .filter(|m| m.role != Role::Error)
+            .cloned()
+            .collect();
+        sess.estimated_messages_tokens =
+            autocode_core::helpers::estimate_full_request_tokens(&filtered, None, model);
+        // estimated_full_tokens will be refreshed on the next API request
+        // (prepare_request_messages_for_session includes tool definitions).
     }
 }
 
@@ -1970,6 +1987,30 @@ fn poll_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 } else {
                     push_tool_results_to_state(state, runtime, &results);
                     runtime.status = format!("{} tool(s) complete.", results.len());
+                    // Refresh token estimate after tool results are added.
+                    if let Some(sid) = runtime.active_session_id.as_deref() {
+                        if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
+                            let model = if sess.model.is_empty() {
+                                None
+                            } else {
+                                Some(sess.model.as_str())
+                            };
+                            let filtered: Vec<autocode_core::state::ChatMessage> = sess
+                                .messages
+                                .iter()
+                                .filter(|m| m.role != Role::Error)
+                                .cloned()
+                                .collect();
+                            let tools_json = tool_definitions(true);
+                            sess.estimated_full_tokens = autocode_core::helpers::estimate_full_request_tokens(
+                                &filtered,
+                                Some(&tools_json),
+                                model,
+                            );
+                            sess.estimated_messages_tokens =
+                                autocode_core::helpers::estimate_full_request_tokens(&filtered, None, model);
+                        }
+                    }
                     // Only start next completion if shell calls are also done.
                     if runtime.live_shell_rx.is_none() && runtime.pending_tool_remaining.is_empty()
                     {
@@ -2251,6 +2292,31 @@ fn commit_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) {
         runtime.pending_tool_results.clear();
         runtime.status = format!("{} tool(s) complete.", count);
 
+        // Refresh token estimate after tool results are added.
+        if let Some(sid) = runtime.active_session_id.as_deref() {
+            if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
+                let model = if sess.model.is_empty() {
+                    None
+                } else {
+                    Some(sess.model.as_str())
+                };
+                let filtered: Vec<autocode_core::state::ChatMessage> = sess
+                    .messages
+                    .iter()
+                    .filter(|m| m.role != Role::Error)
+                    .cloned()
+                    .collect();
+                let tools_json = tool_definitions(true);
+                sess.estimated_full_tokens = autocode_core::helpers::estimate_full_request_tokens(
+                    &filtered,
+                    Some(&tools_json),
+                    model,
+                );
+                sess.estimated_messages_tokens =
+                    autocode_core::helpers::estimate_full_request_tokens(&filtered, None, model);
+            }
+        }
+
         // Only continue if non-shell tools are also done.
         if runtime.tool_rx.is_none() {
             start_completion(state, runtime);
@@ -2373,9 +2439,10 @@ fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     let Some(sid) = runtime.active_session_id.as_ref() else {
         return;
     };
-    // Use full estimate (messages + tool definitions) for auto-handoff since
-    // that's what's actually sent to the API and consumes the context window.
-    let (used, max, _pct) = state
+    // Use the most up-to-date token count for auto-handoff.
+    // Recompute the full estimate (messages + tool definitions) on the fly
+    // so the threshold check never works with stale data.
+    let (used, max) = state
         .sessions
         .iter()
         .find(|s| s.id == *sid)
@@ -2389,20 +2456,32 @@ fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
                 })
                 .map(|p| p.max_context_tokens as usize)
                 .unwrap_or(128_000);
-            let used = if s.actual_tokens_used > 0 {
-                s.actual_tokens_used
-            } else if s.estimated_full_tokens > 0 {
-                s.estimated_full_tokens
+            // Recompute estimate from current in-RAM messages for real-time accuracy.
+            let model = if s.model.is_empty() {
+                None
             } else {
-                s.token_count()
+                Some(s.model.as_str())
             };
-            (
-                used,
-                max,
-                (used * 100).checked_div(max).unwrap_or(0).min(100),
-            )
+            let filtered: Vec<autocode_core::state::ChatMessage> = s
+                .messages
+                .iter()
+                .filter(|m| m.role != Role::Error)
+                .cloned()
+                .collect();
+            let tools_json = tool_definitions(true);
+            let estimated = autocode_core::helpers::estimate_full_request_tokens(
+                &filtered,
+                Some(&tools_json),
+                model,
+            );
+            let used = if s.actual_tokens_used > 0 {
+                s.actual_tokens_used.max(estimated)
+            } else {
+                estimated
+            };
+            (used, max)
         })
-        .unwrap_or((0, 0, 0));
+        .unwrap_or((0, 0));
     if max == 0 {
         return;
     }
@@ -2493,6 +2572,31 @@ fn auto_continue_impl(
     };
 
     push_runtime(state, runtime, ChatMessage::new(Role::User, msg));
+    // After pushing the continue message, refresh the full token estimate
+    // so the toolbar meter and auto-handoff threshold stay accurate.
+    if let Some(sid) = runtime.active_session_id.as_deref() {
+        if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
+            let model = if sess.model.is_empty() {
+                None
+            } else {
+                Some(sess.model.as_str())
+            };
+            let filtered: Vec<autocode_core::state::ChatMessage> = sess
+                .messages
+                .iter()
+                .filter(|m| m.role != Role::Error)
+                .cloned()
+                .collect();
+            let tools_json = tool_definitions(true);
+            sess.estimated_full_tokens = autocode_core::helpers::estimate_full_request_tokens(
+                &filtered,
+                Some(&tools_json),
+                model,
+            );
+            sess.estimated_messages_tokens =
+                autocode_core::helpers::estimate_full_request_tokens(&filtered, None, model);
+        }
+    }
     start_completion(state, runtime);
 }
 
