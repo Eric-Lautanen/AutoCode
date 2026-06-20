@@ -13,7 +13,7 @@
 
 | Category | What it does |
 |----------|-------------|
-| **AI Coding** | Read, write, edit (7-strategy fuzzy patching), search, and execute code via 20 built-in tools |
+| **AI Coding** | Read, write, edit (7-strategy fuzzy patching), search, and execute code via 21 built-in tools |
 | **Multi-Provider** | Built-in configs for popular providers + add any OpenAI-compatible provider via Settings |
 | **Streaming** | Real-time SSE with auto-recovery, exponential backoff, auto-continue on drop |
 | **Sessions** | Named sessions per project (up to 50), JSONL history, lazy-load display buffer, per-project tab colors |
@@ -25,6 +25,12 @@
 | **Security** | Heap-zeroed `SecretString`, path traversal blocking, scoped shell, atomic writes |
 | **Dark Theme** | 20-color palette, 72 customizable design colors, per-project accent colors |
 | **Cross-Platform** | Windows, macOS, Linux — egui/eframe 0.34, OpenGL/Wgpu auto-select |
+
+## Skills
+
+Drop `.md` files into the `skills/` folder next to the executable (or in the project root). Each file's first `# Heading` is indexed as its description. On `get_skill`, the agent searches filenames and headings — exact, fuzzy, and substring — for the best match. No source edits needed; just add a file and rebuild.
+
+Built-in skills cover egui 0.34 migration, Rust error handling, Python, JavaScript testing, Git, React, Docker, and testing practices.
 
 ## Quick Start
 
@@ -66,7 +72,7 @@ Built in **Rust 2024** with **egui 0.34** / **eframe 0.34**. Zero async — all 
 1. **Startup** — seeds `providers.json` from baked-in defaults on first launch, loads state from `app.ron` + provider configs (including API keys) from `providers.json`
 2. **User input** — typed in chat panel; toolbar selects project/session/provider
 3. **Chat orchestration** — loads history from disk, builds API POST with tool definitions, parses SSE stream, dispatches tool calls
-4. **Tool execution** — 20 handlers run autonomously (filesystem, shell, search, web, tasks, session mgmt)
+4. **Tool execution** — 21 handlers run autonomously (filesystem, shell, search, web, skills, tasks, session mgmt)
 5. **Session persistence** — atomic JSON/JSONL writes, rate-limited, temp file + rename
 6. **Auto-continuation** — near context limit → generates RESUME.md → handoff to new session
 
@@ -109,7 +115,7 @@ Settings are persisted across restarts. Most settings in `app.ron`; **provider c
 - Atomic session file writes (temp + rename)
 - Zero confirmation prompts — designed for trusted environments
 
-## Tools (20)
+## Tools (21)
 
 | Tool | Description |
 |------|-------------|
@@ -129,6 +135,7 @@ Settings are persisted across restarts. Most settings in `app.ron`; **provider c
 | `glob` | Find files matching a glob pattern |
 | `web_search` | Search the web (DuckDuckGo, cached) |
 | `fetch_url` | Fetch a URL's text content with HTML extraction |
+| `get_skill` | Look up a skill by topic — matches filenames and file headings (exact, fuzzy, substring) |
 | `todo_list` | Create/update session-level task list with priorities |
 | `project_task_list` | Create/update project-level task list (persists across sessions) |
 | `handoff` | Signal context limit and continue in new session |
@@ -152,6 +159,7 @@ Cargo.toml                               # workspace root, resolver = "2"
 │   ├── providers.json                    # built-in provider configs (edit or add your own)
 │   ├── icon.icns / icon.ico              # macOS / Windows icons
 │   └── linux/                           # Linux icons (16–512px)
+├── skills/               — skill .md files (scanned at runtime, 8 built-in)
 ├── crates/
 │   ├── autocode/        — binary (~583 lines)
 │   │   ├── main.rs       (51)    # entry, rustls init, eframe::run_native
@@ -173,14 +181,15 @@ Cargo.toml                               # workspace root, resolver = "2"
 │   │   └── tokenizer/
 │   │       └── mod.rs    (88) # TiktokenTokenizer, HeuristicTokenizer
 │   ├── ai/               — AI client + orchestration (~6,461 lines)
-│   │   ├── chat.rs     (3548) # send_message, SSE polling, 20 tool handlers, retry/backoff
+│   │   ├── chat.rs     (3868) # send_message, SSE polling, 21 tool handlers, retry/backoff
 │   │   ├── provider.rs (1712) # raw TCP+rustls HTTP, SSE parsing, tool definitions
 │   │   ├── session.rs   (168) # system prompt seeding, message prep
 │   │   ├── helpers.rs   (895) # fuzzy patching (7 strategies), similarity metrics
 │   │   └── thread_pool.rs (125) # Background pool with panic isolation
-│   ├── fs/               — filesystem tools (~880 lines)
+│   ├── fs/               — filesystem tools (~980 lines)
 │   │   ├── shell.rs     (199) # background shell via channels (cmd/sh)
 │   │   ├── explorer.rs  (467) # gitignore-aware list_dir/glob/grep/project_tree
+│   │   ├── skills.rs    (101) # runtime skills directory scanning + heading extraction
 │   │   └── helpers.rs   (206) # code fence extraction, glob matching
 │   └── ui/               — egui panels (~5,971 lines)
 │       ├── ui_chat.rs  (2198) # chat bubbles, markdown, diff, streaming, tool cards
