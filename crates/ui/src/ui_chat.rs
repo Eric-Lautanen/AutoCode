@@ -14,6 +14,7 @@ use crate::helpers;
 use autocode_ai::chat::{self, ChatRuntime};
 use autocode_ai::provider;
 use autocode_core::{
+    helpers::sanitize_display_text,
     state::{AppState, ChatMessage, DesignSettings, Role, ToolMeta},
     theme::{Palette, ROUND_MD, ROUND_SM, project_accent},
 };
@@ -824,7 +825,7 @@ fn show_user_bubble(ui: &mut egui::Ui, msg: &ChatMessage, panel_w: f32) -> bool 
                     .stroke(Stroke::new(1.0, theme().user_bubble_stroke))
                     .inner_margin(Margin::symmetric(12, 8))
                     .show(ui, |ui| {
-                        render_markdown(ui, &msg.content, true);
+                        render_markdown(ui, &sanitize_display_text(&msg.content), true);
                     });
 
                 let bubble_rect = frame_resp.response.rect;
@@ -884,7 +885,7 @@ fn show_assistant_content(
                 });
             ui.add_space(6.0);
         }
-        render_markdown(ui, &msg.content, true);
+        render_markdown(ui, &sanitize_display_text(&msg.content), true);
     });
 }
 
@@ -1162,7 +1163,7 @@ fn render_structured_tool_result(
                         .color(theme().accent)
                         .strong(),
                 );
-                render_markdown(ui, &msg.content, false);
+                render_markdown(ui, &sanitize_display_text(&msg.content), false);
             } else {
                 let url = meta.file_path.as_deref().unwrap_or("URL");
                 let bytes = meta.byte_count.unwrap_or(0);
@@ -1172,7 +1173,7 @@ fn render_structured_tool_result(
                         .color(theme().accent)
                         .strong(),
                 );
-                render_code_block(ui, url, &msg.content);
+                render_code_block(ui, url, &sanitize_display_text(&msg.content));
             }
         }
         "todo_list" => {
@@ -1262,14 +1263,14 @@ fn render_structured_tool_result(
                     .strong(),
             );
             if !meta.is_error {
-                let body = helpers::get_tool_body(msg);
+                let body = sanitize_display_text(&helpers::get_tool_body(msg));
                 ui.push_id(format!("skill_{}", msg.timestamp), |ui| {
                     render_code_block(ui, "markdown", &body);
                 });
             }
         }
         _ => {
-            render_markdown(ui, &msg.content, false);
+            render_markdown(ui, &sanitize_display_text(&msg.content), false);
         }
     }
 }
