@@ -1986,28 +1986,31 @@ fn poll_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     push_tool_results_to_state(state, runtime, &results);
                     runtime.status = format!("{} tool(s) complete.", results.len());
                     // Refresh token estimate after tool results are added.
-                    if let Some(sid) = runtime.active_session_id.as_deref() {
-                        if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
-                            let model = if sess.model.is_empty() {
-                                None
-                            } else {
-                                Some(sess.model.as_str())
-                            };
-                            let filtered: Vec<autocode_core::state::ChatMessage> = sess
-                                .messages
-                                .iter()
-                                .filter(|m| m.role != Role::Error)
-                                .cloned()
-                                .collect();
-                            let tools_json = tool_definitions(true);
-                            sess.estimated_full_tokens = autocode_core::helpers::estimate_full_request_tokens(
+                    if let Some(sid) = runtime.active_session_id.as_deref()
+                        && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
+                    {
+                        let model = if sess.model.is_empty() {
+                            None
+                        } else {
+                            Some(sess.model.as_str())
+                        };
+                        let filtered: Vec<autocode_core::state::ChatMessage> = sess
+                            .messages
+                            .iter()
+                            .filter(|m| m.role != Role::Error)
+                            .cloned()
+                            .collect();
+                        let tools_json = tool_definitions(true);
+                        sess.estimated_full_tokens =
+                            autocode_core::helpers::estimate_full_request_tokens(
                                 &filtered,
                                 Some(&tools_json),
                                 model,
                             );
-                            sess.estimated_messages_tokens =
-                                autocode_core::helpers::estimate_full_request_tokens(&filtered, None, model);
-                        }
+                        sess.estimated_messages_tokens =
+                            autocode_core::helpers::estimate_full_request_tokens(
+                                &filtered, None, model,
+                            );
                     }
                     // Only start next completion if shell calls are also done.
                     if runtime.live_shell_rx.is_none() && runtime.pending_tool_remaining.is_empty()
@@ -2291,28 +2294,28 @@ fn commit_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) {
         runtime.status = format!("{} tool(s) complete.", count);
 
         // Refresh token estimate after tool results are added.
-        if let Some(sid) = runtime.active_session_id.as_deref() {
-            if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
-                let model = if sess.model.is_empty() {
-                    None
-                } else {
-                    Some(sess.model.as_str())
-                };
-                let filtered: Vec<autocode_core::state::ChatMessage> = sess
-                    .messages
-                    .iter()
-                    .filter(|m| m.role != Role::Error)
-                    .cloned()
-                    .collect();
-                let tools_json = tool_definitions(true);
-                sess.estimated_full_tokens = autocode_core::helpers::estimate_full_request_tokens(
-                    &filtered,
-                    Some(&tools_json),
-                    model,
-                );
-                sess.estimated_messages_tokens =
-                    autocode_core::helpers::estimate_full_request_tokens(&filtered, None, model);
-            }
+        if let Some(sid) = runtime.active_session_id.as_deref()
+            && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
+        {
+            let model = if sess.model.is_empty() {
+                None
+            } else {
+                Some(sess.model.as_str())
+            };
+            let filtered: Vec<autocode_core::state::ChatMessage> = sess
+                .messages
+                .iter()
+                .filter(|m| m.role != Role::Error)
+                .cloned()
+                .collect();
+            let tools_json = tool_definitions(true);
+            sess.estimated_full_tokens = autocode_core::helpers::estimate_full_request_tokens(
+                &filtered,
+                Some(&tools_json),
+                model,
+            );
+            sess.estimated_messages_tokens =
+                autocode_core::helpers::estimate_full_request_tokens(&filtered, None, model);
         }
 
         // Only continue if non-shell tools are also done.
@@ -2572,28 +2575,28 @@ fn auto_continue_impl(
     push_runtime(state, runtime, ChatMessage::new(Role::User, msg));
     // After pushing the continue message, refresh the full token estimate
     // so the toolbar meter and auto-handoff threshold stay accurate.
-    if let Some(sid) = runtime.active_session_id.as_deref() {
-        if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
-            let model = if sess.model.is_empty() {
-                None
-            } else {
-                Some(sess.model.as_str())
-            };
-            let filtered: Vec<autocode_core::state::ChatMessage> = sess
-                .messages
-                .iter()
-                .filter(|m| m.role != Role::Error)
-                .cloned()
-                .collect();
-            let tools_json = tool_definitions(true);
-            sess.estimated_full_tokens = autocode_core::helpers::estimate_full_request_tokens(
-                &filtered,
-                Some(&tools_json),
-                model,
-            );
-            sess.estimated_messages_tokens =
-                autocode_core::helpers::estimate_full_request_tokens(&filtered, None, model);
-        }
+    if let Some(sid) = runtime.active_session_id.as_deref()
+        && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
+    {
+        let model = if sess.model.is_empty() {
+            None
+        } else {
+            Some(sess.model.as_str())
+        };
+        let filtered: Vec<autocode_core::state::ChatMessage> = sess
+            .messages
+            .iter()
+            .filter(|m| m.role != Role::Error)
+            .cloned()
+            .collect();
+        let tools_json = tool_definitions(true);
+        sess.estimated_full_tokens = autocode_core::helpers::estimate_full_request_tokens(
+            &filtered,
+            Some(&tools_json),
+            model,
+        );
+        sess.estimated_messages_tokens =
+            autocode_core::helpers::estimate_full_request_tokens(&filtered, None, model);
     }
     start_completion(state, runtime);
 }
