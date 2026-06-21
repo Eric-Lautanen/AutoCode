@@ -161,7 +161,10 @@ pub fn load_messages_chunked_before(dir: &Path, before_id: u64, count: usize) ->
 /// files are renamed into place.
 pub fn truncate_messages_chunked(dir: &Path, keep_up_to_id: u64) -> std::io::Result<()> {
     let all = read_all_messages_chunked(dir);
-    let keep: Vec<ChatMessage> = all.into_iter().filter(|m| m.id <= keep_up_to_id).collect();
+    let mut keep: Vec<ChatMessage> = all.into_iter().filter(|m| m.id <= keep_up_to_id).collect();
+    for msg in &mut keep {
+        msg.reasoning_content = None;
+    }
 
     // Write new chunks to a temp subdirectory first so that a crash during
     // writing does not destroy the original data.

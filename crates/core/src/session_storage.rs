@@ -271,6 +271,7 @@ pub fn append_messages_to_jsonl(
         .map(|m| {
             let mut m = m.clone();
             sanitize_tool_calls(&mut m.tool_calls);
+            m.reasoning_content = None;
             m
         })
         .collect();
