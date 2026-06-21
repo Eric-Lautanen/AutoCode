@@ -199,6 +199,55 @@ GitHub requires a manual approval click before jobs with a `production` environm
 | OOM / timeout | Test suite too large for runner | Split tests, increase timeout, use larger runner |
 | Stale cache | Cached deps don't match new code | Clear cache, update key strategy |
 
+## Windows-Specific CI/CD Considerations
+
+### GitHub Actions on Windows
+```yaml
+jobs:
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      # Use PowerShell for Windows-specific steps
+      - name: Setup environment
+        shell: pwsh
+        run: |
+          Write-Output "Running on Windows"
+          Get-ComputerInfo | Select OsName, OsVersion
+      
+      # Handle line endings on Windows
+      - name: Configure Git line endings
+        run: git config core.autocrlf false
+      
+      # Cache Windows-specific paths
+      - uses: actions/cache@v3
+        with:
+          path: |
+            ~\AppData\Local\pip\Cache
+            ~\.npm
+          key: windows-${{ hashFiles('**/package-lock.json') }}
+```
+
+### Windows Runner Limitations
+- **Slower startup**: Windows runners take longer to provision
+- **Path differences**: Use forward slashes in scripts when possible; GitHub Actions normalizes them
+- **Tool availability**: Some Unix tools aren't available; use PowerShell equivalents
+- **Line endings**: Configure `.gitattributes` to prevent CRLF issues:
+  ```
+  * text=auto
+  *.sh text eol=lf
+  ```
+
+### Testing on Multiple Platforms
+```yaml
+strategy:
+  matrix:
+    os: [ubuntu-latest, windows-latest, macos-latest]
+    node-version: [18, 20]
+runs-on: ${{ matrix.os }}
+```
+
 ## Anti-Patterns
 
 - **No caching.** Every CI run installs all deps from scratch. Add caching.

@@ -300,6 +300,81 @@ input::placeholder { color: var(--color-text-tertiary); }
 ::selection { background: var(--color-primary); color: white; }
 ```
 
+## Windows-Specific Styling Notes
+
+### Windows System Colors
+Use Windows system colors for native-looking applications:
+
+```css
+/* Windows system colors */
+.button {
+  background-color: ButtonFace;
+  color: ButtonText;
+  border: 1px solid ThreeDShadow;
+}
+
+/* Windows accent color (user-defined) */
+.accent {
+  color: Highlight;
+  background-color: HighlightText;
+}
+```
+
+### Windows Font Stack
+Include Windows system fonts for native feel:
+
+```css
+body {
+  /* Segoe UI is the default Windows system font */
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+/* Fallback for older Windows versions */
+.legacy {
+  font-family: Tahoma, Arial, sans-serif;
+}
+```
+
+### Windows High Contrast Mode
+Always test with Windows High Contrast Mode:
+
+```css
+/* Use system colors for WHCM */
+@media (forced-colors: active) {
+  .button {
+    border: 2px solid ButtonText;
+  }
+  
+  .button:focus {
+    outline: 3px solid Highlight;
+  }
+  
+  /* Don't rely on background colors alone */
+  .card {
+    border: 1px solid CanvasText;
+  }
+}
+```
+
+### Windows Touch Targets
+Ensure adequate touch target sizes for Windows tablets:
+
+```css
+/* Minimum recommended touch target */
+.touch-target {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+/* Windows tablet-specific */
+@media (pointer: coarse) {
+  .button {
+    min-height: 48px;
+    padding: 12px 24px;
+  }
+}
+```
+
 ## Checklist
 
 - [ ] `box-sizing: border-box` applied globally
@@ -309,4 +384,7 @@ input::placeholder { color: var(--color-text-tertiary); }
 - [ ] Only `transform` and `opacity` animated for performance
 - [ ] `:focus-visible` used for focus styles (not `:focus`)
 - [ ] `prefers-reduced-motion` respected for animations
-- [ ] No `!important` (if needed, specificity is wrong — fix the source)
+- [ ] No `!important` (if needed, specificity is wrong - fix the source)
+- [ ] Windows system colors used where appropriate
+- [ ] Windows High Contrast Mode tested
+- [ ] Touch targets adequate for Windows tablets

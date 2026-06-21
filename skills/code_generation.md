@@ -150,13 +150,58 @@ def test_template_engine_renders():
 - **Complex templates**: If your template has more logic than the code it generates, simplify the template or use a different approach.
 - **Not committing generated code**: Some teams `.gitignore` generated files. This works for CI but makes local development harder. Commit generated code for discoverability, but enforce CI checks to keep it in sync.
 
+## Windows-Specific Code Generation Notes
+
+### Line Endings in Generated Code
+Generated code should use consistent line endings regardless of the platform it runs on:
+
+```python
+# Always generate with LF line endings, even on Windows
+def generate_file(content: str, path: str):
+    # Normalize line endings to LF
+    content = content.replace("\r\n", "\n")
+    with open(path, "w", newline="\n") as f:
+        f.write(content)
+```
+
+### Path Handling in Generators
+```python
+import os
+from pathlib import Path
+
+def generate_output_path(base_dir: str, filename: str) -> str:
+    """Generate a cross-platform output path."""
+    # pathlib handles Windows path separators automatically
+    return str(Path(base_dir) / filename)
+
+# Windows: C:\project\output\file.ts
+# Unix: /project/output/file.ts
+```
+
+### PowerShell Script Generation
+When generating PowerShell scripts from templates:
+- Use UTF-8 BOM encoding for PowerShell compatibility
+- Escape backticks (`` ` ``) in generated strings
+- Use forward slashes in paths when possible (PowerShell accepts both)
+
+```python
+# Generate PowerShell-compatible script
+def generate_ps_script(commands: list[str]) -> str:
+    lines = ["#!/usr/bin/env pwsh", ""]
+    for cmd in commands:
+        lines.append(cmd)
+    return "\n".join(lines)
+```
+
 ## Checklist
 
 - [ ] Codegen is the right tool (repetitive, schema-driven, not just 2-3 instances)
 - [ ] Generated files are clearly marked as generated
 - [ ] Generation is deterministic (no timestamps, random IDs, or filesystem-order deps)
 - [ ] CI checks that generated code is up to date
-- [ ] Generated code is not manually edited — customization via extension
+- [ ] Generated code is not manually edited - customization via extension
 - [ ] Generator is version-pinned (tool + templates)
 - [ ] Output is formatted with the project's standard formatter
 - [ ] Tests verify generated output, not generator internals
+- [ ] Generated code uses LF line endings (even on Windows)
+- [ ] Generated paths are cross-platform compatible

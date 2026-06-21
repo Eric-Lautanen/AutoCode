@@ -474,6 +474,9 @@ pub struct ChatRuntime {
     pub handoff_next_prompt: Option<String>,
     /// Orphaned tool-call retry counter to prevent infinite loops.
     pub orphaned_retry_count: u8,
+    /// Deferred completion start — set in send_message so the UI can
+    /// render the user bubble before the disk read + API call fires.
+    pub pending_start: u8,
 }
 
 impl Default for ChatRuntime {
@@ -510,6 +513,7 @@ impl Default for ChatRuntime {
             handoff_trigger_sent: false,
             handoff_next_prompt: None,
             orphaned_retry_count: 0,
+            pending_start: 0,
         }
     }
 }
@@ -539,6 +543,7 @@ impl ChatRuntime {
         self.last_delta_time = None;
         self.live_shell_rx = None;
         self.orphaned_retry_count = 0;
+        self.pending_start = 0;
         if let Some(pid) = self.live_shell_pid.take() {
             kill_process(pid);
         }
@@ -710,7 +715,7 @@ pub fn send_message(
     runtime.orphaned_retry_count = 0;
     runtime.retry_after = None;
     runtime.active_session_id = Some(sid);
-    start_completion(state, runtime);
+    runtime.pending_start = 2;
 }
 
 fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
@@ -1062,6 +1067,16 @@ fn update_runtime(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
     // Auto-handoff: if token usage exceeds the configured threshold and the
     // model hasn't initiated a handoff, trigger one automatically.
     check_auto_handoff(state, runtime);
+
+    // Deferred start: fire completion the frame after send_message so the
+    // user message bubble renders before the disk read + API call begins.
+    if runtime.pending_start > 0 && !runtime.is_busy() {
+        runtime.pending_start -= 1;
+        if runtime.pending_start == 0 {
+            start_completion(state, runtime);
+        }
+        return true;
+    }
 
     // Retry backoff: non-blocking timer. Retries forever for transient errors,
     // only stopped by user interaction (stop button → drain()).

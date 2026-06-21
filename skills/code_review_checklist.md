@@ -94,7 +94,33 @@ These are never acceptable in production code:
 5. **Comment with specifics.** "This could be a security issue because..." not "This looks wrong."
 6. **Distinguish blocking from suggestions.** "Must fix" vs. "Consider..."
 
-## Anti-Patterns
+## Windows-Specific Review Items
+
+When reviewing code that runs on Windows, check:
+
+### Path Handling
+- [ ] Paths use `pathlib.Path` or `path.join()` instead of string concatenation
+- [ ] No hardcoded forward slashes (`/`) in path construction
+- [ ] Path traversal validation works on Windows paths (e.g., `C:\\Windows\\System32`)
+
+### Line Endings
+- [ ] `.gitattributes` configured for the project (especially for shell scripts)
+- [ ] No mixed CRLF/LF in the same file
+
+### File Operations
+- [ ] File handles are properly closed (Windows locks open files)
+- [ ] Atomic writes use `os.replace()` instead of `os.rename()`
+
+### Case Sensitivity
+- [ ] No case-only filename changes (Windows is case-insensitive)
+- [ ] File references match actual case on disk
+
+### Windows-Specific APIs
+- [ ] Windows-specific code is properly guarded (`if os.name == 'nt':`)
+- [ ] Registry access uses proper error handling
+- [ ] Service code handles Windows signals (`CTRL_C_EVENT`, `CTRL_BREAK_EVENT`)
+
+aski## Anti-Patterns
 
 - **Nitpicking style.** Use a linter/formatter for style. Review for substance.
 - **Rubber-stamping.** "LGTM" without reading the code is not a review.

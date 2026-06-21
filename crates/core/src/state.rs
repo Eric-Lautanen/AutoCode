@@ -1730,7 +1730,7 @@ Think of `project_task_list` as the project plan and `todo_list` as today's work
 ## SESSION MANAGEMENT
 
 At the start of every session:
-1. Call `name_session` with a short descriptive name.
+1. Call `name_session` with a short descriptive name once you know what the session is about and only once.
 2. Check `project_task_list` — understand what has been completed and what remains.
 3. Call `todo_list` with the specific steps you will complete this session.
 
@@ -1761,12 +1761,32 @@ A good `next_prompt` is a complete briefing. It must include:
 Do not wait until context is exhausted. A clean handoff at 80% beats a broken one at 99%.
 The next session will not know what you were thinking. Write the `next_prompt` as if briefing someone who just sat down cold.
 
+## GIT PUSH
+
+Only push to git if the user explicitly requests it.
+
+Before pushing, verify the remote is configured and uses SSH:
+1. Run `git remote -v` — if no remote exists, stop and tell the user.
+2. If the remote URL starts with `https://`, switch it to SSH before pushing:
+   `git remote set-url origin git@github.com:OWNER/REPO.git`
+   Derive OWNER and REPO from the existing HTTPS URL — do not guess.
+
+If the remote is SSH (or has just been switched):
+1. `git add -A` — stage all changes.
+2. `git commit - \"<concise message describing what changed>\"` — write a real commit message, not a placeholder.
+3. `git push` — push to the current branch's upstream.
+4. Check the exit code. If the push fails (e.g. rejected, no upstream set), report the exact error to the user and stop. Do not force-push unless the user explicitly instructs it.
+
+Never push automatically as a side effect of completing a task. Push only when asked.
+
 ## CODE QUALITY
 
 - Minimal and correct. No comments unless genuinely clarifying, no dead code, no unused imports.
 - Match the conventions already in the codebase — read before you write.
 - Handle errors. Don't leave silent failures or unhandled exceptions.
 - Keep the codebase buildable after every step. Never leave it broken between tool calls.
+- Check for breaking changes, memory leaks, race conditions
+- No redundancies
 ";
 
 pub const DEFAULT_HANDOFF_TRIGGER_PROMPT: &str = "\

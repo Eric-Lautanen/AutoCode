@@ -197,6 +197,28 @@ def scrape_products(url):
 - Alert when counts drop significantly (site may have changed)
 - Log pages that fail to parse for manual review
 
+## Windows-Specific Considerations
+
+### Path Handling on Windows
+When saving scraped data on Windows:
+```python
+from pathlib import Path
+import re
+
+def safe_filename(name: str) -> str:
+    """Remove characters that are invalid in Windows filenames."""
+    # Windows reserved characters: < > : " / \ | ? *
+    return re.sub(r'[<>:"/\\|?*]', '_', name)
+
+output_path = Path("data") / safe_filename("product: name | version 1.0.txt")
+```
+
+### Line Endings in Scraped Content
+```python
+# Normalize line endings to LF for consistent processing
+text = response.text.replace("\r\n", "\n")
+```
+
 ## Anti-Patterns
 
 - **Using a headless browser when a simple GET works.** 100x slower and more complex.

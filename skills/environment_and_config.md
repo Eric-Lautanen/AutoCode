@@ -140,11 +140,83 @@ FEATURE_DARK_MODE=true
 - Don't nest feature flags (flag A depends on flag B) — it creates a combinatorial explosion
 - Default new flags to `false` in production
 
+## Windows-Specific Configuration Notes
+
+### Windows Environment Variables
+Windows environment variables have specific characteristics:
+
+```powershell
+# PowerShell - set persistent environment variable (user level)
+[Environment]::SetEnvironmentVariable("MYAPP_API_KEY", "secret", "User")
+
+# PowerShell - set persistent environment variable (machine level - requires admin)
+[Environment]::SetEnvironmentVariable("MYAPP_API_KEY", "secret", "Machine")
+
+# PowerShell - read environment variable
+$env:MYAPP_API_KEY
+
+# cmd - set environment variable (current session only)
+set MYAPP_API_KEY=secret
+
+# cmd - set persistent environment variable
+setx MYAPP_API_KEY "secret"
+```
+
+### Windows Registry for Configuration
+Store application configuration in the Windows Registry:
+
+```python
+import winreg
+
+def set_registry_value(key_path, value_name, value):
+    """Store configuration in Windows Registry."""
+    key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path)
+    winreg.SetValueEx(key, value_name, 0, winreg.REG_SZ, value)
+    winreg.CloseKey(key)
+
+def get_registry_value(key_path, value_name):
+    """Read configuration from Windows Registry."""
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path)
+        value, _ = winreg.QueryValueEx(key, value_name)
+        winreg.CloseKey(key)
+        return value
+    except FileNotFoundError:
+        return None
+```
+
+### Windows-Specific Paths
+```python
+import os
+from pathlib import Path
+
+def get_windows_config_dir(app_name: str) -> Path:
+    """Get appropriate config directory on Windows."""
+    appdata = os.environ.get('APPDATA')
+    if appdata:
+        return Path(appdata) / app_name
+    return Path.home() / app_name
+
+def get_windows_data_dir(app_name: str) -> Path:
+    """Get appropriate data directory on Windows."""
+    localappdata = os.environ.get('LOCALAPPDATA')
+    if localappdata:
+        return Path(localappdata) / app_name
+    return Path.home() / app_name / "Data"
+```
+
+### Windows Services Configuration
+When running as a Windows service, configuration may come from:
+- Registry keys under `HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\<ServiceName>`
+- Service arguments passed during installation
+- External configuration files in `%PROGRAMDATA%`
+
 ## Anti-Patterns
 
-- **Hardcoding config values.** `const dbUrl = "postgres://prod-server/mydb"` — this will end up in git.
-- **Committing .env files.** Even "just for reference" — secrets in git history are forever.
-- **Logging secrets.** `console.log("Connecting to", dbUrl)` — log files are not secure.
+- **Hardcoding config values.** `const dbUrl = "postgres://prod-server/mydb"` - this will end up in git.
+- **Committing .env files.** Even "just for reference" - secrets in git history are forever.
+- **Logging secrets.** `console.log("Connecting to", dbUrl)` - log files are not secure.
 - **Different config structures per environment.** If dev uses JSON and prod uses env vars, you'll have bugs that only appear in production.
 - **Silent defaults for required config.** If the database URL is missing, the app should crash, not silently use localhost.
 - **Not documenting required config.** New developers should be able to copy `.env.example` and start the app.
+- **Storing config in the wrong place on Windows.** Use `%APPDATA%` for user config, `%LOCALAPPDATA%` for data, `%PROGRAMDATA%` for shared config.

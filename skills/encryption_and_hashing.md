@@ -220,6 +220,79 @@ key = HKDF(
 | Encrypt-then-MAC vs MAC-then-encrypt | MAC-then-encrypt has padding oracle attacks | Use AEAD (GCM) which does encrypt-then-MAC internally |
 | Not authenticating ciphertext | Ciphertext can be tampered with | Always use authenticated encryption (GCM) |
 
+## Windows-Specific Cryptography Notes
+
+### Windows Certificate Store
+Windows uses its own certificate store. Access it properly:
+
+```python
+import ssl
+import certifi
+
+# Use Windows certificate store via certifi
+context = ssl.create_default_context(cafile=certifi.where())
+
+# Or use Windows native certificate store
+import ctypes
+from ctypes import wintypes
+
+def get_windows_cert_store():
+    """Access Windows certificate store."""
+    # Use wincertstore or similar library
+    import wincertstore
+    with wincertstore.CertSystemStore("MY") as store:
+        for cert in store.itercerts(usage=wincertstore.SERVER_AUTH):
+            yield cert
+```
+
+### Windows DPAPI (Data Protection API)
+Use Windows DPAPI for encrypting data tied to the user or machine:
+
+```python
+import ctypes
+from ctypes import wintypes
+
+def encrypt_with_dpapi(data: bytes) -> bytes:
+    """Encrypt data using Windows DPAPI."""
+    CRYPTPROTECT_UI_FORBIDDEN = 0x01
+    
+    class DATA_BLOB(ctypes.Structure):
+        _fields_ = [
+            ("cbData", wintypes.DWORD),
+            ("pbData", wintypes.LPBYTE)
+        ]
+    
+    input_blob = DATA_BLOB(len(data), ctypes.cast(data, wintypes.LPBYTE))
+    output_blob = DATA_BLOB()
+    
+    ctypes.windll.crypt32.CryptProtectData(
+        ctypes.byref(input_blob),
+        None,
+        None,
+        None,
+        None,
+        CRYPTPROTECT_UI_FORBIDDEN,
+        ctypes.byref(output_blob)
+    )
+    
+    result = ctypes.string_at(output_blob.pbData, output_blob.cbData)
+    ctypes.windll.kernel32.LocalFree(output_blob.pbData)
+    return result
+```
+
+### Windows Credential Manager
+Store credentials securely using Windows Credential Manager:
+
+```python
+import keyring
+
+# Store password in Windows Credential Manager
+keyring.set_password("myapp", "username", "password")
+
+# Retrieve password
+password = keyring.get_password("myapp", "username")
+```
+
 ## Checklist
 
 - [ ] Using established algorithms (AES-GCM, bcrypt/argon2, Ed25519)
@@ -230,3 +303,6 @@ key = HKDF(
 - [ ] Keys stored in secret manager, not hardcoded or in git
 - [ ] Key rotation plan exists
 - [ ] No custom crypto implementations
+- [ ] Windows: Certificate store accessed properly
+- [ ] Windows: DPAPI used for user/machine-bound encryption
+- [ ] Windows: Credential Manager used for password storage

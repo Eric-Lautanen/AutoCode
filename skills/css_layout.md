@@ -260,6 +260,59 @@ h1 {
 - **Grid debugger**: DevTools shows grid lines and area names
 - **Check the parent**: Most layout bugs are in the container, not the child
 
+## Windows-Specific Layout Notes
+
+### High DPI Displays on Windows
+Windows handles DPI scaling differently from macOS. Layouts may appear at different sizes:
+
+```css
+/* Use relative units for DPI-aware layouts */
+.container {
+  /* Good: relative units scale with DPI */
+  padding: 1rem;
+  max-width: 120ch;
+}
+
+/* Avoid fixed pixel sizes for text */
+.text {
+  font-size: 1rem;  /* Good: scales with user preferences */
+  /* NOT: font-size: 16px; */
+}
+```
+
+### Windows Snap Layouts
+Windows 11 introduced snap layouts. Test your responsive design at these sizes:
+
+```css
+/* Common Windows snap sizes */
+@media (max-width: 600px) { /* Phone / small snap */ }
+@media (min-width: 601px) and (max-width: 1024px) { /* Tablet / medium snap */ }
+@media (min-width: 1025px) { /* Desktop / large snap */ }
+```
+
+### Scrollbar Space on Windows
+Windows scrollbars take up space (unlike macOS overlay scrollbars). Account for this:
+
+```css
+/* Reserve space for scrollbar to prevent layout shift */
+.scrollable {
+  overflow-y: auto;
+  scrollbar-gutter: stable;  /* Reserve space for scrollbar */
+}
+```
+
+### Windows Taskbar and Safe Areas
+When building full-screen or PWA layouts on Windows:
+
+```css
+/* Account for Windows taskbar in full-screen layouts */
+.full-screen {
+  height: 100vh;
+  /* Windows taskbar may reduce available height */
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+```
+
 ## Checklist
 
 - [ ] Flexbox for 1D layouts, grid for 2D layouts
@@ -270,3 +323,6 @@ h1 {
 - [ ] z-index values are reasonable (not 99999)
 - [ ] Container queries used where component responds to parent size
 - [ ] Layout tested at all breakpoints
+- [ ] Windows DPI scaling handled (relative units)
+- [ ] Windows snap layouts tested
+- [ ] Scrollbar space reserved on Windows

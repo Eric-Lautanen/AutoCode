@@ -188,6 +188,78 @@ def upcast(event):
 - **Debugging async flows**: Without correlation IDs, tracing an event through multiple services is nearly impossible. Always propagate correlation IDs.
 - **Schema drift**: Without a schema registry, producers and consumers drift apart. Use a schema registry (Avro + Confluent Schema Registry, Protobuf, or JSON Schema).
 
+## Windows-Specific Event-Driven Notes
+
+### Windows Event Log Integration
+On Windows, integrate with the Windows Event Log for system-level events:
+
+```python
+import win32evtlog
+import win32evtlogutil
+
+def log_to_windows_event(message, event_type=win32evtlog.EVENTLOG_INFORMATION_TYPE):
+    """Log an event to the Windows Event Log."""
+    win32evtlogutil.ReportEvent(
+        appName="MyApp",
+        eventID=1,
+        eventCategory=0,
+        eventType=event_type,
+        strings=[message]
+    )
+
+# Usage
+log_to_windows_event("OrderCreated event processed successfully")
+```
+
+### Windows Message Queuing (MSMQ)
+For Windows-native messaging, consider MSMQ:
+
+```python
+import win32com.client
+
+def send_to_msmq(queue_path, message_body):
+    """Send message to MSMQ queue."""
+    msmq = win32com.client.Dispatch("MSMQ.MSMQQueueInfo")
+    msmq.FormatName = queue_path
+    queue = msmq.Open(2, 0)  # Send access
+    
+    msg = win32com.client.Dispatch("MSMQ.MSMQMessage")
+    msg.Body = message_body
+    msg.Send(queue)
+    queue.Close()
+```
+
+### Windows Named Pipes for Inter-Process Events
+Use named pipes for fast inter-process communication on Windows:
+
+```python
+import win32pipe
+import win32file
+
+def create_named_pipe(pipe_name):
+    """Create a Windows named pipe for event communication."""
+    pipe = win32pipe.CreateNamedPipe(
+        r'\\.\pipe\' + pipe_name,
+        win32pipe.PIPE_ACCESS_DUPLEX,
+        win32pipe.PIPE_TYPE_MESSAGE | win32pipe.PIPE_READMODE_MESSAGE | win32pipe.PIPE_WAIT,
+        1, 65536, 65536, 0, None
+    )
+    return pipe
+```
+
+### Windows Service Bus
+For Azure Service Bus on Windows:
+
+```python
+from azure.servicebus import ServiceBusClient
+
+def send_event_to_service_bus(connection_string, queue_name, event_data):
+    azure service bus for cloud-based event-driven architecture on Windows"""
+    client = ServiceBusClient.from_connection_string(connection_string)
+    sender = client.get_queue_sender(queue_name)
+    sender.send_messages(event_data)
+```
+
 ## Checklist
 
 - [ ] Events vs. commands distinction is clear (events = facts, commands = requests)
@@ -198,3 +270,5 @@ def upcast(event):
 - [ ] Event versioning strategy defined (additive changes, upcasting)
 - [ ] Correlation IDs propagated through the entire event chain
 - [ ] Transactional outbox pattern used for database + event publishing
+- [ ] Windows: Event Log integration considered for system events
+- [ ] Windows: MSMQ or Named Pipes used for local IPC when appropriate

@@ -173,4 +173,31 @@ Run a local server that mimics the real API:
 - Most realistic but slowest and least deterministic
 - Run in CI only for critical paths
 
+## Windows-Specific Networking Notes
+
+### Certificate Stores on Windows
+When integrating with APIs on Windows, certificate validation may use the Windows certificate store:
+
+```python
+# Python requests on Windows uses the OS certificate store by default
+# If you encounter SSL errors, the cert may need to be in the Windows store
+import certifi
+import os
+
+# Force using certifi's bundle instead of Windows store
+os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
+```
+
+### Proxy Configuration on Windows
+Windows environments often use corporate proxies. Handle proxy settings:
+
+```python
+import os
+
+# Check for Windows proxy settings
+proxy = os.environ.get('HTTP_PROXY') or os.environ.get('http_proxy')
+if proxy:
+    session.proxies = {'http': proxy, 'https': proxy}
+```
+
 See also: `error_handling_design` for error propagation patterns, `security_basics` for credential handling.

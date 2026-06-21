@@ -85,7 +85,45 @@ Stop orienting and start implementing when you can:
 
 **Don't stop if:** You can't find where a key piece of logic lives, or you don't know what framework is in use. A few more minutes of reading saves hours of rework.
 
+## Windows-Specific Orientation Notes
+
+### Windows Project Indicators
+When orienting to a Windows-specific project, look for:
+
+- **`.sln` files**: Visual Studio solution files
+- **`.csproj` / `.vbproj`**: .NET project files
+- **`*.ps1` files**: PowerShell scripts (build, deploy, setup)
+- **`*.bat` / `*.cmd`**: Batch files for Windows automation
+- **`setup.py` with `pywin32`**: Python projects with Windows dependencies
+- **`requirements.txt` with `pypiwin32` or `pywin32`**: Windows-specific Python packages
+
+### Windows Path Conventions
+```
+C:\project\src\main.py          # Absolute path
+..\config\settings.json          # Relative path (parent directory)
+%APPDATA%\MyApp\config.json     # Environment variable in path
+~\Documents\project              # User home directory
+```
+
+### Common Windows Build Tools
+- **MSBuild**: `.csproj`, `.sln` files
+- **NuGet**: Package manager for .NET (`packages.config`, `*.nupkg`)
+- **Chocolatey**: Windows package manager (`choco install`)
+- **winget**: Modern Windows package manager (`winget install`)
+
+### WSL and Cross-Platform Projects
+Projects may have both Windows and WSL components:
+- `/mnt/c/` paths indicate WSL usage
+- `.wslconfig` or `wsl.conf` files
+- Docker Desktop with WSL2 backend
+
 ## Anti-Patterns
+
+- **Reading every file.** You don't need to understand everything - only the parts relevant to your task.
+- **Starting with implementation details.** Read the interface first; implementation is a distraction early on.
+- **Ignoring tests.** Tests are the most reliable documentation of expected behavior.
+- **Assuming the README is accurate.** READMEs go stale. The manifest and the code are the source of truth.
+- **Skipping the manifest.** The manifest tells you 80% of what you need to know in 30 seconds.
 
 - **Reading every file.** You don't need to understand everything — only the parts relevant to your task.
 - **Starting with implementation details.** Read the interface first; implementation is a distraction early on.

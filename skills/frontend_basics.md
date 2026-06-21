@@ -182,6 +182,84 @@ try {
 - **Not handling loading states**: Show a loading indicator while data is being fetched.
 - **Not handling error states**: Show an error message when the fetch fails.
 
+## Windows-Specific Frontend Notes
+
+### Windows High Contrast Mode
+Windows High Contrast Mode (WHCM) is critical for accessibility:
+
+```css
+/* Use system colors for WHCM compatibility */
+.button {
+  background-color: ButtonFace;
+  color: ButtonText;
+  border: 2px solid ButtonText;
+}
+
+/* Or use forced-colors media query */
+@media (forced-colors: active) {
+  .card {
+    border: 2px solid CanvasText;
+  }
+}
+```
+
+### Windows Font Stack
+Include Windows system fonts:
+
+```css
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+}
+```
+
+### Windows Touch Targets
+Windows tablets require adequate touch targets:
+
+```css
+/* Minimum 44px touch target */
+.touch-target {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+/* Windows tablet-specific */
+@media (pointer: coarse) {
+  .button {
+    min-height: 48px;
+    padding: 12px 24px;
+  }
+}
+```
+
+### Windows Scrollbar Styling
+Windows scrollbars take up space (unlike macOS overlay scrollbars):
+
+```css
+/* Consistent scrollbar styling */
+::-webkit-scrollbar {
+  width: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-bg-secondary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-default);
+  border-radius: 6px;
+}
+```
+
+### Windows Snap Layouts
+Test responsive design at Windows snap sizes:
+
+```css
+/* Common Windows snap sizes */
+@media (max-width: 600px) { /* Phone / small snap */ }
+@media (min-width: 601px) and (max-width: 1024px) { /* Tablet / medium snap */ }
+@media (min-width: 1025px) { /* Desktop / large snap */ }
+```
+
 ## Anti-Patterns
 
 - **Using divs for everything.** `<div onclick>` instead of `<button>`, `<div class="nav">` instead of `<nav>`.
@@ -189,3 +267,4 @@ try {
 - **Not preventing default on form submit.** Page reloads on every form submission.
 - **Storing tokens in localStorage.** Vulnerable to XSS. Use HttpOnly cookies.
 - **Not handling the offline state.** The network will fail. Handle it gracefully.
+- **Not testing Windows High Contrast Mode.** Critical for Windows accessibility.

@@ -194,11 +194,63 @@ Thread A holds Lock 1 and waits for Lock 2. Thread B holds Lock 2 and waits for 
 - Use `sync.WaitGroup` to wait for goroutines to finish
 - Use `context.Context` for cancellation and timeouts
 
+## Windows-Specific Concurrency Notes
+
+### Windows Thread Pool API
+Windows provides a native thread pool API for efficient thread management:
+
+```c
+// Windows Thread Pool API (C/C++)
+#include <windows.h>
+
+PTP_POOL pool = CreateThreadpool(NULL);
+SetThreadpoolThreadMinimum(pool, 2);
+SetThreadpoolThreadMaximum(pool, 10);
+
+// Submit work
+PTP_WORK work = CreateThreadpoolWork(WorkCallback, context, NULL);
+SubmitThreadpoolWork(work);
+```
+
+### Python on Windows
+```python
+# multiprocessing on Windows requires __main__ guard
+if __name__ == "__main__":
+    with multiprocessing.Pool(4) as pool:
+        results = pool.map(process_item, items)
+```
+
+### asyncio on Windows
+```python
+import asyncio
+
+# Windows uses SelectorEventLoop by default (Python 3.8+)
+# For subprocess support, use ProactorEventLoop
+async def run_subprocess():
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    proc = await asyncio.create_subprocess_exec("cmd", "/c", "echo hello")
+    await proc.wait()
+```
+
+### Named Mutexes on Windows
+```python
+import ctypes
+from ctypes import wintypes
+
+# Create a named mutex for cross-process synchronization
+mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "MyAppMutex")
+ctypes.windll.kernel32.WaitForSingleObject(mutex, 0xFFFFFFFF)  # INFINITE
+# ... critical section ...
+ctypes.windll.kernel32.ReleaseMutex(mutex)
+```
+
 ## Anti-Patterns
 
 - **Shared mutable state without synchronization.** This is a data race. It will corrupt data.
-- **Blocking in async code.** `time.sleep()`, `requests.get()`, CPU work — all block the event loop.
+- **Blocking in async code.** `time.sleep()`, `requests.get()`, CPU work - all block the event loop.
 - **Unbounded queues.** They grow until memory runs out. Use bounded queues.
 - **Nested locks.** The #1 cause of deadlocks.
 - **Not handling cancellation.** Long-running tasks should check for cancellation signals.
 - **Assuming atomic operations when they're not.** `counter += 1` is not atomic in most languages.
+- **Forgetting `__main__` guard on Windows.** `multiprocessing` on Windows requires it.

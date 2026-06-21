@@ -208,12 +208,15 @@ chokidar.watch('./src').on('all', (event, path) => {
 | Max path length | 260 chars (can be extended) | 1024 chars | Varies by filesystem |
 | Line endings | `\r\n` (CRLF) | `\n` (LF) | `\n` (LF) |
 | File in use | Cannot delete/replace open files | Can replace open files | Can replace open files |
+| Hidden files | `attrib +h file` | Leading dot `.file` | Leading dot `.file` |
+| Drive letters | `C:\`, `D:\` | `/Volumes/` | `/mnt/` or `/media/` |
 
 **Practical rules**:
 - Always use path.join(), never hardcode separators
 - Always use `\n` internally; convert to `\r\n` only at output boundaries if needed
 - Never assume case-insensitivity (code that works on Windows may break on Linux)
 - On Windows, close files before trying to delete or rename them
+- On Windows, use `os.replace()` instead of `os.rename()` for atomic overwrites (works across platforms)
 
 ## Globbing
 

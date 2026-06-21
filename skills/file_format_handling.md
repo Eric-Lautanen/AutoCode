@@ -225,6 +225,100 @@ with open("large.csv") as f:
 
 **Rule:** If the file is larger than 100MB, use streaming. If it's larger than 1GB, streaming is mandatory.
 
+## Windows-Specific File Format Notes
+
+### Windows-1252 Encoding
+Windows often uses Windows-1252 (CP1252) encoding, especially for files from Excel or older Windows applications:
+
+```python
+import chardet
+
+def read_windows_file(filepath):
+    """Read file with Windows encoding fallback."""
+    # Try UTF-8 first
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            return f.read()
+    except UnicodeDecodeError:
+        pass
+    
+    # Detect encoding
+    with open(filepath, 'rb') as f:
+        raw = f.read()
+        result = chardet.detect(raw)
+        encoding = result.get('encoding', 'utf-8')
+    
+    # Fallback to Windows-1252 if detection fails
+    if not encoding:
+        encoding = 'windows-1252'
+    
+    return raw.decode(encoding)
+```
+
+### Excel CSV on Windows
+Excel on Windows produces CSVs with specific characteristics:
+
+```python
+import csv
+
+def read_excel_csv(filepath):
+    """Read CSV produced by Excel on Windows."""
+    # Excel CSVs on Windows may use:
+    # - Windows-1252 encoding
+    # - BOM (Byte Order Mark)
+    # - Semicolon separator (in some locales)
+    # - CRLF line endings
+    
+    with open(filepath, 'r', encoding='utf-8-sig', newline='') as f:
+        # Try comma first
+        reader = csv.DictReader(f)
+        try:
+            return list(reader)
+        except csv.Error:
+            pass
+        
+        # Try semicolon (European Windows)
+        f.seek(0)
+        reader = csv.DictReader(f, delimiter=';')
+        return list(reader)
+```
+
+### Windows INI Files
+Windows INI files have specific conventions:
+
+```python
+import configparser
+
+def read_windows_ini(filepath):
+    """Read Windows INI file with proper handling."""
+    config = configparser.ConfigParser()
+    # Windows INI files may have BOM
+    with open(filepath, 'r', encoding='utf-8-sig') as f:
+        config.read_file(f)
+    return config
+```
+
+### Registry Files (.reg)
+Parse Windows registry export files:
+
+```python
+import re
+
+def parse_reg_file(filepath):
+    """Parse Windows .reg file."""
+    entries = {}
+    with open(filepath, 'r', encoding='utf-16') as f:
+        content = f.read()
+    
+    # Parse registry entries
+    for match in re.finditer(r'\[([^\]]+)\](.*?)(?=\[|$)', content, re.DOTALL):
+        key_path = match.group(1)
+        values_block = match.group(2)
+        entries[key_path] = parse_reg_values(value_block)
+    
+    return entries
+```
+
 ## Anti-Patterns
 
 - **Parsing CSV by splitting on commas.** This breaks on quoted fields with commas inside.
@@ -233,3 +327,4 @@ with open("large.csv") as f:
 - **Loading huge files into memory.** Use streaming parsers.
 - **Hand-rolling XML/HTML parsers.** Use a proper parser library.
 - **Not validating at the boundary.** Bad data in = bad data out.
+- **Assuming UTF-8 on Windows.** Windows often uses Windows-1252 or UTF-16.

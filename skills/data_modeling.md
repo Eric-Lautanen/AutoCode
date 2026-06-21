@@ -173,6 +173,67 @@ def process_email(email: Email):  # guaranteed valid by the type system
 - **Consistent terminology**: If it's "customer" in one place, it's "customer" everywhere — not "user", "client", and "account" for the same concept
 - **Avoid technical abbreviations**: `created_at` not `ts`, `is_active` not `flg`
 
+## Windows-Specific Data Modeling Notes
+
+### File Path Fields
+When modeling data that includes file paths on Windows:
+
+```python
+from pathlib import Path
+from pydantic import BaseModel, validator
+
+class Document(BaseModel):
+    name: str
+    file_path: str
+    
+    @validator('file_path')
+    def validate_windows_path(cls, v):
+        """Ensure path is valid on Windows."""
+        path = Path(v)
+        # Windows max path length (without \\?\ prefix)
+        if len(str(path)) > 260:
+            raise ValueError("Path exceeds Windows maximum length")
+        return v
+```
+
+### Windows-Specific Types
+Model Windows-specific concepts when relevant:
+
+```python
+from enum import Enum
+from typing import Optional
+
+class WindowsPrivilege(Enum):
+    """Windows privilege levels."""
+    STANDARD = "standard"
+    ADMINISTRATOR = "administrator"
+    SYSTEM = "system"
+
+class WindowsUser(BaseModel):
+    """User model with Windows-specific fields."""
+    username: str
+    domain: Optional[str]  # DOMAIN\\username format
+    sid: Optional[str]     # Security Identifier
+    privilege: WindowsPrivilege = WindowsPrivilege.STANDARD
+    is_local_account: bool = False
+```
+
+### Registry Path Modeling
+When working with Windows registry:
+
+```python
+from pydantic import BaseModel, Field
+
+class RegistryKey(BaseModel):
+    """Model for Windows registry keys."""
+    hive: str = Field(..., regex=r"^(HKEY_|HKCU|HKLM|HKCR|HKU|HKCC)")
+    path: str
+    value_name: Optional[str]
+    
+    def full_path(self) -> str:
+        return f"{self.hive}\\{self.path}"
+```
+
 ## Anti-Patterns
 
 - **Using maps/dicts for domain objects.** If you know the shape, use a struct/class.
@@ -180,3 +241,4 @@ def process_email(email: Email):  # guaranteed valid by the type system
 - **Premature denormalization.** Normalize first, denormalize when you measure a problem.
 - **Giant god objects.** If a struct has 30 fields, it's probably multiple concepts merged.
 - **Leaking implementation details into the domain model.** Database column names shouldn't dictate domain terminology.
+- **Hardcoding Windows paths.** Use `Path` objects and environment variables.

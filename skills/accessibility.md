@@ -165,6 +165,23 @@ WCAG AA minimum contrast ratios:
 
 **Important**: Automated tools catch syntax issues (missing alt, bad ARIA). They cannot catch meaning issues (wrong alt text, confusing heading order, bad focus management). Manual testing is essential.
 
+## Windows High Contrast Mode
+
+Windows High Contrast Mode (WHCM) is used by many users with low vision. Test your UI with WHCM enabled:
+
+- **Don't rely on background colors alone** - WHCM overrides them. Use borders or outlines for visual distinction.
+- **Use the `forced-colors` media query** to adapt when WHCM is active:
+
+```css
+@media (forced-colors: active) {
+  .card {
+    border: 2px solid CanvasText;  /* Visible in any high contrast theme */
+  }
+}
+```
+
+- **Ensure focus indicators remain visible** - WHCM may override your custom focus styles. Use `outline: 2px solid currentColor` for compatibility.
+
 ## Checklist
 
 - [ ] All interactive elements use semantic HTML (button, a, input, not div)
@@ -179,3 +196,4 @@ WCAG AA minimum contrast ratios:
 - [ ] Modals trap focus and return focus on close
 - [ ] Automated a11y audit passes (axe, Lighthouse)
 - [ ] Manual keyboard walkthrough completed
+- [ ] Tested with Windows High Contrast Mode (if targeting Windows users)

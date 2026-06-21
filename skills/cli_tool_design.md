@@ -189,6 +189,58 @@ limit = args.limit or os.environ.get("MYTOOL_LIMIT") or config.get("limit") or 1
 
 **Why this order:** Command-line flags are the most explicit (user typed them). Environment variables are for persistent settings. Config files are for project-level defaults. Hardcoded defaults are the fallback.
 
+## Windows-Specific CLI Considerations
+
+### Path Handling on Windows
+Windows paths contain spaces and backslashes - handle them correctly:
+
+```python
+import argparse
+import os
+
+parser = argparse.ArgumentParser()
+parser.add_argument("input", help="Input file path")
+args = parser.parse_args()
+
+# Normalize paths for cross-platform compatibility
+input_path = os.path.normpath(args.input)
+# On Windows: "C:\\Users\\Name With Spaces\\file.txt" -> handled correctly
+```
+
+### Console Output on Windows
+```python
+import sys
+
+# Windows console may not support ANSI colors by default
+# Use colorama or check for Windows terminal support
+def supports_color():
+    if sys.platform == "win32":
+        # Windows 10+ supports ANSI with ENABLE_VIRTUAL_TERMINAL_PROCESSING
+        return sys.stdout.isatty()
+    return sys.stdout.isatty()
+
+if supports_color():
+    # Enable ANSI colors on Windows
+    if sys.platform == "win32":
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
+```
+
+### Windows Executable Packaging
+```powershell
+# Create a standalone .exe from Python script
+pip install pyinstaller
+pyinstaller --onefile mytool.py
+
+# Result: dist/mytool.exe (Windows executable)
+```
+
+### PowerShell vs. cmd
+- **PowerShell**: Modern, supports pipelines, preferred for new tools
+- **cmd**: Legacy, limited features, still used in some environments
+- **Recommendation**: Document PowerShell syntax; cmd users can usually adapt
+
 ## Anti-Patterns
 
 - **Mixing data and progress on stdout.** `mytool data.csv > out.txt` should not include "Processing..." in the output.

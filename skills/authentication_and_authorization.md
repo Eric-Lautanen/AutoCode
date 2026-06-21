@@ -167,6 +167,37 @@ def update_order(order_id, data):
 - On logout, delete the refresh token from the database
 - On password change, delete all refresh tokens for that user
 
+## Windows-Specific Considerations
+
+### Windows Authentication (NTLM/Kerberos)
+When building enterprise applications on Windows, you may need to integrate with Windows Authentication:
+
+```python
+# Python requests-ntlm for NTLM authentication
+from requests_ntlm import HttpNtlmAuth
+
+session.auth = HttpNtlmAuth('DOMAIN\\username', 'password')
+response = session.get('https://internal.corp/api/data')
+```
+
+- **NTLM**: Legacy, use only when required by older systems
+- **Kerberos**: Preferred for modern Windows environments. Requires `requests-kerberos` or equivalent
+- **SSO**: Windows-integrated authentication can provide seamless login via the user's domain credentials
+
+### Credential Storage on Windows
+Use the Windows Credential Manager for storing application credentials securely:
+
+```python
+# Using keyring library (cross-platform, uses Windows Credential Manager on Windows)
+import keyring
+
+# Store password
+keyring.set_password("myapp", "username", "password")
+
+# Retrieve password
+password = keyring.get_password("myapp", "username")
+```
+
 ## Anti-Patterns
 
 - **Rolling your own auth.** Use established libraries. Auth has too many edge cases.

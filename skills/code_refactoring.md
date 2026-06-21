@@ -110,13 +110,53 @@ Techniques for staying compilable:
 - **Near a deadline.** Refactoring introduces risk. Don't do it when you can't afford a regression.
 - **The code works and isn't changing.** Don't refactor code that's stable, tested, and not being modified. Leave it alone.
 
+## Windows-Specific Refactoring Notes
+
+### Case Sensitivity Issues
+Windows file system is case-insensitive. Refactoring that renames files by case only can cause issues:
+
+```bash
+# This may fail on Windows
+git mv OldName.ts oldname.ts
+
+# Workaround: rename in two steps
+git mv OldName.ts temp.ts
+git mv temp.ts oldname.ts
+```
+
+### Path Length During Refactoring
+When moving files during refactoring, watch for Windows path length limits:
+
+```python
+import os
+from pathlib import Path
+
+def safe_move(src: Path, dst: Path):
+    """Move file with Windows path length check."""
+    if os.name == 'nt' and len(str(dst)) > 240:
+        raise ValueError(f"Destination path too long for Windows: {dst}")
+    src.rename(dst)
+```
+
+### Git Line Endings During Refactoring
+Large refactoring may touch many files. Ensure consistent line endings:
+
+```bash
+# Check for mixed line endings before committing
+find . -type f -name "*.py" -o -name "*.ts" | xargs file
+
+# Fix if needed
+git add --renormalize .
+```
+
 ## Anti-Patterns
 
 - **Big bang refactoring.** Rewriting a whole module at once. It never works on the first try.
 - **Refactoring without tests.** You have no way to verify behavior is preserved.
 - **Refactoring and feature work in the same commit.** If something breaks, you can't tell which change caused it.
-- **Changing behavior during refactoring.** "While I'm here, I'll also fix this bug..." — no. Separate commit.
+- **Changing behavior during refactoring.** "While I'm here, I'll also fix this bug..." - no. Separate commit.
 - **Not building between steps.** If you make 5 changes and then build, you have 5 places to look for the error.
 - **Renaming without finding all usages.** The compiler will catch it, but why not be thorough?
+- **Case-only renames on Windows.** Windows file system is case-insensitive; use two-step rename.
 
 See also: `task_decomposition` for planning multi-step refactors, `file_editing_strategy` for safe edit techniques.

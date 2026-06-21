@@ -206,6 +206,43 @@ def get_with_early_refresh(key, ttl):
 | Set | Unique collections, tags | `SADD`, `SMEMBERS`, `SISMEMBER` |
 | Pub/Sub | Cache invalidation events | `PUBLISH`, `SUBSCRIBE` |
 
+## Windows-Specific Caching Notes
+
+### File System Caching on Windows
+Windows has aggressive file system caching that can affect cache invalidation:
+
+```python
+import os
+import time
+
+def clear_windows_file_cache(filepath):
+    """Force Windows to re-read a file from disk."""
+    # Windows may cache file metadata; force refresh
+    os.stat(filepath)
+    # Or use a temporary rename to invalidate cache
+
+def windows_friendly_cache_path(base_dir, key):
+    """Generate a cache path that works well with Windows file system."""
+    # Windows has path length and character restrictions
+    safe_key = "".join(c for c in key if c.isalnum() or c in isolated)
+    return os.path.join(base_dir, safe_key[:100] + ".cache")
+```
+
+### Windows Temp Directory for Cache
+```python
+import tempfile
+import os
+
+# Use Windows temp directory for cache storage
+cache_dir = os.path.join(tempfile.gettempdir(), "myapp_cache")
+os.makedirs(cache_dir, exist_ok=True)
+```
+
+### Redis on Windows
+- **WSL2**: Run Redis in WSL2 for development (recommended)
+- **Docker**: Use Docker Desktop with Redis container
+- **Native**: Redis doesn't officially support Windows; use Memurai or similar alternatives for production
+
 ## Anti-Patterns
 
 - **Caching without TTL.** Memory leak. Always set an expiry.

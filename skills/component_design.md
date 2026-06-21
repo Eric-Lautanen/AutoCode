@@ -183,13 +183,82 @@ export const AllStates = () => (
 
 **Rule**: If it's not documented, it doesn't exist. Consumers won't discover props by reading source code.
 
+## Windows-Specific Component Considerations
+
+### High Contrast Mode Support
+Windows High Contrast Mode (WHCM) is critical for accessibility on Windows:
+
+```tsx
+// Use system colors for WHCM compatibility
+.button {
+  background: ButtonFace;
+  color: ButtonText;
+  border: 2px solid ButtonText;
+}
+
+// Or use forced-colors media query
+@media (forced-colors: active) {
+  .button {
+    outline: 2px solid CanvasText;
+  }
+}
+```
+
+### Windows Font Stack
+Windows has specific system fonts that should be included:
+
+```css
+/* Include Segoe UI for Windows */
+font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+```
+
+### Touch Targets for Windows Tablets
+Windows tablets and 2-in-1 devices require adequate touch targets:
+
+```tsx
+// Minimum 44px touch target (Windows recommendation)
+<IconButton 
+  sx={{ 
+    width: 44, 
+    height: 44,
+    // Windows touch-friendly spacing
+    '@media (pointer: coarse)': {
+      minWidth: 48,
+      minHeight: 48,
+    }
+  }} 
+/>
+```
+
+### Windows Scrollbar Styling
+Windows scrollbars can be styled for consistency:
+
+```css
+/* Custom scrollbar for webkit browsers */
+::-webkit-scrollbar {
+  width: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-bg-secondary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-default);
+  border-radius: 6px;
+}
+```
+
 ## Checklist
 
 - [ ] Component has a single responsibility
-- [ ] Props API is minimal — semantic variants, not low-level style props
+- [ ] Props API is minimal - semantic variants, not low-level style props
 - [ ] Every state has a distinct visual appearance (default, hover, focus, disabled, loading, error)
 - [ ] Composition pattern used for complex components (slots/children over config props)
 - [ ] Accessible by default: semantic HTML, keyboard operable, focus visible
 - [ ] Named clearly and consistently with other components
 - [ ] All variants and states documented with examples
-- [ ] Sensible defaults — works with zero props
+- [ ] Sensible defaults - works with zero props
+- [ ] Windows High Contrast Mode supported (if targeting Windows)
+- [ ] Windows system fonts included in font stack
+- [ ] Touch targets adequate for Windows tablets

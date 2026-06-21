@@ -170,14 +170,58 @@ Document any intentional behavior changes:
 - Keep the old system runnable (don't delete it) for at least one release cycle
 - Only remove old code after the new system is proven stable in production
 
+## Windows-Specific Migration Notes
+
+### Path and Encoding Differences
+When migrating code to/from Windows, watch for:
+
+```python
+# Before (Unix)
+path = "/data/files/" + filename
+
+# After (cross-platform)
+from pathlib import Path
+path = str(Path("data") / "files" / filename)
+```
+
+### Line Endings During Migration
+```bash
+# Convert all files to LF before migration
+git ls-files | xargs dos2unix
+
+# Or configure Git to handle it
+git config core.autocrlf false
+git add --renormalize .
+```
+
+### Windows Service Migration
+When migrating from Unix daemons to Windows services:
+- Use **NSSM** (Non-Sucking Service Manager) or **WinSW** to wrap applications
+- Handle Windows-specific signals (`CTRL_C_EVENT`, `CTRL_BREAK_EVENT`)
+- Use Windows Event Log for logging instead of syslog
+
+```python
+# Windows service signal handling
+import signal
+
+def handle_windows_signal(signum, frame):
+    if signum in (signal.CTRL_C_EVENT, signal.CTRL_BREAK_EVENT):
+        shutdown_gracefully()
+
+signal.signal(signal.SIGBREAK, handle_windows_signal)
+```
+
 ## Checklist
 
 - [ ] Old code behavior fully documented (happy paths, edge cases, implicit behaviors)
 - [ ] Characterization tests written against old code before migration begins
 - [ ] Migration strategy chosen (strangler fig, parallel run, or big bang with justification)
 - [ ] New code uses target language idioms, not source language idioms
-- [ ] Automated comparison testing verifies same inputs → same outputs
+- [ ] Automated comparison testing verifies same inputs > same outputs
 - [ ] Intentional behavior differences documented
 - [ ] Rollback plan exists and has been tested
 - [ ] Monitoring in place before cutover
 - [ ] Old system kept runnable until new system is proven stable
+- [ ] Windows: Path handling updated for cross-platform compatibility
+- [ ] Windows: Line endings normalized before migration
+- [ ] Windows: Service wrapper configured if migrating from Unix daemon

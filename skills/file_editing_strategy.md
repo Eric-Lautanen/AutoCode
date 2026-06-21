@@ -113,6 +113,70 @@ After each edit:
 
 See also: `task_decomposition` for planning multi-step changes, `code_refactoring` for safe refactoring sequences.
 
+## Windows-Specific File Editing Notes
+
+### Line Endings on Windows
+Windows uses CRLF (`\r\n`) while Unix uses LF (`\n`). This causes patch failures:
+
+```python
+# Check line endings before patching
+def get_line_ending(filepath: str) -> str:
+    with open(filepath, 'rb') as f:
+        content = f.read()
+        if b'\r\n' in content:
+            return '\r\n'  # Windows
+        return '\n'  # Unix
+
+# Normalize line endings before patching
+def normalize_line_endings(filepath: str):
+    with open(filepath, 'rb') as f:
+        content = f.read()
+    content = content.replace(b'\r\n', b'\n')
+    with open(filepath, 'wb') as f:
+        f.write(content)
+```
+
+### Windows File Locking
+Windows locks files when reading. Handle this when editing:
+
+```python
+import os
+import time
+
+def safe_edit_file(filepath: str, edit_func, max_retries=5):
+    """Edit file with Windows locking handling."""
+    for i in range(max_retries):
+        try:
+            with open(filepath, 'r') as f:
+                content = f.read()
+            
+            new_content = edit_func(content)
+            
+            with open(filepath, 'w') as f:
+                f.write(new_content)
+            return
+        except PermissionError:
+            if i < max_retries - 1:
+                time.sleep(0.1 * (2 ** i))
+                continue
+            raise
+```
+
+### Path Length Considerations
+Windows has a 260-character path limit by default:
+
+```python
+from pathlib import Path
+
+def safe_windows_path(filepath: str) -> str:
+    """Handle Windows path length limitations."""
+    path = Path(filepath)
+    if len(str(path)) > 240 and os.name == 'nt':
+        # Use \\?\ prefix for long paths
+        return "\\\\?\\" + str(path.resolve())
+    return str(path)
+```
+
 ## Anti-Patterns
 
 - **Patching without reading first.** You must know the current file content before editing.
@@ -120,3 +184,4 @@ See also: `task_decomposition` for planning multi-step changes, `code_refactorin
 - **Not verifying.** A patch that "should have worked" but you didn't check is a bug waiting to happen.
 - **Editing the same file multiple times without re-reading.** Line numbers shift after each edit.
 - **Assuming whitespace.** Tabs vs. spaces, trailing whitespace, and CRLF differences are the #1 cause of patch failures.
+- **Not handling Windows file locking.** Windows locks files during read; use retry logic.

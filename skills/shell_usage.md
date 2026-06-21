@@ -27,6 +27,9 @@ Before running platform-specific commands, detect the environment:
 | Path separator | `\` | `/` |
 | Chain commands | `; ` or `&&` | `&&` or `||` |
 | Redirect stderr | `2>&1` | `2>&1` |
+| View file content | `Get-Content` or `type` | `cat` |
+| Count lines | `Measure-Object` | `wc -l` |
+| Kill process | `Stop-Process` | `kill` or `pkill` |
 
 **Rule:** When the tool says "Platform: Windows", use PowerShell/cmd syntax. Never use Unix commands like `head`, `tail`, `less`, `cat`, `grep` directly — use PowerShell equivalents or the tool's built-in functions instead.
 
@@ -114,12 +117,19 @@ When you need to extract information from command output:
 **Common patterns:**
 ```bash
 # Check if a command exists
-where.exe <tool>     # Windows
+where.exe <tool>     # Windows (PowerShell)
+Get-Command <tool>   # Windows (PowerShell, more reliable)
 which <tool>         # Unix
 
 # Get just the exit code
 <command>; echo $?   # Unix
 <command>; echo $LASTEXITCODE  # PowerShell
+
+# Run a command with elevated privileges (Windows)
+Start-Process -Verb runAs cmd -ArgumentList '/c', '<command>'
+
+# Check Windows version info
+systeminfo | Select-String "OS Name", "OS Version"
 ```
 
 ## Exit Code Checking

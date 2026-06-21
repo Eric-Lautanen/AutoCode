@@ -253,6 +253,38 @@ onCLS((metric) => {
 });
 ```
 
+## Windows-Specific Performance Notes
+
+### Antivirus Scanning Impact
+On Windows, antivirus software can significantly impact file I/O and build performance:
+
+- **Exclude development directories** from real-time scanning (e.g., `node_modules`, `.git`, build output)
+- **Add exceptions** for your IDE and build tools
+- **Common exclusions**:
+  - Project directories: `C:\Users\<name>\projects\`
+  - Package caches: `C:\Users\<name>\AppData\Local\npm-cache\`
+  - Build output: `dist\`, `build\`, `.next\`
+
+### Windows Defender Exclusions (PowerShell)
+```powershell
+# Add exclusion for a project directory
+Add-MpPreference -ExclusionPath "C:\Users\$env:USERNAME\projects"
+
+# Add exclusion for Node.js
+Add-MpPreference -ExclusionProcess "node.exe"
+```
+
+### Path Length Limitations
+Windows has a 260-character path limit (MAX_PATH) by default:
+- **Enable long path support** in Windows 10/11: Group Policy or Registry edit
+- **Use `\\?\` prefix** for absolute paths in scripts
+- **Prefer shorter paths** for project directories (e.g., `C:\dev\` instead of `C:\Users\VeryLongUsername\Documents\Projects\`)
+
+### NTFS vs. Other Filesystems
+- **NTFS**: Journaling adds slight overhead but ensures data integrity
+- **ReFS**: Better for large files, but limited Windows support
+- **WSL2 ext4**: Faster for Linux-native toolchains, but file access across WSL/Windows boundary is slow
+
 ## Checklist
 
 - [ ] LCP < 2.5s (preload LCP image, inline critical CSS, defer scripts)
@@ -260,7 +292,9 @@ onCLS((metric) => {
 - [ ] INP < 200ms (debounce handlers, use web workers for heavy work)
 - [ ] Scripts loaded with `defer` (not blocking)
 - [ ] Critical CSS inlined, non-critical CSS loaded asynchronously
-- [ ] Images in WebP/AVIF with fallbacks, lazy-loaded below fold
+- [ ] Images in WebP/AV累积 with fallbacks, lazy-loaded below fold
 - [ ] Bundle analyzed and under size targets
 - [ ] Caching headers set correctly (immutable for hashed assets)
 - [ ] Performance measured with both lab and field data
+- [ ] Windows: Development directories excluded from antivirus scanning
+- [ ] Windows: Path lengths kept under 260 characters or long paths enabled

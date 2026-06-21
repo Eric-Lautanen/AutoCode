@@ -161,13 +161,91 @@ Always add jitter: `delay = base * 2^attempt + random(0, 1)`
 
 **Decision framework:** If continuing could make things worse (data loss, corruption, security), fail fast. If continuing provides value despite limitations, degrade gracefully.
 
+## Windows-Specific Error Handling
+
+### Windows Error Codes
+Windows APIs return specific error codes. Handle them properly:
+
+```python
+import ctypes
+from ctypes import wintypes
+
+def get_windows_error_message(error_code: int) -> str:
+    """Get human-readable error message from Windows error code."""
+    FORMAT_MESSAGE_FROM_SYSTEM = 0x00001000
+    FORMAT_MESSAGE_ALLOCATE_BUFFER = 0x00000100
+    
+    buf = ctypes.c_char_p()
+    ctypes.windll.kernel32.FormatMessageA(
+        FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_ALLOCATE_BUFFER,
+        None,
+        error_code,
+        0,
+        ctypes.byref(buf),
+        0,
+        None
+    )
+    msg = buf.value.decode('utf-8') if buf.value else "Unknown error"
+    ctypes.windll.kernel32.LocalFree(buf)
+    return msg
+
+# Usage
+try:
+    # Some Windows API call
+    pass
+except OSError as e:
+    if os.name == 'nt':
+        msg = get_windows_error_message(e.winerror if hasattr(e, 'winerror') else 0)
+        print(f"Windows error: {msg}")
+```
+
+### Windows Service Errors
+When running as a Windows service, handle service-specific errors:
+
+```python
+import win32serviceutil
+import win32service
+
+class MyService(win32serviceutil.ServiceFramework):
+    def SvcDoRun(self):
+        try:
+            # Service logic
+            pass
+        except Exception as e:
+            # Log to Windows Event Log
+            import servicemanager
+            servicemanager.LogErrorMsg(f"Service error: {str(e)}")
+            raise
+```
+
+### Windows File Locking Errors
+Windows file locking can cause specific errors:
+
+```python
+import os
+import time
+
+def safe_file_operation(filepath: str, operation):
+    """Retry file operation on Windows locking errors."""
+    max_retries = 5
+    for i in range(max_retries):
+        try:
+            return operation(filepath)
+        except PermissionError as e:
+            if os.name == 'nt' and i < max_retries - 1:
+                time.sleep(0.1 * (2 ** i))  # Exponential backoff
+                continue
+            raise
+```
+
 ## Anti-Patterns
 
-- **Silently swallowing errors.** `catch (e) { /* ignore */ }` — this hides bugs.
+- **Silently swallowing errors.** `catch (e) { /* ignore */ }` - this hides bugs.
 - **Catching too broadly.** `catch Exception` in Python catches `KeyboardInterrupt` and `SystemExit`.
 - **Logging and re-throwing.** This creates duplicate log entries. Log at the handler, not at every layer.
 - **Exposing internal errors to users.** Stack traces in API responses are a security risk.
 - **Retrying permanent errors.** If the request is wrong, retrying won't fix it.
 - **Not providing actionable error messages.** "Something went wrong" helps no one. Say what went wrong and what to do.
+- **Ignoring Windows-specific error codes.** Windows APIs return rich error information - use it.
 
 See also: `logging_and_observability` for logging patterns, `api_integration` for retry logic with external services.

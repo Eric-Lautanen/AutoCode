@@ -239,12 +239,87 @@ components/
 - Enable theming without preprocessor compilation
 - See `design_tokens.md` for a full token system
 
+## Windows-Specific CSS Notes
+
+### High Contrast Mode (WHCM)
+Windows High Contrast Mode overrides many CSS properties. Design for it:
+
+```css
+/* Use system colors for WHCM compatibility */
+.button {
+  background-color: ButtonFace;
+  color: ButtonText;
+  border: 2px solid ButtonText;
+}
+
+/* Or use forced-colors media query */
+@media (forced-colors: active) {
+  .card {
+    border: 2px solid CanvasText;
+  }
+  
+  .button:focus {
+    outline: 3px solid Highlight;
+  }
+}
+```
+
+### Windows Font Rendering
+Windows uses ClearType subpixel rendering, which can make fonts appear different from macOS:
+
+```css
+/* Improve font rendering on Windows */
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Windows-specific: Segoe UI is the system font */
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+```
+
+### Scrollbar Styling on Windows
+Windows scrollbars are wider and styled differently:
+
+```css
+/* Consistent scrollbar styling across platforms */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-bg-secondary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-default);
+  border-radius: 6px;
+  border: 3px solid var(--color-bg-secondary);
+}
+```
+
+### File Path in CSS
+When referencing fonts or images in CSS on Windows:
+- Use forward slashes in `url()` paths (CSS standard, works everywhere)
+- Ensure paths are relative to the CSS file location
+
+```css
+/* Correct - forward slashes work on all platforms */
+@font-face {
+  font-family: 'CustomFont';
+  src: url('../fonts/custom-font.woff2') format('woff2');
+}
+```
+
 ## Checklist
 
-- [ ] Specificity is flat — no IDs in selectors, no deep nesting
+- [ ] Specificity is flat - no IDs in selectors, no deep nesting
 - [ ] Naming convention chosen (BEM, utility-first, CSS Modules, or CSS-in-JS)
 - [ ] One CSS file per component, co-located with the component
 - [ ] Global styles limited to reset, tokens, and base element styles
 - [ ] No `!important` except for utility override classes
 - [ ] Custom properties used for theming and token values
 - [ ] CSS reset or normalize included as the first stylesheet
+- [ ] Windows High Contrast Mode supported (if targeting Windows)
+- [ ] Windows system fonts included in font stack
+- [ ] Scrollbar styling consistent across platforms

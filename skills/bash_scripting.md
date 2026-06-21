@@ -273,6 +273,40 @@ ${name:=default}      # Set and use default if unset
 ${name:+alternate}    # Use alternate if set
 ```
 
+## Running Bash Scripts on Windows
+
+age
+
+Bash scripts can run on Windows through WSL (Windows Subsystem for Linux), Git Bash, or MSYS2:
+
+### WSL (Recommended for Windows)
+```bash
+# Run a bash script via WSL
+wsl bash /mnt/c/path/to/script.sh
+
+# Or enter WSL first
+wsl
+cd /mnt/c/project
+./script.sh
+```
+
+### Git Bash (Lightweight option)
+- Install Git for Windows (includes Git Bash)
+- Right-click in folder > "Git Bash Here"
+- Most bash features work, but some Unix tools may be missing
+
+### Line Endings Warning
+Windows uses CRLF (`\r\n`) while bash expects LF (`\n`). Always convert:
+
+```bash
+# Convert CRLF to LF using dos2unix
+dos2unix script.sh
+
+# Or in Git, configure line endings for bash scripts
+git config core.autocrlf false
+# Add to .gitattributes: *.sh text eol=lf
+```
+
 ## Common Pitfalls
 
 | Pitfall | Example | Fix |
@@ -285,6 +319,7 @@ ${name:+alternate}    # Use alternate if set
 | Using `$(which cmd)` | Unreliable on some systems | Use `command -v cmd` |
 | Not checking required args | `$1` is empty | `${1:?Usage: ...}` |
 | `echo` with `-e` or `-n` in variable | `echo "$msg"` where msg starts with `-` | `printf '%s\n' "$msg"` |
+| CRLF line endings on Windows | Script fails with `/bin/bash^M: bad interpreter` | Convert to LF with dos2unix |
 
 ## Checklist
 
