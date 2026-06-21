@@ -961,7 +961,6 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
                         tool_calls: m.tool_calls.clone(),
                         tool_meta: None,
                         reasoning_content: m.reasoning_content.clone(),
-                        full_content: None,
                     })
                     .collect::<Vec<_>>(),
                 Some(&tools_json),

@@ -691,8 +691,7 @@ pub struct ChatMessage {
     #[serde(default)]
     pub id: u64,
     pub role: Role,
-    /// Display content (may be truncated for UI rendering).
-    /// Use `full_content` for the complete original text.
+    /// Full message text. Sanitized at UI render time for display.
     pub content: String,
     #[serde(default)]
     pub timestamp: u64,
@@ -715,16 +714,11 @@ pub struct ChatMessage {
     /// section and passed back on subsequent API requests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
-    /// Full original message text, preserved for copy operations.
-    /// Never truncated — use `content` for display, this for clipboard.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub full_content: Option<String>,
 }
 
 impl ChatMessage {
     pub fn new(role: Role, content: impl Into<String>) -> Self {
-        let original: String = content.into();
-        let content = crate::helpers::sanitize_display_text(&original);
+        let content: String = content.into();
         let token_count = crate::helpers::estimate_tokens(&content);
         Self {
             id: 0,
@@ -736,7 +730,6 @@ impl ChatMessage {
             tool_calls: None,
             tool_meta: None,
             reasoning_content: None,
-            full_content: Some(original),
         }
     }
 }

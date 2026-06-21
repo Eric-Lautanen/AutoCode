@@ -95,7 +95,6 @@ fn test_long_running_simulation() {
                     tool_calls: None,
                     tool_meta: None,
                     reasoning_content: None,
-                    full_content: None,
                 })
                 .collect();
 
@@ -166,7 +165,6 @@ fn test_crash_recovery() {
             tool_calls: None,
             tool_meta: None,
             reasoning_content: None,
-            full_content: None,
         })
         .collect();
 
