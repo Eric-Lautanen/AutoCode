@@ -6,63 +6,6 @@ use crate::fsutil;
 use crate::helpers;
 use crate::state::{AppState, ChatMessage, Project, Role, Session};
 
-/// Validate and auto-fix tool_calls arguments that contain corrupt/non-JSON data.
-/// Modifies the tool_calls Value in place, removing any function call whose
-/// arguments field is not valid JSON after repair attempts.
-/// Returns true if any changes were made.
-fn sanitize_tool_calls(tool_calls: &mut Option<serde_json::Value>) -> bool {
-    let Some(arr) = tool_calls.as_mut().and_then(|v| v.as_array_mut()) else {
-        return false;
-    };
-    let mut changed = false;
-    let mut i = 0;
-    while i < arr.len() {
-        let args_str = match arr[i]["function"]["arguments"].as_str() {
-            Some(s) if !s.is_empty() => s.to_string(),
-            _ => {
-                i += 1;
-                continue;
-            }
-        };
-        if serde_json::from_str::<serde_json::Value>(&args_str).is_ok() {
-            i += 1;
-            continue;
-        }
-        changed = true;
-        // Attempt repair: try to re-escape content by parsing raw bytes as JSON string.
-        if let Ok(repaired) = serde_json::from_str::<String>(&format!("\"{}\"", args_str))
-            && serde_json::from_str::<serde_json::Value>(&repaired).is_ok()
-        {
-            arr[i]["function"]["arguments"] = serde_json::Value::String(repaired);
-            i += 1;
-            continue;
-        }
-        // Last resort: find the longest valid JSON prefix.
-        let mut end = args_str.len();
-        let mut fixed = false;
-        for _ in 0..args_str.len().min(256) {
-            if end <= 2 {
-                break;
-            }
-            end = args_str.floor_char_boundary(end - 1);
-            if serde_json::from_str::<serde_json::Value>(&args_str[..end]).is_ok() {
-                arr[i]["function"]["arguments"] =
-                    serde_json::Value::String(args_str[..end].to_string());
-                fixed = true;
-                i += 1;
-                break;
-            }
-            if let Some(prev_quote) = args_str[..end].rfind('"') {
-                end = prev_quote + 1;
-            }
-        }
-        if !fixed {
-            arr.remove(i);
-        }
-    }
-    changed
-}
-
 /// Find a session metadata file on disk by ID prefix.
 /// Looks for `{id}_{label}/session.json` inside the shared sessions dir.
 /// Falls back to scanning subdirectories by ID prefix.
@@ -270,7 +213,7 @@ pub fn append_messages_to_jsonl(
         .iter()
         .map(|m| {
             let mut m = m.clone();
-            sanitize_tool_calls(&mut m.tool_calls);
+            helpers::sanitize_tool_calls(&mut m.tool_calls);
             m.reasoning_content = None;
             m
         })
@@ -417,19 +360,15 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
                 // Recompute token estimates from loaded messages so the UI shows
                 // accurate context usage immediately after startup, rather than
                 // falling back to the less-accurate per-message token_count().
-                let filtered: Vec<ChatMessage> = session
-                    .messages
-                    .iter()
-                    .filter(|m| m.role != Role::Error)
-                    .cloned()
-                    .collect();
-                let model = if session.model.is_empty() {
+                // Uses incremental counting: compute per-message estimates and
+                // cache them, then sum for the running total.
+                let model_owned = if session.model.is_empty() {
                     None
                 } else {
-                    Some(session.model.as_str())
+                    Some(session.model.clone())
                 };
-                session.estimated_messages_tokens =
-                    helpers::estimate_full_request_tokens(&filtered, None, model);
+                let model_ref = model_owned.as_deref();
+                session.recompute_messages_tokens(model_ref);
                 // estimated_full_tokens will be set on the next API request
                 // (prepare_request_messages_for_session includes tool definitions).
                 // This is a cosmetic ~500-token difference that resolves after

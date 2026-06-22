@@ -115,26 +115,32 @@ pub fn prepare_request_messages_for_session(
 
     // Compute an estimate for the full disk-backed message list + tool definitions.
     // This is stored on the session so the UI can display it instead of the
-    // in-RAM-only token_count().
+    // in-RAM-only token_count(). Uses incremental counting: compute per-message
+    // estimates and cache them, then sum for the running total.
     {
-        let filtered: Vec<ChatMessage> = full_messages
-            .iter()
-            .filter(|m| m.role != Role::Error)
-            .cloned()
-            .collect();
-        let tools = tool_definitions(supports_strict);
         let model = state
             .sessions
             .iter()
             .find(|s| s.id == session_id)
             .map(|s| s.model.as_str());
-        let estimated_full =
-            autocode_core::helpers::estimate_full_request_tokens(&filtered, Some(&tools), model);
-        let estimated_messages =
-            autocode_core::helpers::estimate_full_request_tokens(&filtered, None, model);
+        // Compute and cache per-message estimates for any messages that
+        // don't already have one (e.g. loaded from disk before this field
+        // existed, or messages whose content was modified).
+        let mut messages_total: usize = 0;
+        for m in full_messages.iter().filter(|m| m.role != Role::Error) {
+            let est = if m.full_token_estimate > 0 {
+                m.full_token_estimate
+            } else {
+                autocode_core::helpers::estimate_single_message_json_tokens(m, model)
+            };
+            messages_total = messages_total.saturating_add(est);
+        }
+        let tools = tool_definitions(supports_strict);
+        let tools_tokens = autocode_core::helpers::estimate_tools_tokens(&tools, model);
+        let estimated_full = messages_total.saturating_add(tools_tokens);
         if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == session_id) {
             sess.estimated_full_tokens = estimated_full;
-            sess.estimated_messages_tokens = estimated_messages;
+            sess.estimated_messages_tokens = messages_total;
         }
     }
 

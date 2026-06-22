@@ -705,6 +705,13 @@ pub struct ChatMessage {
     pub tool_call_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<serde_json::Value>,
+    /// Estimated token count for this message as it would appear in the API
+    /// JSON request body (includes role, content, tool_calls, tool_call_id,
+    /// reasoning_content, and JSON structural overhead). Cached on push so
+    /// the session running total can be updated incrementally without
+    /// re-serializing all messages.
+    #[serde(default)]
+    pub full_token_estimate: usize,
     /// Structured metadata for tool-result messages.
     /// When present, the UI uses this instead of parsing content.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -726,6 +733,7 @@ impl ChatMessage {
             content,
             timestamp: crate::helpers::unix_now(),
             token_count,
+            full_token_estimate: 0, // computed lazily or on push
             tool_call_id: None,
             tool_calls: None,
             tool_meta: None,
@@ -849,6 +857,42 @@ impl Session {
             .iter()
             .map(crate::helpers::estimate_message_tokens)
             .sum()
+    }
+
+    /// Incrementally update `estimated_messages_tokens` after pushing a new
+    /// message. Only counts the new message's JSON token cost and adds it
+    /// to the running total — O(1) instead of re-serializing all messages.
+    pub fn increment_messages_tokens(&mut self, msg: &ChatMessage, model: Option<&str>) {
+        let tokens = crate::helpers::estimate_single_message_json_tokens(msg, model);
+        self.estimated_messages_tokens = self.estimated_messages_tokens.saturating_add(tokens);
+    }
+
+    /// Recompute `estimated_messages_tokens` from scratch by summing each
+    /// message's `full_token_estimate`. Used after replay/truncation or
+    /// when loading a session from disk (where running totals are stale).
+    pub fn recompute_messages_tokens(&mut self, model: Option<&str>) {
+        let mut total: usize = 0;
+        for msg in &self.messages {
+            if msg.role == crate::state::Role::Error {
+                continue;
+            }
+            if msg.full_token_estimate > 0 {
+                total = total.saturating_add(msg.full_token_estimate);
+            } else {
+                total = total.saturating_add(
+                    crate::helpers::estimate_single_message_json_tokens(msg, model),
+                );
+            }
+        }
+        self.estimated_messages_tokens = total;
+    }
+
+    /// Recompute `estimated_full_tokens` from `estimated_messages_tokens`
+    /// plus the tool definitions overhead. O(1) if messages tokens are
+    /// already up-to-date.
+    pub fn recompute_full_tokens(&mut self, tools_json: &serde_json::Value, model: Option<&str>) {
+        let tools_tokens = crate::helpers::estimate_tools_tokens(tools_json, model);
+        self.estimated_full_tokens = self.estimated_messages_tokens.saturating_add(tools_tokens);
     }
 
     pub fn record_actual_usage(&mut self, prompt: usize, _completion: usize) {
@@ -1093,6 +1137,15 @@ impl ProjectTaskList {
         self.items
             .iter()
             .any(|i| i.status == TodoStatus::Pending || i.status == TodoStatus::InProgress)
+    }
+}
+
+impl From<ProjectTaskList> for TodoList {
+    fn from(ptl: ProjectTaskList) -> Self {
+        TodoList {
+            title: ptl.title,
+            items: ptl.items,
+        }
     }
 }
 

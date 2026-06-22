@@ -463,60 +463,10 @@ impl ApiMessage {
     }
 }
 
-fn sanitize_tool_calls_for_api(tool_calls: &mut Option<serde_json::Value>) {
-    let Some(arr) = tool_calls.as_mut().and_then(|v| v.as_array_mut()) else {
-        return;
-    };
-    let mut i = 0;
-    while i < arr.len() {
-        let args_str = match arr[i]["function"]["arguments"].as_str() {
-            Some(s) if !s.is_empty() => s.to_string(),
-            _ => {
-                i += 1;
-                continue;
-            }
-        };
-        if serde_json::from_str::<serde_json::Value>(&args_str).is_ok() {
-            i += 1;
-            continue;
-        }
-        // Attempt repair: try to quote-escape and re-parse the raw string.
-        if let Ok(repaired) = serde_json::from_str::<String>(&format!("\"{}\"", args_str))
-            && serde_json::from_str::<serde_json::Value>(&repaired).is_ok()
-        {
-            arr[i]["function"]["arguments"] = serde_json::Value::String(repaired);
-            i += 1;
-            continue;
-        }
-        // Last resort: find the longest valid JSON prefix.
-        let mut end = args_str.len();
-        let mut fixed = false;
-        for _ in 0..args_str.len().min(256) {
-            if end <= 2 {
-                break;
-            }
-            end = args_str.floor_char_boundary(end - 1);
-            if serde_json::from_str::<serde_json::Value>(&args_str[..end]).is_ok() {
-                arr[i]["function"]["arguments"] =
-                    serde_json::Value::String(args_str[..end].to_string());
-                fixed = true;
-                i += 1;
-                break;
-            }
-            if let Some(prev_quote) = args_str[..end].rfind('"') {
-                end = prev_quote + 1;
-            }
-        }
-        if !fixed {
-            arr.remove(i);
-        }
-    }
-}
-
 impl From<&ChatMessage> for ApiMessage {
     fn from(m: &ChatMessage) -> Self {
         let mut tool_calls = m.tool_calls.clone();
-        sanitize_tool_calls_for_api(&mut tool_calls);
+        autocode_core::helpers::sanitize_tool_calls(&mut tool_calls);
         Self {
             role: m.role.label().to_string(),
             content: m.content.clone(),

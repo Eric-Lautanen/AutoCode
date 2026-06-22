@@ -1,52 +1,5 @@
-// chat.rs -- Chat orchestration: sending messages, handling streaming responses,
-// tool calls (run_shell, read_file, write_file, list_dir),
-// security hardening, and actual token usage tracking.
-
 use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
-
-// -- LRU Path Cache -----------------------------------------------------------
-
-const PATH_CACHE_MAX: usize = 500;
-
-/// A simple LRU cache for resolved file paths.
-/// Evicts the oldest entry when the capacity is exceeded.
-struct PathCache {
-    map: std::collections::HashMap<String, std::path::PathBuf>,
-    order: std::collections::VecDeque<String>,
-}
-
-impl PathCache {
-    fn new() -> Self {
-        Self {
-            map: std::collections::HashMap::new(),
-            order: std::collections::VecDeque::new(),
-        }
-    }
-
-    fn insert(&mut self, key: String, value: std::path::PathBuf) {
-        if self.map.len() >= PATH_CACHE_MAX
-            && !self.map.contains_key(&key)
-            && let Some(oldest) = self.order.pop_front()
-        {
-            self.map.remove(&oldest);
-        }
-        if !self.map.contains_key(&key) {
-            self.order.push_back(key.clone());
-        }
-        self.map.insert(key, value);
-    }
-}
-
-impl autocode_core::helpers::PathCacheTrait for PathCache {
-    fn get_path(&self, key: &str) -> Option<std::path::PathBuf> {
-        self.map.get(key).cloned()
-    }
-
-    fn insert_path(&mut self, key: String, value: std::path::PathBuf) {
-        self.insert(key, value);
-    }
-}
 
 use crate::{
     helpers,
@@ -68,16 +21,22 @@ use autocode_fs::shell::{self, ShellEvent};
 fn is_transient_error(msg: &str) -> bool {
     // Permanent errors - never retry these
     let permanent_patterns = [
-        "content_filter",  // Provider content policy violation
-        "authentication",  // API key issues
-        "invalid_api_key", // Bad API key
-        "quota",           // Account quota exceeded (not rate limit)
-        "billing",         // Billing issues
-        "model_not_found", // Invalid model name
-        "context_length",  // Request too large for model
-        "max_context",     // Context window exceeded
-        "too many tokens", // Token limit exceeded
-        "Invalid model",   // Model doesn't exist
+        "content_filter",
+        "authentication",
+        "invalid_api_key",
+        "quota",
+        "billing",
+        "insufficient",      // catches "insufficient credits", "insufficient funds"
+        "out of credits",
+        "no credits",
+        "credit",            // catches "credit limit", "credit balance"  
+        "payment",           // catches "payment required", "payment_required"
+        "402",               // HTTP 402 Payment Required
+        "model_not_found",
+        "context_length",
+        "max_context",
+        "too many tokens",
+        "Invalid model",
     ];
     let msg_lower = msg.to_lowercase();
     for pattern in &permanent_patterns {
@@ -178,24 +137,23 @@ fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: Chat
                 .pending
                 .push((sid.to_string(), msg.clone()));
         }
-        sess.messages.push(msg);
-        // Update token estimate so the toolbar meter and auto-handoff
-        // threshold reflect the new message immediately.
+        // Compute and cache the per-message JSON token estimate before push.
         let model = if sess.model.is_empty() {
             None
         } else {
             Some(sess.model.as_str())
         };
-        let filtered: Vec<autocode_core::state::ChatMessage> = sess
-            .messages
-            .iter()
-            .filter(|m| m.role != Role::Error)
-            .cloned()
-            .collect();
-        sess.estimated_messages_tokens =
-            autocode_core::helpers::estimate_full_request_tokens(&filtered, None, model);
+        msg.full_token_estimate =
+            autocode_core::helpers::estimate_single_message_json_tokens(&msg, model);
+        sess.messages.push(msg);
+        // Incrementally update the messages-only token estimate (O(1)).
         // estimated_full_tokens will be refreshed on the next API request
         // (prepare_request_messages_for_session includes tool definitions).
+        if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
+            let last = sess.messages.last().unwrap();
+            sess.estimated_messages_tokens =
+                sess.estimated_messages_tokens.saturating_add(last.full_token_estimate);
+        }
     }
 }
 
@@ -245,6 +203,15 @@ pub fn replay_to_message(
         sess.messages.retain(|m| m.id < message_id);
         sess.next_message_id = message_id;
         sess.actual_tokens_used = 0;
+
+        // Recompute token estimates incrementally from cached per-message estimates.
+        let model_owned = if sess.model.is_empty() {
+            None
+        } else {
+            Some(sess.model.clone())
+        };
+        sess.recompute_messages_tokens(model_owned.as_deref());
+        sess.estimated_full_tokens = sess.estimated_messages_tokens;
 
         let proj = &state.projects[proj_idx];
         autocode_core::session_storage::truncate_messages_after(
@@ -437,7 +404,7 @@ pub struct ChatRuntime {
     pub status: String,
     pub active_session_id: Option<String>,
     tool_rx: Option<Receiver<Vec<ToolResult>>>,
-    path_cache: PathCache,
+    path_cache: autocode_core::helpers::LruPathCache,
     pending_tool_calls: Vec<ToolCall>,
     assistant_tool_calls_json: Option<serde_json::Value>,
     provider_error: Option<String>,
@@ -489,7 +456,7 @@ impl Default for ChatRuntime {
             status: "Ready".to_string(),
             active_session_id: None,
             tool_rx: None,
-            path_cache: PathCache::new(),
+            path_cache: autocode_core::helpers::LruPathCache::new(),
             pending_tool_calls: Vec::new(),
             assistant_tool_calls_json: None,
             provider_error: None,
@@ -789,7 +756,7 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
                             state,
                             runtime,
                             format!(
-                                "API key not set for provider \"{label}\". Go to Settings → Providers to configure it."
+                                "API key not set for provider \"{label}\". Go to Settings -> Providers to configure it."
                             ),
                         );
                         return;
@@ -800,7 +767,7 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
                             state,
                             runtime,
                             format!(
-                                "Provider \"{label}\" not found. Go to Settings → Providers to configure it."
+                                "Provider \"{label}\" not found. Go to Settings -> Providers to configure it."
                             ),
                         );
                         return;
@@ -962,6 +929,7 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
                         content: m.content.clone(),
                         timestamp: 0,
                         token_count: 0,
+                        full_token_estimate: 0,
                         tool_call_id: m.tool_call_id.clone(),
                         tool_calls: m.tool_calls.clone(),
                         tool_meta: None,
@@ -1527,16 +1495,6 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     runtime.retry_count,
                     backoff_secs,
                 );
-                push_error(
-                    state,
-                    runtime,
-                    format!(
-                        "Provider error (retry {}): {} — retrying in {}s",
-                        runtime.retry_count,
-                        shorten_err(&err_msg),
-                        backoff_secs,
-                    ),
-                );
             } else {
                 // Permanent error — show and stop. User can fix and retry manually.
                 runtime.retry_count = 0;
@@ -1772,7 +1730,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 let (tx, rx) = std::sync::mpsc::channel::<Vec<ToolResult>>();
                 runtime.tool_rx = Some(rx);
 
-                let mut path_cache = PathCache::new();
+                let mut path_cache = autocode_core::helpers::LruPathCache::new();
                 std::mem::swap(&mut path_cache, &mut runtime.path_cache);
 
                 let pr_clone = root.clone();
@@ -2001,31 +1959,20 @@ fn poll_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     push_tool_results_to_state(state, runtime, &results);
                     runtime.status = format!("{} tool(s) complete.", results.len());
                     // Refresh token estimate after tool results are added.
+                    // The per-message full_token_estimate was already computed
+                    // on push, so we only need to recompute the running totals.
                     if let Some(sid) = runtime.active_session_id.as_deref()
                         && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
                     {
-                        let model = if sess.model.is_empty() {
+                        let model_owned = if sess.model.is_empty() {
                             None
                         } else {
-                            Some(sess.model.as_str())
+                            Some(sess.model.clone())
                         };
-                        let filtered: Vec<autocode_core::state::ChatMessage> = sess
-                            .messages
-                            .iter()
-                            .filter(|m| m.role != Role::Error)
-                            .cloned()
-                            .collect();
+                        let model = model_owned.as_deref();
+                        sess.recompute_messages_tokens(model);
                         let tools_json = tool_definitions(true);
-                        sess.estimated_full_tokens =
-                            autocode_core::helpers::estimate_full_request_tokens(
-                                &filtered,
-                                Some(&tools_json),
-                                model,
-                            );
-                        sess.estimated_messages_tokens =
-                            autocode_core::helpers::estimate_full_request_tokens(
-                                &filtered, None, model,
-                            );
+                        sess.recompute_full_tokens(&tools_json, model);
                     }
                     // Only start next completion if shell calls are also done.
                     if runtime.live_shell_rx.is_none() && runtime.pending_tool_remaining.is_empty()
@@ -2309,28 +2256,20 @@ fn commit_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) {
         runtime.status = format!("{} tool(s) complete.", count);
 
         // Refresh token estimate after tool results are added.
+        // Per-message full_token_estimate was computed on push, so
+        // recompute running totals from cached per-message estimates.
         if let Some(sid) = runtime.active_session_id.as_deref()
             && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
         {
-            let model = if sess.model.is_empty() {
+            let model_owned = if sess.model.is_empty() {
                 None
             } else {
-                Some(sess.model.as_str())
+                Some(sess.model.clone())
             };
-            let filtered: Vec<autocode_core::state::ChatMessage> = sess
-                .messages
-                .iter()
-                .filter(|m| m.role != Role::Error)
-                .cloned()
-                .collect();
+            let model = model_owned.as_deref();
+            sess.recompute_messages_tokens(model);
             let tools_json = tool_definitions(true);
-            sess.estimated_full_tokens = autocode_core::helpers::estimate_full_request_tokens(
-                &filtered,
-                Some(&tools_json),
-                model,
-            );
-            sess.estimated_messages_tokens =
-                autocode_core::helpers::estimate_full_request_tokens(&filtered, None, model);
+            sess.recompute_full_tokens(&tools_json, model);
         }
 
         // Only continue if non-shell tools are also done.
@@ -2458,6 +2397,8 @@ fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     // Use the most up-to-date token count for auto-handoff.
     // Recompute the full estimate (messages + tool definitions) on the fly
     // so the threshold check never works with stale data.
+    // Uses cached per-message full_token_estimate for O(n) sum instead of
+    // re-serializing all messages.
     let (used, max) = state
         .sessions
         .iter()
@@ -2472,24 +2413,15 @@ fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
                 })
                 .map(|p| p.max_context_tokens as usize)
                 .unwrap_or(128_000);
-            // Recompute estimate from current in-RAM messages for real-time accuracy.
+            // Recompute estimate from cached per-message estimates for real-time accuracy.
             let model = if s.model.is_empty() {
                 None
             } else {
                 Some(s.model.as_str())
             };
-            let filtered: Vec<autocode_core::state::ChatMessage> = s
-                .messages
-                .iter()
-                .filter(|m| m.role != Role::Error)
-                .cloned()
-                .collect();
             let tools_json = tool_definitions(true);
-            let estimated = autocode_core::helpers::estimate_full_request_tokens(
-                &filtered,
-                Some(&tools_json),
-                model,
-            );
+            let estimated = s.estimated_messages_tokens
+                .saturating_add(autocode_core::helpers::estimate_tools_tokens(&tools_json, model));
             let used = if s.actual_tokens_used > 0 {
                 s.actual_tokens_used.max(estimated)
             } else {
@@ -2590,28 +2522,20 @@ fn auto_continue_impl(
     push_runtime(state, runtime, ChatMessage::new(Role::User, msg));
     // After pushing the continue message, refresh the full token estimate
     // so the toolbar meter and auto-handoff threshold stay accurate.
+    // Per-message full_token_estimate was computed on push, so recompute
+    // running totals from cached per-message estimates.
     if let Some(sid) = runtime.active_session_id.as_deref()
         && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
     {
-        let model = if sess.model.is_empty() {
+        let model_owned = if sess.model.is_empty() {
             None
         } else {
-            Some(sess.model.as_str())
+            Some(sess.model.clone())
         };
-        let filtered: Vec<autocode_core::state::ChatMessage> = sess
-            .messages
-            .iter()
-            .filter(|m| m.role != Role::Error)
-            .cloned()
-            .collect();
+        let model = model_owned.as_deref();
+        sess.recompute_messages_tokens(model);
         let tools_json = tool_definitions(true);
-        sess.estimated_full_tokens = autocode_core::helpers::estimate_full_request_tokens(
-            &filtered,
-            Some(&tools_json),
-            model,
-        );
-        sess.estimated_messages_tokens =
-            autocode_core::helpers::estimate_full_request_tokens(&filtered, None, model);
+        sess.recompute_full_tokens(&tools_json, model);
     }
     start_completion(state, runtime);
 }
@@ -3071,7 +2995,7 @@ fn build_tool_meta(tc: &ToolCall, result: &str, duration_ms: u64) -> ToolMeta {
 struct ToolExecCtx<'a> {
     tc: &'a ToolCall,
     project_root: &'a str,
-    path_cache: &'a mut PathCache,
+    path_cache: &'a mut autocode_core::helpers::LruPathCache,
     allow_escape: bool,
     ctx_used: usize,
     ctx_max: usize,
@@ -3090,7 +3014,7 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
         max_output,
         session_named,
     } = ctx;
-    use autocode_core::helpers::{resolve_path_cached_trait, resolve_path_write_cached_trait};
+    use autocode_core::helpers::{resolve_path_cached, resolve_path_write_cached};
     let args: serde_json::Value =
         serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
     match tc.name.as_str() {
@@ -3099,7 +3023,7 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                 Some(p) => p,
                 None => return "Error: missing 'path' argument".to_string(),
             };
-            let path = resolve_path_cached_trait(raw_path, project_root, path_cache, allow_escape);
+            let path = resolve_path_cached(raw_path, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&path) {
                 return core_helpers::blocked_error(raw_path);
             }
@@ -3166,7 +3090,7 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                 Some(p) => p,
                 None => return "Error: missing 'path' argument".to_string(),
             };
-            let path = resolve_path_cached_trait(raw_path, project_root, path_cache, allow_escape);
+            let path = resolve_path_cached(raw_path, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&path) {
                 return core_helpers::blocked_error(raw_path);
             }
@@ -3219,7 +3143,7 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                     Some(s) => s,
                     None => continue,
                 };
-                let path = resolve_path_cached_trait(raw, project_root, path_cache, allow_escape);
+                let path = resolve_path_cached(raw, project_root, path_cache, allow_escape);
                 if core_helpers::is_blocked_path(&path) {
                     out.push_str(&core_helpers::blocked_error(raw));
                     out.push_str("\n---\n");
@@ -3249,7 +3173,7 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
             };
             let content = args["content"].as_str().unwrap_or("");
             let path =
-                resolve_path_write_cached_trait(raw_path, project_root, path_cache, allow_escape);
+                resolve_path_write_cached(raw_path, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&path) {
                 return core_helpers::blocked_error(raw_path);
             }
@@ -3266,7 +3190,10 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                 );
             }
             match fsutil::write(&path, content) {
-                Ok(_) => format!("Written {} bytes to {}", content.len(), path.display()),
+                Ok(_) => {
+                    autocode_fs::git::invalidate_git_cache(std::path::Path::new(project_root));
+                    format!("Written {} bytes to {}", content.len(), path.display())
+                }
                 Err(e) => helpers::tool_error(
                     &format!("Error writing {}: {}", path.display(), e),
                     "Check that the path is writable and parent directories exist",
@@ -3279,7 +3206,7 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                 Some(p) => p,
                 None => return "Error: missing 'path' argument".to_string(),
             };
-            let path = resolve_path_cached_trait(raw_path, project_root, path_cache, allow_escape);
+            let path = resolve_path_cached(raw_path, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&path) {
                 return core_helpers::blocked_error(raw_path);
             }
@@ -3309,7 +3236,7 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
 
         "project_tree" => {
             let raw_path = args["path"].as_str().unwrap_or(project_root);
-            let path = resolve_path_cached_trait(raw_path, project_root, path_cache, allow_escape);
+            let path = resolve_path_cached(raw_path, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&path) {
                 return core_helpers::blocked_error(raw_path);
             }
@@ -3338,7 +3265,7 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                 None => return "Error: missing 'path' argument".to_string(),
             };
             let path =
-                resolve_path_write_cached_trait(raw_path, project_root, path_cache, allow_escape);
+                resolve_path_write_cached(raw_path, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&path) {
                 return core_helpers::blocked_error(raw_path);
             }
@@ -3348,7 +3275,10 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                 fsutil::remove_file(&path)
             };
             match result {
-                Ok(_) => format!("Deleted: {}", path.display()),
+                Ok(_) => {
+                    autocode_fs::git::invalidate_git_cache(std::path::Path::new(project_root));
+                    format!("Deleted: {}", path.display())
+                }
                 Err(e) => helpers::tool_error(
                     &format!("Error deleting {}: {}", path.display(), e),
                     "Ensure the path exists and you have permission; use list_dir to verify",
@@ -3365,12 +3295,12 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                 Some(p) => p,
                 None => return "Error: missing 'to' argument".to_string(),
             };
-            let from = resolve_path_cached_trait(raw_from, project_root, path_cache, allow_escape);
+            let from = resolve_path_cached(raw_from, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&from) {
                 return core_helpers::blocked_error(raw_from);
             }
             let to =
-                resolve_path_write_cached_trait(raw_to, project_root, path_cache, allow_escape);
+                resolve_path_write_cached(raw_to, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&to) {
                 return core_helpers::blocked_error(raw_to);
             }
@@ -3387,7 +3317,10 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                 );
             }
             match fsutil::rename(&from, &to) {
-                Ok(_) => format!("Renamed {} -> {}", from.display(), to.display()),
+                Ok(_) => {
+                    autocode_fs::git::invalidate_git_cache(std::path::Path::new(project_root));
+                    format!("Renamed {} -> {}", from.display(), to.display())
+                }
                 Err(e) => helpers::tool_error(
                     &format!(
                         "Error renaming {} -> {}: {}",
@@ -3406,7 +3339,7 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                 None => return "Error: missing 'path' argument".to_string(),
             };
             let path =
-                resolve_path_write_cached_trait(raw_path, project_root, path_cache, allow_escape);
+                resolve_path_write_cached(raw_path, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&path) {
                 return core_helpers::blocked_error(raw_path);
             }
@@ -3423,7 +3356,7 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
             };
             let search_root = args["path"].as_str().unwrap_or(project_root);
             let search_path =
-                resolve_path_cached_trait(search_root, project_root, path_cache, allow_escape);
+                resolve_path_cached(search_root, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&search_path) {
                 return core_helpers::blocked_error(search_root);
             }
@@ -3457,7 +3390,7 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
             let new_text = helpers::strip_line_numbers(raw_new_text);
 
             let path =
-                resolve_path_write_cached_trait(raw_path, project_root, path_cache, allow_escape);
+                resolve_path_write_cached(raw_path, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&path) {
                 return core_helpers::blocked_error(raw_path);
             }
@@ -3474,6 +3407,7 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
             match helpers::fuzzy_find_replace(&content, &old_text, &new_text, replace_all) {
                 Some((patched, strategy, start_line)) => match fsutil::write(&path, &patched) {
                     Ok(_) => {
+                        autocode_fs::git::invalidate_git_cache(std::path::Path::new(project_root));
                         // start_line is 0-based; convert to 1-based for display
                         let line_num = start_line + 1;
                         format!(
@@ -3522,7 +3456,7 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
             let new_text = args["new_text"].as_str().unwrap_or("");
 
             let path =
-                resolve_path_write_cached_trait(raw_path, project_root, path_cache, allow_escape);
+                resolve_path_write_cached(raw_path, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&path) {
                 return core_helpers::blocked_error(raw_path);
             }
@@ -3570,14 +3504,17 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
             }
 
             match fsutil::write(&path, &result) {
-                Ok(_) => format!(
-                    "Patched {} lines {}-{} ({} -> {} bytes)",
-                    path.display(),
-                    start_line,
-                    end_line,
-                    content.len(),
-                    result.len(),
-                ),
+                Ok(_) => {
+                    autocode_fs::git::invalidate_git_cache(std::path::Path::new(project_root));
+                    format!(
+                        "Patched {} lines {}-{} ({} -> {} bytes)",
+                        path.display(),
+                        start_line,
+                        end_line,
+                        content.len(),
+                        result.len(),
+                    )
+                }
                 Err(e) => helpers::tool_error(
                     &format!("Error writing {}: {}", path.display(), e),
                     "Check that the path is writable",
@@ -3766,7 +3703,7 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
             let search_path = Some(
                 args["path"]
                     .as_str()
-                    .map(|p| resolve_path_cached_trait(p, project_root, path_cache, allow_escape))
+                    .map(|p| resolve_path_cached(p, project_root, path_cache, allow_escape))
                     .unwrap_or_else(|| std::path::PathBuf::from(&project_root)),
             );
             if let Some(ref sp) = search_path

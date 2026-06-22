@@ -7,6 +7,65 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::state::{AppState, ChatMessage, Project, SecretString};
 
+// -- Tool-call sanitization ----------------------------------------------------
+
+/// Validate and auto-fix tool_calls arguments that contain corrupt/non-JSON data.
+/// Modifies the tool_calls Value in place, removing any function call whose
+/// arguments field is not valid JSON after repair attempts.
+/// Returns true if any changes were made.
+pub fn sanitize_tool_calls(tool_calls: &mut Option<serde_json::Value>) -> bool {
+    let Some(arr) = tool_calls.as_mut().and_then(|v| v.as_array_mut()) else {
+        return false;
+    };
+    let mut changed = false;
+    let mut i = 0;
+    while i < arr.len() {
+        let args_str = match arr[i]["function"]["arguments"].as_str() {
+            Some(s) if !s.is_empty() => s.to_string(),
+            _ => {
+                i += 1;
+                continue;
+            }
+        };
+        if serde_json::from_str::<serde_json::Value>(&args_str).is_ok() {
+            i += 1;
+            continue;
+        }
+        changed = true;
+        // Attempt repair: try to re-escape content by parsing raw bytes as JSON string.
+        if let Ok(repaired) = serde_json::from_str::<String>(&format!("\"{}\"", args_str))
+            && serde_json::from_str::<serde_json::Value>(&repaired).is_ok()
+        {
+            arr[i]["function"]["arguments"] = serde_json::Value::String(repaired);
+            i += 1;
+            continue;
+        }
+        // Last resort: find the longest valid JSON prefix.
+        let mut end = args_str.len();
+        let mut fixed = false;
+        for _ in 0..args_str.len().min(256) {
+            if end <= 2 {
+                break;
+            }
+            end = args_str.floor_char_boundary(end - 1);
+            if serde_json::from_str::<serde_json::Value>(&args_str[..end]).is_ok() {
+                arr[i]["function"]["arguments"] =
+                    serde_json::Value::String(args_str[..end].to_string());
+                fixed = true;
+                i += 1;
+                break;
+            }
+            if let Some(prev_quote) = args_str[..end].rfind('"') {
+                end = prev_quote + 1;
+            }
+        }
+        if !fixed {
+            arr.remove(i);
+        }
+    }
+    changed
+}
+
 // -- ID & Time -----------------------------------------------------------------
 
 pub(crate) static ID_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -166,6 +225,64 @@ pub fn estimate_message_tokens(msg: &crate::state::ChatMessage) -> usize {
     total
 }
 
+/// Estimate tokens for a single ChatMessage as it would appear in the API
+/// JSON request body. This includes the role label, content, tool_calls,
+/// tool_call_id, reasoning_content, and JSON structural overhead (braces,
+/// quotes, colons, commas). The result is suitable for caching on the
+/// message's `full_token_estimate` field so the session running total can
+/// be updated incrementally without re-serializing all messages.
+///
+/// If `model` is provided, uses tiktoken for accuracy. Otherwise falls back
+/// to heuristic.
+pub fn estimate_single_message_json_tokens(msg: &ChatMessage, model: Option<&str>) -> usize {
+    let obj = serde_json::json!({
+        "role": msg.role.label(),
+        "content": msg.content,
+    });
+    // Build the same JSON object that estimate_full_request_tokens would
+    // produce for this single message, then count tokens on it.
+    let mut obj = obj;
+    if let Some(id) = &msg.tool_call_id {
+        obj["tool_call_id"] = serde_json::json!(id);
+    }
+    if let Some(tc) = &msg.tool_calls {
+        obj["tool_calls"] = tc.clone();
+    }
+    if let Some(rc) = &msg.reasoning_content {
+        obj["reasoning_content"] = serde_json::json!(rc);
+    }
+
+    let json_str = serde_json::to_string(&obj).unwrap_or_default();
+
+    // Try tiktoken first for accuracy
+    if let Some(model_name) = model
+        && let Some(count) = crate::tokenizer::offline_token_count(model_name, &json_str)
+    {
+        return count;
+    }
+
+    // Fallback to heuristic
+    estimate_tokens_json(&json_str)
+}
+
+/// Estimate tokens for tool definitions JSON. This is a fixed overhead sent
+/// with every request but not part of chat history. Cached so the session
+/// running total can be updated incrementally.
+///
+/// If `model` is provided, uses tiktoken for accuracy. Otherwise falls back
+/// to heuristic.
+pub fn estimate_tools_tokens(tools_json: &serde_json::Value, model: Option<&str>) -> usize {
+    let json_str = serde_json::to_string(tools_json).unwrap_or_default();
+
+    if let Some(model_name) = model
+        && let Some(count) = crate::tokenizer::offline_token_count(model_name, &json_str)
+    {
+        return count;
+    }
+
+    estimate_tokens_json(&json_str)
+}
+
 /// Estimate tokens for a full API request body by serializing the relevant
 /// message fields (content, role, tool_calls, tool_call_id, reasoning_content)
 /// into a JSON array and applying the tokenizer/heuristic to the full serialized text.
@@ -173,6 +290,9 @@ pub fn estimate_message_tokens(msg: &crate::state::ChatMessage) -> usize {
 /// that the per-message `estimate_tokens(&content)` misses.
 ///
 /// If `model` is provided, uses tiktoken for accurate counting. Otherwise falls back to heuristic.
+///
+/// **Note:** For incremental updates prefer `estimate_single_message_json_tokens`
+/// + `estimate_tools_tokens` to avoid re-serializing all messages every time.
 pub fn estimate_full_request_tokens(
     messages: &[ChatMessage],
     tools_json: Option<&serde_json::Value>,
@@ -374,24 +494,81 @@ fn find_deepest_existing_ancestor(path: &std::path::Path) -> Option<std::path::P
     None
 }
 
-const CACHE_MAX: usize = 200;
+/// Default maximum number of entries in the path cache.
+const PATH_CACHE_MAX: usize = 500;
 
-fn cache_insert(
-    cache: &mut std::collections::HashMap<String, std::path::PathBuf>,
-    key: String,
-    val: std::path::PathBuf,
-) {
-    if cache.len() >= CACHE_MAX {
-        cache.extract_if(|_, _| true).next();
+/// A single LRU cache for resolved file paths.
+///
+/// Uses a `HashMap` for O(1) lookups and a `VecDeque` to track insertion
+/// order for proper least-recently-used eviction. When the capacity is
+/// exceeded the oldest entry is removed.
+///
+/// This replaces the previous three separate caching mechanisms:
+/// - `cache_insert` + `HashMap` (no real LRU eviction)
+/// - `PathCacheTrait` + generic trait functions (unnecessary indirection)
+/// - `PathCache` in `chat.rs` (duplicated LRU logic)
+pub struct LruPathCache {
+    map: std::collections::HashMap<String, std::path::PathBuf>,
+    order: std::collections::VecDeque<String>,
+    capacity: usize,
+}
+
+impl LruPathCache {
+    pub fn new() -> Self {
+        Self::with_capacity(PATH_CACHE_MAX)
     }
-    cache.insert(key, val);
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            map: std::collections::HashMap::new(),
+            order: std::collections::VecDeque::new(),
+            capacity: capacity.max(1),
+        }
+    }
+
+    pub fn get(&self, key: &str) -> Option<&std::path::PathBuf> {
+        self.map.get(key)
+    }
+
+    pub fn insert(&mut self, key: String, value: std::path::PathBuf) {
+        if self.map.contains_key(&key) {
+            self.map.insert(key, value);
+            return;
+        }
+        if self.map.len() >= self.capacity {
+            if let Some(oldest) = self.order.pop_front() {
+                self.map.remove(&oldest);
+            }
+        }
+        self.order.push_back(key.clone());
+        self.map.insert(key, value);
+    }
+
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.map.clear();
+        self.order.clear();
+    }
+}
+
+impl Default for LruPathCache {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[must_use]
 pub fn resolve_path_cached(
     raw: &str,
     project_root: &str,
-    cache: &mut std::collections::HashMap<String, std::path::PathBuf>,
+    cache: &mut LruPathCache,
     allow_escape: bool,
 ) -> std::path::PathBuf {
     let key = format!("r:{}:{}", project_root, raw);
@@ -399,7 +576,7 @@ pub fn resolve_path_cached(
         return p.clone();
     }
     let p = resolve_path(raw, project_root, allow_escape);
-    cache_insert(cache, key, p.clone());
+    cache.insert(key, p.clone());
     p
 }
 
@@ -407,7 +584,7 @@ pub fn resolve_path_cached(
 pub fn resolve_path_write_cached(
     raw: &str,
     project_root: &str,
-    cache: &mut std::collections::HashMap<String, std::path::PathBuf>,
+    cache: &mut LruPathCache,
     allow_escape: bool,
 ) -> std::path::PathBuf {
     let key = format!("w:{}:{}", project_root, raw);
@@ -415,57 +592,7 @@ pub fn resolve_path_write_cached(
         return p.clone();
     }
     let p = resolve_path_write(raw, project_root, allow_escape);
-    cache_insert(cache, key, p.clone());
-    p
-}
-
-/// Trait for path cache types that can be used with resolve_path_cached.
-/// Implemented for both HashMap (legacy) and PathCache (LRU-capped).
-pub trait PathCacheTrait {
-    fn get_path(&self, key: &str) -> Option<std::path::PathBuf>;
-    fn insert_path(&mut self, key: String, value: std::path::PathBuf);
-}
-
-impl PathCacheTrait for std::collections::HashMap<String, std::path::PathBuf> {
-    fn get_path(&self, key: &str) -> Option<std::path::PathBuf> {
-        self.get(key).cloned()
-    }
-    fn insert_path(&mut self, key: String, value: std::path::PathBuf) {
-        cache_insert(self, key, value);
-    }
-}
-
-/// Resolve a path using a cache that implements PathCacheTrait.
-#[must_use]
-pub fn resolve_path_cached_trait<C: PathCacheTrait>(
-    raw: &str,
-    project_root: &str,
-    cache: &mut C,
-    allow_escape: bool,
-) -> std::path::PathBuf {
-    let key = format!("r:{}:{}", project_root, raw);
-    if let Some(p) = cache.get_path(&key) {
-        return p;
-    }
-    let p = resolve_path(raw, project_root, allow_escape);
-    cache.insert_path(key, p.clone());
-    p
-}
-
-/// Resolve a write path using a cache that implements PathCacheTrait.
-#[must_use]
-pub fn resolve_path_write_cached_trait<C: PathCacheTrait>(
-    raw: &str,
-    project_root: &str,
-    cache: &mut C,
-    allow_escape: bool,
-) -> std::path::PathBuf {
-    let key = format!("w:{}:{}", project_root, raw);
-    if let Some(p) = cache.get_path(&key) {
-        return p;
-    }
-    let p = resolve_path_write(raw, project_root, allow_escape);
-    cache.insert_path(key, p.clone());
+    cache.insert(key, p.clone());
     p
 }
 
@@ -1168,22 +1295,20 @@ pub fn unique_data_dir_name(projects: &[Project], desired: &str) -> String {
 /// Recompute estimated_full_tokens on a session using the actual tool
 /// definitions JSON. Must be called after loading messages from disk so
 /// the toolbar meter and pre-flight check agree from the start.
+/// Uses incremental counting: sums cached per-message estimates and
+/// adds tool definitions overhead.
 pub fn update_full_estimate(session: &mut crate::state::Session, tools_json: &serde_json::Value) {
-    use crate::state::Role;
-    let filtered: Vec<ChatMessage> = session
-        .messages
-        .iter()
-        .filter(|m| m.role != Role::Error)
-        .cloned()
-        .collect();
     let model = if session.model.is_empty() {
         None
     } else {
         Some(session.model.as_str())
     };
-    session.estimated_full_tokens =
-        estimate_full_request_tokens(&filtered, Some(tools_json), model);
-    session.estimated_messages_tokens = estimate_full_request_tokens(&filtered, None, model);
+    // Clone the model string to avoid borrow conflict: session is mutably
+    // borrowed by recompute_* but immutably borrowed by model.as_str().
+    let model_owned = model.map(|s| s.to_string());
+    let model_ref = model_owned.as_deref();
+    session.recompute_messages_tokens(model_ref);
+    session.recompute_full_tokens(tools_json, model_ref);
 }
 
 /// Replace or strip Unicode characters that egui's default fonts don't support
