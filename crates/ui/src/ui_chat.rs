@@ -1914,6 +1914,7 @@ fn show_input_row(
                             .id(egui::Id::new(format!("chat_input_{}", sid)))
                             .hint_text("Describe a task... Shift+Enter for newline")
                             .desired_width(f32::INFINITY)
+                            .desired_rows(3)
                             .font(egui::TextStyle::Body)
                             .text_color(theme().text_primary),
                     );

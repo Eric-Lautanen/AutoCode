@@ -375,9 +375,9 @@ pub fn grep_files(
     case_sensitive: bool,
     max_results: usize,
 ) -> String {
-    let search_path = &autocode_core::fsutil::extended_path(search_path);
     let project_root = find_project_root(search_path).unwrap_or_else(|| search_path.to_path_buf());
     let project_root = autocode_core::fsutil::extended_path(&project_root);
+    let search_path = &autocode_core::fsutil::extended_path(search_path);
 
     // If the search path is a single file, search it directly.
     if search_path.is_file() {

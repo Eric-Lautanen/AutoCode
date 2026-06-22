@@ -322,8 +322,8 @@ fn push_tool_results_to_state(state: &mut AppState, runtime: &ChatRuntime, resul
             // Persist to disk immediately.
             let ptl = state.project_task_list.clone();
             if let Some(proj) = state.active_project_mut() {
-                let mut meta = autocode_core::session_storage::load_project_meta(proj)
-                    .unwrap_or_default();
+                let mut meta =
+                    autocode_core::session_storage::load_project_meta(proj).unwrap_or_default();
                 meta.version = 1;
                 meta.project_task_list = ptl;
                 if let Err(e) = autocode_core::session_storage::save_project_meta(proj, &meta) {
