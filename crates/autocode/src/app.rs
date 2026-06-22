@@ -197,14 +197,7 @@ impl AutocodeApp {
 impl eframe::App for AutocodeApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Update window title with active session name.
-        let title = self
-            .state
-            .active_session()
-            .map(|s| {
-                let label = if s.label.is_empty() { &s.id } else { &s.label };
-                format!("AutoCode :: {}", label)
-            })
-            .unwrap_or_else(|| "AutoCode -- Autonomous AI Coder".into());
+        let title = crate::helpers::window_title(&self.state);
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
 
         ctx.options_mut(|o| {
@@ -262,22 +255,7 @@ impl eframe::App for AutocodeApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
 
-        // Prune old completed shell tasks to prevent unbounded growth.
-        // Keep at most 200 entries; remove the oldest completed/failed ones first.
-        use autocode_core::state::ShellStatus;
-        if self.state.shell_tasks.len() > 200 {
-            let excess = self.state.shell_tasks.len() - 200;
-            self.state
-                .shell_tasks
-                .extract_if(0..excess, |t| {
-                    matches!(t.status, ShellStatus::Done { .. } | ShellStatus::Failed(_))
-                })
-                .for_each(drop);
-            if self.state.shell_tasks.len() > 200 {
-                let extra = self.state.shell_tasks.len() - 200;
-                self.state.shell_tasks.drain(0..extra);
-            }
-        }
+        crate::helpers::prune_shell_tasks(&mut self.state.shell_tasks);
 
         let session_changed = self.prev_session_id != self.state.active_session_id;
         if session_changed {
@@ -545,19 +523,6 @@ impl eframe::App for AutocodeApp {
 
         std::thread::yield_now();
 
-        if let Some(lock) = autocode_core::fsutil::TEMP_FILES.get() {
-            let mut temp_files = match lock.lock() {
-                Ok(guard) => guard,
-                Err(poisoned) => {
-                    lock.clear_poison();
-                    poisoned.into_inner()
-                }
-            };
-            for path in temp_files.drain(..) {
-                if let Err(e) = std::fs::remove_file(&path) {
-                    eprintln!("[app] Failed to remove temp file {:?}: {}", path, e);
-                }
-            }
-        }
+        crate::helpers::cleanup_temp_files();
     }
 }
