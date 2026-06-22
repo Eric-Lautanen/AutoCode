@@ -31,6 +31,12 @@ pub struct SettingsState {
     tab: Tab,
     fetched_models: HashMap<String, Vec<String>>,
     fetch_status: HashMap<String, String>,
+    /// If set, the provider with this key is being renamed.
+    renaming_provider: Option<String>,
+    /// Buffer for the rename text input / new-provider name input.
+    rename_buffer: String,
+    /// When true, show an inline name input for adding a new provider.
+    adding_provider: bool,
 }
 
 use std::collections::HashMap;
@@ -254,17 +260,49 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
 
     ui.add_space(4.0);
     if ui.button("+ Add Provider").clicked() {
-        let kind = autocode_core::state::ProviderKind::new("openai-compatible");
-        let base = kind.label();
-        let mut key = base.clone();
-        let mut n = 2;
-        while state.providers.contains_key(&key) {
-            key = format!("{} {}", base, n);
-            n += 1;
-        }
-        state
-            .providers
-            .insert(key, autocode_core::state::ApiProvider::new(kind));
+        settings.adding_provider = true;
+        settings.rename_buffer = "My Provider".into();
+    }
+    if settings.adding_provider {
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("Name:").size(12.0).color(Palette::TEXT_SECONDARY),
+            );
+            ui.text_edit_singleline(&mut settings.rename_buffer);
+            let name_ok = !settings.rename_buffer.is_empty()
+                && !state.providers.contains_key(&settings.rename_buffer);
+            if ui
+                .add_enabled(
+                    name_ok,
+                    egui::Button::new(RichText::new("Add").size(12.0)),
+                )
+                .on_hover_text(
+                    if settings.rename_buffer.is_empty() {
+                        "Name cannot be empty"
+                    } else if state.providers.contains_key(&settings.rename_buffer) {
+                        "Name already exists"
+                    } else {
+                        "Add this provider"
+                    },
+                )
+                .clicked()
+            {
+                let kind = autocode_core::state::ProviderKind::new("openai-compatible");
+                let key = std::mem::take(&mut settings.rename_buffer);
+                state
+                    .providers
+                    .insert(key, autocode_core::state::ApiProvider::new(kind));
+                settings.adding_provider = false;
+                provider_dirty = true;
+            }
+            if ui
+                .button(RichText::new("Cancel").size(12.0).color(Palette::TEXT_MUTED))
+                .clicked()
+            {
+                settings.adding_provider = false;
+                settings.rename_buffer.clear();
+            }
+        });
     }
     ui.add_space(8.0);
 
@@ -312,52 +350,122 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                 .show(ui, |ui| {
                     // ── Header ─────────────────────────────────────────
                     ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(p.kind.label())
-                                .size(13.0)
-                                .color(Palette::TEXT_PRIMARY)
-                                .strong(),
-                        );
-                        if is_active {
-                            ui.label(RichText::new("Active").size(10.0).color(Palette::SUCCESS));
-                        } else if ui.small_button("Set Active").clicked() {
-                            set_active_key = Some((key.clone(), p.model.clone()));
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let is_renaming = settings.renaming_provider.as_deref() == Some(&key);
+                        if is_renaming {
+                            ui.text_edit_singleline(&mut settings.rename_buffer);
+                            let name_ok = !settings.rename_buffer.is_empty()
+                                && settings.rename_buffer != key
+                                && !state.providers.contains_key(&settings.rename_buffer);
                             if ui
-                                .small_button("Reset")
-                                .on_hover_text("Reset all provider settings to defaults")
-                                .clicked()
-                            {
-                                p.reset_defaults();
-                            }
-                            if !is_active
-                                && ui
-                                    .small_button("Remove")
-                                    .on_hover_text("Remove this provider")
-                                    .clicked()
-                            {
-                                to_remove.push(key.clone());
-                            }
-                            let enabled_label = if p.enabled { "Enabled" } else { "Disabled" };
-                            let enabled_color = if p.enabled {
-                                Palette::SUCCESS
-                            } else {
-                                Palette::TEXT_MUTED
-                            };
-                            if ui
-                                .button(
-                                    RichText::new(enabled_label).size(11.0).color(enabled_color),
+                                .add_enabled(
+                                    name_ok,
+                                    egui::Button::new(RichText::new("Save").size(12.0)),
                                 )
                                 .clicked()
                             {
-                                p.enabled = !p.enabled;
-                                provider_dirty = true;
-                                if !p.enabled && is_active {
-                                    disable_switch_key = Some(key.clone());
+                                let new_key = std::mem::take(&mut settings.rename_buffer);
+                                let old_key = settings
+                                    .renaming_provider
+                                    .take()
+                                    .unwrap_or_default();
+                                if let Some(ap) = state.providers.remove(&old_key) {
+                                    state.providers.insert(new_key.clone(), ap);
+                                    if state.active_provider == old_key {
+                                        state.active_provider = new_key.clone();
+                                        if let Some(sess) = state.active_session_mut() {
+                                            sess.provider_label = new_key;
+                                        }
+                                    }
+                                    provider_dirty = true;
                                 }
                             }
-                        });
+                            if ui
+                                .button(
+                                    RichText::new("Cancel")
+                                        .size(12.0)
+                                        .color(Palette::TEXT_MUTED),
+                                )
+                                .clicked()
+                            {
+                                settings.renaming_provider = None;
+                                settings.rename_buffer.clear();
+                            }
+                        } else {
+                            ui.vertical(|ui| {
+                                ui.label(
+                                    RichText::new(&key)
+                                        .size(13.0)
+                                        .color(Palette::TEXT_PRIMARY)
+                                        .strong(),
+                                );
+                                ui.label(
+                                    RichText::new(p.kind.label())
+                                        .size(10.0)
+                                        .color(Palette::TEXT_MUTED),
+                                );
+                            });
+                            if ui
+                                .small_button("✎")
+                                .on_hover_text("Rename provider")
+                                .clicked()
+                            {
+                                settings.renaming_provider = Some(key.clone());
+                                settings.rename_buffer = key.clone();
+                            }
+                            if is_active {
+                                ui.label(
+                                    RichText::new("Active")
+                                        .size(10.0)
+                                        .color(Palette::SUCCESS),
+                                );
+                            } else if ui.small_button("Set Active").clicked() {
+                                set_active_key = Some((key.clone(), p.model.clone()));
+                            }
+                        }
+                        ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                if ui
+                                    .small_button("Reset")
+                                    .on_hover_text("Reset all provider settings to defaults")
+                                    .clicked()
+                                {
+                                    p.reset_defaults();
+                                }
+                                if !is_active
+                                    && ui
+                                        .small_button("Remove")
+                                        .on_hover_text("Remove this provider")
+                                        .clicked()
+                                {
+                                    to_remove.push(key.clone());
+                                }
+                                let enabled_label = if p.enabled {
+                                    "Enabled"
+                                } else {
+                                    "Disabled"
+                                };
+                                let enabled_color = if p.enabled {
+                                    Palette::SUCCESS
+                                } else {
+                                    Palette::TEXT_MUTED
+                                };
+                                if ui
+                                    .button(
+                                        RichText::new(enabled_label)
+                                            .size(11.0)
+                                            .color(enabled_color),
+                                    )
+                                    .clicked()
+                                {
+                                    p.enabled = !p.enabled;
+                                    provider_dirty = true;
+                                    if !p.enabled && is_active {
+                                        disable_switch_key = Some(key.clone());
+                                    }
+                                }
+                            },
+                        );
                     });
 
                     ui.add_space(8.0);
