@@ -50,21 +50,6 @@ The codebase is well-structured with clear separation of concerns across 5 crate
 
 
 
-### 3.5 `render_item` — Duplicated in Both Todo Files (MEDIUM)
-**Files:** `crates/ui/src/ui_todo.rs` and `crates/ui/src/ui_project_tasks.rs`  
-**Issue:** The `render_item` function is identical in both files.  
-**Fix:** Move to `crates/ui/src/helpers.rs`.
-
-### 3.6 `empty_state` — Duplicated in Both Todo Files (LOW)
-**Files:** `crates/ui/src/ui_todo.rs` and `crates/ui/src/ui_project_tasks.rs`  
-**Issue:** Nearly identical empty-state rendering.  
-**Fix:** Move to `crates/ui/src/helpers.rs`.
-
-### 3.7 `ThemeColors` Struct Duplicates Palette (LOW)
-**File:** `crates/ui/src/ui_chat.rs`  
-**Issue:** `ThemeColors` struct has 30 fields that mostly duplicate `Palette` constants. The `from_design()` method converts `DesignSettings` [f32;3] colors to `Color32`.  
-**Impact:** ~80 lines of mapping code that could be simplified.  
-**Fix:** Use `Palette` directly where possible; only keep dynamic colors in `ThemeColors`.
 
 ### 3.8 `render_markdown` / `render_markdown_streaming` Duplication (LOW)
 **File:** `crates/ui/src/ui_chat.rs`  

@@ -26,12 +26,12 @@ fn is_transient_error(msg: &str) -> bool {
         "invalid_api_key",
         "quota",
         "billing",
-        "insufficient",      // catches "insufficient credits", "insufficient funds"
+        "insufficient", // catches "insufficient credits", "insufficient funds"
         "out of credits",
         "no credits",
-        "credit",            // catches "credit limit", "credit balance"  
-        "payment",           // catches "payment required", "payment_required"
-        "402",               // HTTP 402 Payment Required
+        "credit",  // catches "credit limit", "credit balance"
+        "payment", // catches "payment required", "payment_required"
+        "402",     // HTTP 402 Payment Required
         "model_not_found",
         "context_length",
         "max_context",
@@ -151,8 +151,9 @@ fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: Chat
         // (prepare_request_messages_for_session includes tool definitions).
         if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
             let last = sess.messages.last().unwrap();
-            sess.estimated_messages_tokens =
-                sess.estimated_messages_tokens.saturating_add(last.full_token_estimate);
+            sess.estimated_messages_tokens = sess
+                .estimated_messages_tokens
+                .saturating_add(last.full_token_estimate);
         }
     }
 }
@@ -2420,8 +2421,9 @@ fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
                 Some(s.model.as_str())
             };
             let tools_json = tool_definitions(true);
-            let estimated = s.estimated_messages_tokens
-                .saturating_add(autocode_core::helpers::estimate_tools_tokens(&tools_json, model));
+            let estimated = s.estimated_messages_tokens.saturating_add(
+                autocode_core::helpers::estimate_tools_tokens(&tools_json, model),
+            );
             let used = if s.actual_tokens_used > 0 {
                 s.actual_tokens_used.max(estimated)
             } else {
@@ -3172,8 +3174,7 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                 None => return "Error: missing 'path' argument".to_string(),
             };
             let content = args["content"].as_str().unwrap_or("");
-            let path =
-                resolve_path_write_cached(raw_path, project_root, path_cache, allow_escape);
+            let path = resolve_path_write_cached(raw_path, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&path) {
                 return core_helpers::blocked_error(raw_path);
             }
@@ -3264,8 +3265,7 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                 Some(p) => p,
                 None => return "Error: missing 'path' argument".to_string(),
             };
-            let path =
-                resolve_path_write_cached(raw_path, project_root, path_cache, allow_escape);
+            let path = resolve_path_write_cached(raw_path, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&path) {
                 return core_helpers::blocked_error(raw_path);
             }
@@ -3299,8 +3299,7 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
             if core_helpers::is_blocked_path(&from) {
                 return core_helpers::blocked_error(raw_from);
             }
-            let to =
-                resolve_path_write_cached(raw_to, project_root, path_cache, allow_escape);
+            let to = resolve_path_write_cached(raw_to, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&to) {
                 return core_helpers::blocked_error(raw_to);
             }
@@ -3338,8 +3337,7 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                 Some(p) => p,
                 None => return "Error: missing 'path' argument".to_string(),
             };
-            let path =
-                resolve_path_write_cached(raw_path, project_root, path_cache, allow_escape);
+            let path = resolve_path_write_cached(raw_path, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&path) {
                 return core_helpers::blocked_error(raw_path);
             }
@@ -3389,8 +3387,7 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
             let old_text = helpers::strip_line_numbers(raw_old_text);
             let new_text = helpers::strip_line_numbers(raw_new_text);
 
-            let path =
-                resolve_path_write_cached(raw_path, project_root, path_cache, allow_escape);
+            let path = resolve_path_write_cached(raw_path, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&path) {
                 return core_helpers::blocked_error(raw_path);
             }
@@ -3455,8 +3452,7 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
             let end_line = args["end_line"].as_u64().unwrap_or(0) as usize;
             let new_text = args["new_text"].as_str().unwrap_or("");
 
-            let path =
-                resolve_path_write_cached(raw_path, project_root, path_cache, allow_escape);
+            let path = resolve_path_write_cached(raw_path, project_root, path_cache, allow_escape);
             if core_helpers::is_blocked_path(&path) {
                 return core_helpers::blocked_error(raw_path);
             }

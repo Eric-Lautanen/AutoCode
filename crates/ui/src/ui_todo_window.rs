@@ -210,23 +210,22 @@ pub fn show_todo_window(
             ui.add_space(4.0);
 
             let cur = helpers::find_current_task_index(&list.items);
-            helpers::todo_scroll_area(
-                ui,
-                &list.items,
-                full_w,
-                cur,
-                render_item,
-                |ui| empty_state(ui, config),
-            );
+            helpers::todo_scroll_area(ui, &list.items, full_w, cur, render_item, |ui| {
+                empty_state(ui, config)
+            });
 
             ui.add_space(4.0);
         });
 
     // Auto-close and clear when all items are completed.
-    let all_done =
-        !list.is_empty() && list.items.iter().all(|i| i.status == TodoStatus::Completed);
+    let all_done = !list.is_empty() && list.items.iter().all(|i| i.status == TodoStatus::Completed);
 
-    let all_done_triggered = if all_done { clear_clicked = true; true } else { false };
+    let all_done_triggered = if all_done {
+        clear_clicked = true;
+        true
+    } else {
+        false
+    };
 
     let close_clicked = !open || close_requested.get();
     if close_clicked {

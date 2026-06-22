@@ -879,9 +879,9 @@ impl Session {
             if msg.full_token_estimate > 0 {
                 total = total.saturating_add(msg.full_token_estimate);
             } else {
-                total = total.saturating_add(
-                    crate::helpers::estimate_single_message_json_tokens(msg, model),
-                );
+                total = total.saturating_add(crate::helpers::estimate_single_message_json_tokens(
+                    msg, model,
+                ));
             }
         }
         self.estimated_messages_tokens = total;
