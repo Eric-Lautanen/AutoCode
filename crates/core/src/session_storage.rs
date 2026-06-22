@@ -482,14 +482,13 @@ fn project_dir(data_dir_name: &str) -> PathBuf {
         .join(data_dir_name)
 }
 
-/// Save project identity to disk. Writes to both meta.json (so only one file
-/// is needed going forward) and project.json (backward compatibility / safety
-/// net so identity data is never lost if one write silently fails).
+/// Save project identity to disk. Writes identity into meta.json alongside
+/// the task list — there is only one file (meta.json) per project.
 pub fn save_project_identity(project: &Project) -> std::io::Result<()> {
     let dir = project_dir(&project.data_dir_name);
     fsutil::create_dir_all(&dir)?;
 
-    // 1. Write identity into meta.json alongside the task list.
+    // Write identity into meta.json alongside the task list.
     let mut meta = load_project_meta(project).unwrap_or_default();
     meta.project_id = project.id.clone();
     meta.project_name = project.name.clone();
@@ -497,20 +496,16 @@ pub fn save_project_identity(project: &Project) -> std::io::Result<()> {
     meta.created_at = project.created_at;
     save_project_meta(project, &meta)?;
 
-    // 2. Also write project.json as a safety net so existing code paths
-    //    that only look for project.json still work.
-    let identity_path = dir.join("project.json");
-    atomic_write_json(&identity_path, project)?;
-
     Ok(())
 }
 
-/// Load project identity. Tries meta.json first (merged file), falls back to
-/// project.json (legacy separate file).
+/// Load project identity. Prefers meta.json (the single per-project metadata file).
+/// Falls back to legacy project.json for migration — if found, automatically
+/// migrates the identity into meta.json so the next load hits the fast path.
 pub fn load_project_identity(data_dir_name: &str) -> Option<Project> {
     let dir = project_dir(data_dir_name);
 
-    // Try meta.json — it may have identity fields now.
+    // Fast path: meta.json already has identity fields.
     if let Some(meta) = load_project_meta_raw(&dir)
         && !meta.project_id.is_empty()
     {
@@ -523,11 +518,20 @@ pub fn load_project_identity(data_dir_name: &str) -> Option<Project> {
         });
     }
 
-    // Fallback: legacy project.json.
+    // Migration: try legacy project.json, then merge identity into meta.json.
     let old_path = dir.join("project.json");
     if let Ok(json) = fsutil::read_to_string(&old_path)
         && let Ok(project) = serde_json::from_str::<Project>(&json)
     {
+        // Merge identity into meta.json so next load hits the fast path.
+        let mut meta = load_project_meta_raw(&dir).unwrap_or_default();
+        meta.project_id = project.id.clone();
+        meta.project_name = project.name.clone();
+        meta.root_path = project.root_path.clone();
+        meta.created_at = project.created_at;
+        let meta_path = dir.join("meta.json");
+        let _ = atomic_write_json(&meta_path, &meta);
+
         return Some(project);
     }
 
@@ -545,7 +549,6 @@ fn load_project_meta_raw(dir: &Path) -> Option<crate::state::ProjectMeta> {
 }
 
 /// Discover projects from disk by scanning AutoCode_data/projects/.
-/// Returns projects that have identity data in meta.json (or old project.json).
 pub fn discover_projects_from_disk() -> Vec<Project> {
     let proj_dir = fsutil::exe_dir().join("AutoCode_data").join("projects");
     if !proj_dir.exists() {
