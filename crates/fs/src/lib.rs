@@ -5,6 +5,7 @@
 //! file extraction from AI code-fence output, and glob matching utilities.
 
 pub mod explorer;
+pub mod git;
 pub mod helpers;
 pub mod shell;
 pub mod skills;

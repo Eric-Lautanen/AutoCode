@@ -13,6 +13,7 @@ use autocode_core::{
     state::AppState,
     theme::{Palette, ROUND_SM},
 };
+use autocode_fs::git::GitFileStatus;
 
 /// Ephemeral (non-persisted) state for the explorer panel.
 #[derive(Default)]
@@ -42,6 +43,37 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, panel: &mut ExplorerPanelSt
     for p in &state.expanded_dirs {
         panel.expanded.insert(p.clone());
     }
+
+    // Resolve project root early so the Refresh button can use it.
+    let root_path = match state.active_project().map(|p| p.root_path.clone()) {
+        Some(r) => r,
+        None => {
+            Frame::NONE
+                .fill(Palette::BG_PANEL)
+                .inner_margin(Margin {
+                    left: 0,
+                    right: 0,
+                    top: 12,
+                    bottom: 9,
+                })
+                .show(ui, |ui| {
+                    ui.add_space(16.0);
+                    ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                        ui.label(
+                            RichText::new("No project open.\nAdd one in Settings > Projects.")
+                                .size(11.0)
+                                .color(Palette::TEXT_MUTED),
+                        );
+                    });
+                });
+            return;
+        }
+    };
+    let root = Path::new(&root_path);
+    let repo_root = autocode_fs::explorer::find_project_root(root);
+    let git_status = repo_root
+        .as_ref()
+        .and_then(|r| autocode_fs::git::get_cached_git_status(r));
 
     Frame::NONE
         .fill(Palette::BG_PANEL)
@@ -75,6 +107,9 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, panel: &mut ExplorerPanelSt
                     {
                         panel.selected_file = None;
                         panel.file_content = None;
+                        if let Some(ref r) = repo_root {
+                            autocode_fs::git::invalidate_git_cache(r);
+                        }
                     }
                 });
             });
@@ -82,24 +117,6 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, panel: &mut ExplorerPanelSt
             ui.add_space(4.0);
             ui.add(egui::Separator::default().shrink(0.0));
             ui.add_space(4.0);
-
-            // -- No-project placeholder --------------------------------
-            let root_path = match state.active_project().map(|p| p.root_path.clone()) {
-                Some(r) => r,
-                None => {
-                    ui.add_space(16.0);
-                    ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                        ui.label(
-                            RichText::new("No project open.\nAdd one in Settings > Projects.")
-                                .size(11.0)
-                                .color(Palette::TEXT_MUTED),
-                        );
-                    });
-                    return;
-                }
-            };
-
-            let root = Path::new(&root_path);
 
             // -- File tree (with root label at top) ---------------------
             Frame::NONE
@@ -138,6 +155,8 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, panel: &mut ExplorerPanelSt
                                 renaming: &mut panel.renaming,
                                 rename_buffer: &mut panel.rename_buffer,
                                 file_edit_buffer: &mut panel.file_edit_buffer,
+                                repo_root,
+                                git_status,
                             };
                             show_tree(ui, root, &mut tree_state);
                         });
@@ -150,6 +169,16 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, panel: &mut ExplorerPanelSt
 
 // -- Recursive tree renderer ---------------------------------------------------
 
+fn git_status_color(status: GitFileStatus) -> Color32 {
+    match status {
+        GitFileStatus::Modified => Palette::WARNING,
+        GitFileStatus::Added | GitFileStatus::Untracked => Palette::SUCCESS,
+        GitFileStatus::Deleted => Palette::ERROR,
+        GitFileStatus::Renamed => Palette::PURPLE,
+        GitFileStatus::Conflicted => Palette::ERROR,
+    }
+}
+
 struct TreeState<'a> {
     expanded: &'a mut std::collections::HashSet<String>,
     selected: &'a mut Option<String>,
@@ -159,10 +188,33 @@ struct TreeState<'a> {
     renaming: &'a mut Option<String>,
     rename_buffer: &'a mut String,
     file_edit_buffer: &'a mut Option<String>,
+    /// Repo root for git status, if available.
+    repo_root: Option<std::path::PathBuf>,
+    /// Cached git status: (file_statuses, dir_statuses).
+    git_status: Option<(
+        std::collections::HashMap<std::path::PathBuf, GitFileStatus>,
+        std::collections::HashMap<std::path::PathBuf, GitFileStatus>,
+    )>,
 }
 
 fn show_tree(ui: &mut egui::Ui, dir: &std::path::Path, state: &mut TreeState<'_>) {
     let entries = autocode_fs::explorer::list_dir_all(dir);
+
+    let entries = if let Some((ref file_statuses, ref dir_statuses)) = state.git_status {
+        if let Some(ref repo_root) = state.repo_root {
+            autocode_fs::explorer::merge_git_status(
+                entries,
+                dir,
+                repo_root,
+                file_statuses,
+                dir_statuses,
+            )
+        } else {
+            entries
+        }
+    } else {
+        entries
+    };
 
     ui.spacing_mut().indent = 12.0;
 
@@ -196,6 +248,9 @@ fn show_tree(ui: &mut egui::Ui, dir: &std::path::Path, state: &mut TreeState<'_>
                     {
                         let new_path = entry.path.with_file_name(state.rename_buffer.as_str());
                         let _ = fsutil::rename(&entry.path, &new_path);
+                        if let Some(ref r) = state.repo_root {
+                            autocode_fs::git::invalidate_git_cache(r);
+                        }
                     }
                     let click_outside =
                         ui.input(|i| i.pointer.any_pressed()) && !resp.contains_pointer();
@@ -209,10 +264,14 @@ fn show_tree(ui: &mut egui::Ui, dir: &std::path::Path, state: &mut TreeState<'_>
                         .inner_margin(Margin::symmetric(6, 3))
                         .show(ui, |ui| {
                             ui.set_min_width(ui.available_width());
+                            let name_color = entry
+                                .git_status
+                                .map(git_status_color)
+                                .unwrap_or(autocode_core::theme::Palette::TEXT_SECONDARY);
                             ui.label(
                                 egui::RichText::new(&entry.name)
                                     .size(12.0)
-                                    .color(autocode_core::theme::Palette::TEXT_SECONDARY),
+                                    .color(name_color),
                             );
                         });
                     let resp = item_frame
@@ -250,6 +309,9 @@ fn show_tree(ui: &mut egui::Ui, dir: &std::path::Path, state: &mut TreeState<'_>
                             .clicked()
                         {
                             let _ = fsutil::remove_dir(&entry.path);
+                            if let Some(ref r) = state.repo_root {
+                                autocode_fs::git::invalidate_git_cache(r);
+                            }
                             if state.selected.as_deref() == Some(&path_str) {
                                 *state.selected = None;
                                 *state.file_content = None;
@@ -292,6 +354,9 @@ fn show_tree(ui: &mut egui::Ui, dir: &std::path::Path, state: &mut TreeState<'_>
                     {
                         let new_path = entry.path.with_file_name(state.rename_buffer.as_str());
                         let _ = fsutil::rename(&entry.path, &new_path);
+                        if let Some(ref r) = state.repo_root {
+                            autocode_fs::git::invalidate_git_cache(r);
+                        }
                     }
                     let click_outside =
                         ui.input(|i| i.pointer.any_pressed()) && !resp.contains_pointer();
@@ -324,7 +389,10 @@ fn show_tree(ui: &mut egui::Ui, dir: &std::path::Path, state: &mut TreeState<'_>
                                     .color(if is_selected {
                                         Palette::ACCENT
                                     } else {
-                                        Palette::TEXT_SECONDARY
+                                        entry
+                                            .git_status
+                                            .map(git_status_color)
+                                            .unwrap_or(Palette::TEXT_SECONDARY)
                                     });
                             ui.label(text);
                         });
@@ -334,7 +402,8 @@ fn show_tree(ui: &mut egui::Ui, dir: &std::path::Path, state: &mut TreeState<'_>
                         .interact(egui::Sense::click())
                         .on_hover_cursor(egui::CursorIcon::PointingHand);
 
-                    if resp.clicked() {
+                    let is_deleted = entry.git_status == Some(GitFileStatus::Deleted);
+                    if resp.clicked() && !is_deleted {
                         *state.selected = Some(path_str.clone());
                         *state.image_texture = None;
                         let ext = entry
@@ -365,35 +434,40 @@ fn show_tree(ui: &mut egui::Ui, dir: &std::path::Path, state: &mut TreeState<'_>
                         );
                     }
 
-                    resp.context_menu(|ui| {
-                        if ui.button("Copy path").clicked() {
-                            ui.ctx().copy_text(path_str.clone());
-                            ui.close();
-                        }
-                        ui.separator();
-                        if ui.button("Rename").clicked() {
-                            *state.renaming = Some(path_str.clone());
-                            *state.selected = Some(path_str.clone());
-                            state.rename_buffer.clear();
-                            ui.close();
-                        }
-                        ui.separator();
-                        if ui
-                            .button(
-                                egui::RichText::new("Delete file")
-                                    .color(autocode_core::theme::Palette::ERROR),
-                            )
-                            .clicked()
-                        {
-                            let _ = fsutil::remove_file(&entry.path);
-                            if state.selected.as_deref() == Some(&path_str) {
-                                *state.selected = None;
-                                *state.file_content = None;
-                                *state.show_viewer = false;
+                    if !is_deleted {
+                        resp.context_menu(|ui| {
+                            if ui.button("Copy path").clicked() {
+                                ui.ctx().copy_text(path_str.clone());
+                                ui.close();
                             }
-                            ui.close();
-                        }
-                    });
+                            ui.separator();
+                            if ui.button("Rename").clicked() {
+                                *state.renaming = Some(path_str.clone());
+                                *state.selected = Some(path_str.clone());
+                                state.rename_buffer.clear();
+                                ui.close();
+                            }
+                            ui.separator();
+                            if ui
+                                .button(
+                                    egui::RichText::new("Delete file")
+                                        .color(autocode_core::theme::Palette::ERROR),
+                                )
+                                .clicked()
+                            {
+                                let _ = fsutil::remove_file(&entry.path);
+                                if let Some(ref r) = state.repo_root {
+                                    autocode_fs::git::invalidate_git_cache(r);
+                                }
+                                if state.selected.as_deref() == Some(&path_str) {
+                                    *state.selected = None;
+                                    *state.file_content = None;
+                                    *state.show_viewer = false;
+                                }
+                                ui.close();
+                            }
+                        });
+                    }
                 }
             }); // end push_id("file", path_str)
         }
@@ -506,6 +580,14 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
                                 && std::fs::write(path, buffer).is_ok()
                             {
                                 panel.file_content = Some(Ok(buffer.clone()));
+                                // Invalidate git cache so explorer colors update.
+                                let saved = std::path::Path::new(path);
+                                if let Some(parent) = saved.parent()
+                                    && let Some(repo) =
+                                        autocode_fs::explorer::find_project_root(parent)
+                                {
+                                    autocode_fs::git::invalidate_git_cache(&repo);
+                                }
                             }
                             if ui
                                 .add(
