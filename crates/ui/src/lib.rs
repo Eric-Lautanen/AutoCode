@@ -12,4 +12,5 @@ pub mod ui_explorer;
 pub mod ui_project_tasks;
 pub mod ui_settings;
 pub mod ui_todo;
+pub mod ui_todo_window;
 pub mod ui_toolbar;

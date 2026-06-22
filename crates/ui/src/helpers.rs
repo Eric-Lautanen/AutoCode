@@ -3,7 +3,7 @@
 
 use egui::{Color32, FontId, RichText, TextFormat};
 
-use autocode_core::state::{ChatMessage, TodoItem};
+use autocode_core::state::{ChatMessage, TodoItem, TodoStatus};
 use autocode_core::theme::Palette;
 
 // -- Time formatting -----------------------------------------------------------
@@ -480,15 +480,24 @@ pub fn sample_screen_pixel() -> Option<[f32; 3]> {
     None
 }
 
+/// Returns the index of the "currently working" item:
+/// the first `InProgress` item, falling back to the first `Pending` item.
+pub fn find_current_task_index(items: &[TodoItem]) -> Option<usize> {
+    items
+        .iter()
+        .position(|i| i.status == TodoStatus::InProgress)
+        .or_else(|| items.iter().position(|i| i.status == TodoStatus::Pending))
+}
+
 pub fn todo_scroll_area(
     ui: &mut egui::Ui,
     items: &[TodoItem],
     full_w: f32,
+    scroll_target_idx: Option<usize>,
     render_item: impl Fn(&mut egui::Ui, &TodoItem, f32),
     render_empty: impl FnOnce(&mut egui::Ui),
 ) {
     egui::ScrollArea::vertical()
-        .stick_to_bottom(true)
         .max_height(500.0)
         .show(ui, |ui: &mut egui::Ui| {
             ui.set_min_width(full_w);
@@ -496,9 +505,21 @@ pub fn todo_scroll_area(
                 render_empty(ui);
             } else {
                 let item_w = full_w - 16.0;
-                for item in items {
+                let mut target_top = None;
+                for (i, item) in items.iter().enumerate() {
+                    let before_y = ui.cursor().min.y;
                     render_item(ui, item, item_w);
+                    if Some(i) == scroll_target_idx {
+                        target_top = Some(before_y);
+                    }
                     ui.add_space(3.0);
+                }
+                if let Some(top_y) = target_top {
+                    let rect = egui::Rect::from_min_max(
+                        egui::pos2(0.0, top_y),
+                        egui::pos2(full_w, top_y + 1.0),
+                    );
+                    ui.scroll_to_rect(rect, Some(egui::Align::TOP));
                 }
             }
         });
