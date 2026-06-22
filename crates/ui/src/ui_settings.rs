@@ -33,8 +33,10 @@ pub struct SettingsState {
     fetch_status: HashMap<String, String>,
     /// If set, the provider with this key is being renamed.
     renaming_provider: Option<String>,
-    /// Buffer for the rename text input / new-provider name input.
+    /// Buffer for the rename text input.
     rename_buffer: String,
+    /// Buffer for the new-provider name input when adding.
+    add_buffer: String,
     /// When true, show an inline name input for adding a new provider.
     adding_provider: bool,
 }
@@ -259,36 +261,35 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
     helpers::section_heading(ui, "API Providers");
 
     ui.add_space(4.0);
+    let mut provider_dirty = false;
+
     if ui.button("+ Add Provider").clicked() {
         settings.adding_provider = true;
-        settings.rename_buffer = "My Provider".into();
+        settings.add_buffer = "My Provider".into();
     }
     if settings.adding_provider {
         ui.horizontal(|ui| {
             ui.label(
-                RichText::new("Name:").size(12.0).color(Palette::TEXT_SECONDARY),
+                RichText::new("Name:")
+                    .size(12.0)
+                    .color(Palette::TEXT_SECONDARY),
             );
-            ui.text_edit_singleline(&mut settings.rename_buffer);
-            let name_ok = !settings.rename_buffer.is_empty()
-                && !state.providers.contains_key(&settings.rename_buffer);
+            ui.text_edit_singleline(&mut settings.add_buffer);
+            let name_ok = !settings.add_buffer.is_empty()
+                && !state.providers.contains_key(&settings.add_buffer);
             if ui
-                .add_enabled(
-                    name_ok,
-                    egui::Button::new(RichText::new("Add").size(12.0)),
-                )
-                .on_hover_text(
-                    if settings.rename_buffer.is_empty() {
-                        "Name cannot be empty"
-                    } else if state.providers.contains_key(&settings.rename_buffer) {
-                        "Name already exists"
-                    } else {
-                        "Add this provider"
-                    },
-                )
+                .add_enabled(name_ok, egui::Button::new(RichText::new("Add").size(12.0)))
+                .on_hover_text(if settings.add_buffer.is_empty() {
+                    "Name cannot be empty"
+                } else if state.providers.contains_key(&settings.add_buffer) {
+                    "Name already exists"
+                } else {
+                    "Add this provider"
+                })
                 .clicked()
             {
                 let kind = autocode_core::state::ProviderKind::new("openai-compatible");
-                let key = std::mem::take(&mut settings.rename_buffer);
+                let key = std::mem::take(&mut settings.add_buffer);
                 state
                     .providers
                     .insert(key, autocode_core::state::ApiProvider::new(kind));
@@ -296,11 +297,15 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                 provider_dirty = true;
             }
             if ui
-                .button(RichText::new("Cancel").size(12.0).color(Palette::TEXT_MUTED))
+                .button(
+                    RichText::new("Cancel")
+                        .size(12.0)
+                        .color(Palette::TEXT_MUTED),
+                )
                 .clicked()
             {
                 settings.adding_provider = false;
-                settings.rename_buffer.clear();
+                settings.add_buffer.clear();
             }
         });
     }
@@ -320,17 +325,13 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
     let mut to_remove: Vec<String> = Vec::new();
     let mut set_active_key: Option<(String, String)> = None;
     let mut disable_switch_key: Option<String> = None;
-    let mut provider_dirty = false;
+    let mut pending_rename: Option<(String, String)> = None;
 
     let card_max_w = ui.available_width();
     for key in keys {
         ui.push_id(("provider", &key), |ui| {
             ui.set_max_width(card_max_w);
             let is_active = state.active_provider == key;
-            let p = match state.providers.get_mut(&key) {
-                Some(p) => p,
-                None => return,
-            };
 
             let border_color = if is_active {
                 Palette::ACCENT
@@ -348,18 +349,25 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                 .stroke(egui::Stroke::new(1.0, border_color))
                 .inner_margin(Margin::same(12))
                 .show(ui, |ui| {
+                    let p = state.providers.get_mut(&key).unwrap();
                     // ── Header ─────────────────────────────────────────
                     ui.horizontal(|ui| {
                         let is_renaming = settings.renaming_provider.as_deref() == Some(&key);
                         if is_renaming {
                             ui.text_edit_singleline(&mut settings.rename_buffer);
                             let name_ok = !settings.rename_buffer.is_empty()
-                                && settings.rename_buffer != key
-                                && !state.providers.contains_key(&settings.rename_buffer);
+                                && settings.rename_buffer != key;
                             if ui
                                 .add_enabled(
                                     name_ok,
                                     egui::Button::new(RichText::new("Save").size(12.0)),
+                                )
+                                .on_disabled_hover_text(
+                                    if settings.rename_buffer.is_empty() {
+                                        "Name cannot be empty"
+                                    } else {
+                                        "Name is unchanged"
+                                    },
                                 )
                                 .clicked()
                             {
@@ -368,16 +376,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                     .renaming_provider
                                     .take()
                                     .unwrap_or_default();
-                                if let Some(ap) = state.providers.remove(&old_key) {
-                                    state.providers.insert(new_key.clone(), ap);
-                                    if state.active_provider == old_key {
-                                        state.active_provider = new_key.clone();
-                                        if let Some(sess) = state.active_session_mut() {
-                                            sess.provider_label = new_key;
-                                        }
-                                    }
-                                    provider_dirty = true;
-                                }
+                                pending_rename = Some((old_key, new_key));
                             }
                             if ui
                                 .button(
@@ -960,6 +959,21 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
         });
     }
 
+    if let Some((old_key, new_key)) = pending_rename
+        && old_key != new_key
+        && !state.providers.contains_key(&new_key)
+        && let Some(ap) = state.providers.remove(&old_key)
+    {
+        state.providers.insert(new_key.clone(), ap);
+        provider_dirty = true;
+        if state.active_provider == old_key {
+            state.active_provider = new_key.clone();
+            state.session_meta_dirty = true;
+            if let Some(sess) = state.active_session_mut() {
+                sess.provider_label = new_key;
+            }
+        }
+    }
     for key in to_remove {
         state.providers.remove(&key);
         provider_dirty = true;
