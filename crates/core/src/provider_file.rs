@@ -2,9 +2,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::fsutil;
-use crate::state::{
-    ApiProvider, ProviderKind, SecretString, ThinkingApi, model_or_safe, provider_manifest,
-};
+use crate::helpers::{model_or_safe, provider_manifest};
+use crate::state::{ApiProvider, ProviderKind, SecretString, ThinkingApi};
 
 // ── File format (serialized to providers.json) ──────────────────────────
 

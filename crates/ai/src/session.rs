@@ -57,7 +57,9 @@ pub fn prepare_request_messages_for_session(
             .unwrap_or_else(|| state.active_provider.clone());
         let p = state.providers.get(&prov_label);
         let cache = p
-            .map(|p| autocode_core::state::model_or_safe(&p.kind, &p.model).supports_cache_control)
+            .map(|p| {
+                autocode_core::helpers::model_or_safe(&p.kind, &p.model).supports_cache_control
+            })
             .unwrap_or(false);
         let strict = p.map(|p| p.supports_strict_tools()).unwrap_or(true);
         (cache, strict)

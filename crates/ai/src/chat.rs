@@ -600,7 +600,7 @@ fn context_usage_info_for_session(
             state.providers.get(label)
         })
         .map(|p| {
-            let defs = autocode_core::state::model_or_safe(&p.kind, &p.model);
+            let defs = autocode_core::helpers::model_or_safe(&p.kind, &p.model);
             defs.max_output_tokens as usize
         })
         .unwrap_or(4096);
@@ -835,7 +835,7 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
         })
         .unwrap_or_else(|| {
             if provider.reasoning_effort.is_empty() {
-                let defs = autocode_core::state::model_or_safe(&provider.kind, &provider.model);
+                let defs = autocode_core::helpers::model_or_safe(&provider.kind, &provider.model);
                 defs.reasoning_efforts
                     .first()
                     .cloned()
@@ -847,7 +847,7 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
         });
 
     let thinking = session_thinking_mode && provider.thinking_api.supports_thinking();
-    let defs = autocode_core::state::model_or_safe(&provider.kind, &provider.model);
+    let defs = autocode_core::helpers::model_or_safe(&provider.kind, &provider.model);
     let thinking_api = provider.thinking_api.clone();
     // Some providers always do reasoning through their proxy — can't disable.
     // Must use the higher token budget so content isn't starved.
@@ -2632,7 +2632,7 @@ fn fix_provider_params(state: &mut AppState, err_msg: &str) -> bool {
                 .and_then(|m| m.get(&model_id))
                 .cloned()
                 .unwrap_or_else(|| {
-                    let defs = autocode_core::state::model_or_safe(&prov.kind, &model_id);
+                    let defs = autocode_core::helpers::model_or_safe(&prov.kind, &model_id);
                     autocode_core::provider_file::ModelEntry {
                         id: model_id.clone(),
                         context_window: defs.context_window,

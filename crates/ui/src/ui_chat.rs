@@ -1944,7 +1944,7 @@ fn show_input_row(
                                 .unwrap_or(false);
                             let kind = p.map(|p| p.kind.clone()).unwrap_or_else(|| {
                                 autocode_core::state::ProviderKind::new(
-                                    autocode_core::state::provider_ids()
+                                    autocode_core::helpers::provider_ids()
                                         .first()
                                         .map(|s| s.as_str())
                                         .unwrap_or("openai-compatible"),
@@ -1970,7 +1970,7 @@ fn show_input_row(
                                 .unwrap_or(false),
                             p.map(|p| p.kind.clone()).unwrap_or_else(|| {
                                 autocode_core::state::ProviderKind::new(
-                                    autocode_core::state::provider_ids()
+                                    autocode_core::helpers::provider_ids()
                                         .first()
                                         .map(|s| s.as_str())
                                         .unwrap_or("openai-compatible"),
@@ -2095,7 +2095,7 @@ fn show_input_row(
 
                         let popup_id = egui::Popup::default_response_id(&effort_resp);
                         let available_efforts =
-                            autocode_core::state::reasoning_efforts_for_provider(
+                            autocode_core::helpers::reasoning_efforts_for_provider(
                                 &provider_kind,
                                 &model,
                             );

@@ -1,11 +1,15 @@
 // helpers.rs -- Shared helpers: ID/time, token estimation, string utils,
 // path resolution, serde helpers, default values, regex pattern matcher.
 
+use std::sync::OnceLock;
+
 use serde::Deserialize;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::state::{AppState, ChatMessage, Project, SecretString};
+use crate::state::{
+    AppState, ChatMessage, ModelManifest, Project, ProviderKind, SecretString, ThinkingApi,
+};
 
 // -- Tool-call sanitization ----------------------------------------------------
 
@@ -1383,6 +1387,87 @@ pub fn sanitize_display_text(s: &str) -> String {
             }
         })
         .collect()
+}
+
+// -- Provider manifest helpers ------------------------------------------------
+
+#[derive(Deserialize)]
+pub(crate) struct Manifest {
+    pub(crate) providers: std::collections::HashMap<String, crate::state::ProviderManifest>,
+}
+
+pub(crate) fn manifest() -> &'static Manifest {
+    static MANIFEST: OnceLock<Manifest> = OnceLock::new();
+    MANIFEST.get_or_init(|| {
+        let disk_path = crate::fsutil::exe_dir()
+            .join("AutoCode_data")
+            .join("providers.json");
+        if disk_path.exists()
+            && let Ok(json) = crate::fsutil::read_to_string(&disk_path)
+            && let Ok(m) = serde_json::from_str(&json)
+        {
+            return m;
+        }
+        let json = include_str!("../../../assets/providers.json");
+        serde_json::from_str(json).expect("Failed to parse providers.json")
+    })
+}
+
+pub fn provider_manifest(kind: &ProviderKind) -> Option<&'static crate::state::ProviderManifest> {
+    manifest().providers.get(kind.manifest_id())
+}
+
+pub fn model_manifest(kind: &ProviderKind, model: &str) -> Option<&'static ModelManifest> {
+    let prov = manifest().providers.get(kind.manifest_id())?;
+    let clean = prov
+        .model_prefix_strip
+        .as_deref()
+        .and_then(|prefix| model.strip_prefix(prefix))
+        .unwrap_or(model);
+    prov.models.get(model).or_else(|| prov.models.get(clean))
+}
+
+pub fn reasoning_efforts_for_provider(kind: &ProviderKind, model: &str) -> Vec<String> {
+    model_or_safe(kind, model).reasoning_efforts.clone()
+}
+
+pub fn safe_model_defaults() -> ModelManifest {
+    ModelManifest {
+        context_window: 128_000,
+        max_output_tokens: 16384,
+        max_output_tokens_thinking: None,
+        thinking_api: String::new(),
+        reasoning_efforts: vec!["high".into()],
+        supports_cache_control: false,
+        requests_per_hour: None,
+    }
+}
+
+pub fn model_or_safe(kind: &ProviderKind, model: &str) -> ModelManifest {
+    model_manifest(kind, model)
+        .cloned()
+        .unwrap_or_else(safe_model_defaults)
+}
+
+pub fn provider_ids() -> Vec<String> {
+    let mut ids: Vec<String> = manifest().providers.keys().cloned().collect();
+    ids.sort();
+    ids
+}
+
+pub fn default_supports_strict_tools() -> bool {
+    true
+}
+
+pub fn parse_thinking_api(s: &str) -> ThinkingApi {
+    match s {
+        "deepseek" => ThinkingApi::DeepSeek,
+        "openai" => ThinkingApi::OpenAI,
+        "anthropic" => ThinkingApi::Anthropic,
+        "gemini" => ThinkingApi::Gemini,
+        "grok" => ThinkingApi::Grok,
+        _ => ThinkingApi::Off,
+    }
 }
 
 /// Format a panic payload into a human-readable string.

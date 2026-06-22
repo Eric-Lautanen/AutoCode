@@ -932,7 +932,7 @@ fn send_https(args: HttpArgs<'_>) -> Result<(), Box<dyn std::error::Error + Send
 /// Read auth headers from the provider manifest (e.g. x-api-key for Anthropic-style).
 fn auth_headers_from_manifest(provider: &ApiProvider) -> Vec<(String, String)> {
     let mut headers = Vec::new();
-    if let Some(prov) = autocode_core::state::provider_manifest(&provider.kind) {
+    if let Some(prov) = autocode_core::helpers::provider_manifest(&provider.kind) {
         if prov.auth_type.as_deref() == Some("x-api-key") {
             headers.push(("x-api-key".into(), provider.api_key.as_str().to_string()));
         }
@@ -1392,7 +1392,7 @@ pub fn fetch_models(provider: &ApiProvider) -> Vec<String> {
 
         let max_total = 2_000_000 + 8192; // 2 MB body cap + headroom for headers
         let mut buffer = Vec::with_capacity(8192.min(max_total));
-        let auth_type = autocode_core::state::provider_manifest(&provider.kind)
+        let auth_type = autocode_core::helpers::provider_manifest(&provider.kind)
             .and_then(|m| m.auth_type.as_deref())
             .unwrap_or("Bearer");
         let auth_header = match auth_type {
@@ -1671,7 +1671,7 @@ pub fn count_input_tokens(
     let body_str = serde_json::to_string(&base).map_err(|e| format!("json stringify: {}", e))?;
 
     let mut extra_headers: Vec<(String, String)> = Vec::new();
-    if let Some(prov) = autocode_core::state::provider_manifest(&provider.kind) {
+    if let Some(prov) = autocode_core::helpers::provider_manifest(&provider.kind) {
         if prov.auth_type.as_deref() == Some("x-api-key") {
             extra_headers.push(("x-api-key".into(), provider.api_key.as_str().to_string()));
         }

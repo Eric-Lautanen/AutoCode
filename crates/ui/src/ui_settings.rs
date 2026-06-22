@@ -615,7 +615,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                                                 );
                                                             } else if ui.small_button("+ Add").clicked() {
                                                                 saved.push(m.clone());
-                                                                let defs = autocode_core::state::model_or_safe(&p.kind, m);
+                                                                let defs = autocode_core::helpers::model_or_safe(&p.kind, m);
                                                                  let entry = autocode_core::provider_file::ModelEntry {
                                                                      id: m.clone(),
                                                                      context_window: defs.context_window,
@@ -681,7 +681,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                     let mut mc = p.models_config.as_ref()
                                         .and_then(|m| m.get(&name)).cloned()
                                         .unwrap_or_else(|| {
-                                            let defs = autocode_core::state::model_or_safe(&p.kind, &name);
+                                            let defs = autocode_core::helpers::model_or_safe(&p.kind, &name);
                                              autocode_core::provider_file::ModelEntry {
                                                  id: name.clone(),
                                                  context_window: defs.context_window,
@@ -787,7 +787,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                                         ui.label(helpers::field_label("Thinking API"))
                                                             .on_hover_text("Which API protocol the model uses for reasoning. DeepSeek/OpenAI send reasoning_content, Anthropic uses thinking blocks.");
                                                         ui.horizontal(|ui| {
-                                                            let current_ta = autocode_core::state::parse_thinking_api(&mc.thinking_api);
+                                                            let current_ta = autocode_core::helpers::parse_thinking_api(&mc.thinking_api);
                                                             let current_label = current_ta.label();
                                                             egui::ComboBox::from_id_salt(format!("th_api_{}_{}", &key, i))
                                                                 .selected_text(current_label)
@@ -1596,10 +1596,10 @@ fn show_about(ui: &mut egui::Ui, state: &mut AppState) {
     );
     ui.add_space(14.0);
 
-    let providers_str = autocode_core::state::provider_ids()
+    let providers_str = autocode_core::helpers::provider_ids()
         .iter()
         .filter_map(|id| {
-            autocode_core::state::provider_manifest(&autocode_core::state::ProviderKind::new(id))
+            autocode_core::helpers::provider_manifest(&autocode_core::state::ProviderKind::new(id))
                 .map(|m| m.label.as_str())
         })
         .collect::<Vec<&str>>()

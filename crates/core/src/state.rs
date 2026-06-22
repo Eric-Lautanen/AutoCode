@@ -1,17 +1,15 @@
 // state.rs -- Canonical persistent application state.
 // All fields that must survive restarts are here; serialized to eframe storage.
 
-use std::sync::OnceLock;
 use std::sync::atomic::Ordering;
 
 use serde::{Deserialize, Serialize};
 
-// -- Embedded provider/model defaults manifest --------------------------------
+use crate::helpers::{
+    default_supports_strict_tools, manifest, model_or_safe, parse_thinking_api, provider_manifest,
+};
 
-#[derive(Deserialize)]
-struct Manifest {
-    providers: std::collections::HashMap<String, ProviderManifest>,
-}
+// -- Embedded provider/model defaults manifest --------------------------------
 
 #[derive(Deserialize, Clone)]
 pub struct ProviderManifest {
@@ -55,86 +53,6 @@ pub struct ModelManifest {
     /// Max API requests allowed per hour (0 or None = unlimited).
     #[serde(default)]
     pub requests_per_hour: Option<u32>,
-}
-
-fn manifest() -> &'static Manifest {
-    static MANIFEST: OnceLock<Manifest> = OnceLock::new();
-    MANIFEST.get_or_init(|| {
-        // Prefer the user-editable disk copy in AutoCode_data.
-        let disk_path = crate::fsutil::exe_dir()
-            .join("AutoCode_data")
-            .join("providers.json");
-        if disk_path.exists()
-            && let Ok(json) = crate::fsutil::read_to_string(&disk_path)
-            && let Ok(manifest) = serde_json::from_str(&json)
-        {
-            return manifest;
-        }
-        // Fall back to the baked-in embedded asset.
-        let json = include_str!("../../../assets/providers.json");
-        serde_json::from_str(json).expect("Failed to parse providers.json")
-    })
-}
-
-pub fn provider_manifest(kind: &ProviderKind) -> Option<&'static ProviderManifest> {
-    manifest().providers.get(kind.manifest_id())
-}
-
-pub fn model_manifest(kind: &ProviderKind, model: &str) -> Option<&'static ModelManifest> {
-    let prov = manifest().providers.get(kind.manifest_id())?;
-    let clean = prov
-        .model_prefix_strip
-        .as_deref()
-        .and_then(|prefix| model.strip_prefix(prefix))
-        .unwrap_or(model);
-    prov.models.get(model).or_else(|| prov.models.get(clean))
-}
-
-pub fn reasoning_efforts_for_provider(kind: &ProviderKind, model: &str) -> Vec<String> {
-    model_or_safe(kind, model).reasoning_efforts.clone()
-}
-
-/// Safe universal defaults for any model not in the manifest.
-pub fn safe_model_defaults() -> ModelManifest {
-    ModelManifest {
-        context_window: 128_000,
-        max_output_tokens: 16384,
-        max_output_tokens_thinking: None,
-        thinking_api: String::new(),
-        reasoning_efforts: vec!["high".into()],
-        supports_cache_control: false,
-        requests_per_hour: None,
-    }
-}
-
-/// Returns the manifest model if known, otherwise safe universal defaults.
-pub fn model_or_safe(kind: &ProviderKind, model: &str) -> ModelManifest {
-    model_manifest(kind, model)
-        .cloned()
-        .unwrap_or_else(safe_model_defaults)
-}
-
-/// Returns all provider manifest IDs from providers.json, sorted alphabetically.
-pub fn provider_ids() -> Vec<String> {
-    let mut ids: Vec<String> = manifest().providers.keys().cloned().collect();
-    ids.sort();
-    ids
-}
-
-fn default_supports_strict_tools() -> bool {
-    true
-}
-
-/// Parse thinking_api string from a model manifest into the enum.
-pub fn parse_thinking_api(s: &str) -> ThinkingApi {
-    match s {
-        "deepseek" => ThinkingApi::DeepSeek,
-        "openai" => ThinkingApi::OpenAI,
-        "anthropic" => ThinkingApi::Anthropic,
-        "gemini" => ThinkingApi::Gemini,
-        "grok" => ThinkingApi::Grok,
-        _ => ThinkingApi::Off,
-    }
 }
 
 // -- SecretString: zeroizes heap memory on drop -------------------------------

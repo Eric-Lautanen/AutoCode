@@ -174,7 +174,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                     .show_ui(ui, |ui| {
                         let manifest_models: Vec<String> = state
                             .active_provider()
-                            .and_then(|p| autocode_core::state::provider_manifest(&p.kind))
+                            .and_then(|p| autocode_core::helpers::provider_manifest(&p.kind))
                             .map(|m| {
                                 let mut keys: Vec<String> = m.models.keys().cloned().collect();
                                 keys.sort();
