@@ -77,6 +77,19 @@ impl AutocodeApp {
         }
     }
 
+    /// Drain pending message writes and send them to the persistence thread.
+    fn flush_pending_writes(&mut self) {
+        let batches = self.state.drain_pending_writes();
+        for (dir, msgs) in batches {
+            self.persistence.send(
+                autocode_core::persistence::PersistenceCommand::AppendMessages {
+                    dir,
+                    messages: msgs,
+                },
+            );
+        }
+    }
+
     fn restore_active_session(state: &mut AppState) {
         if let Some(ref sid) = state.active_session_id
             && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == *sid)
@@ -212,15 +225,7 @@ impl eframe::App for AutocodeApp {
 
         // Send pending message writes to the background persistence thread.
         // Path is resolved at send time so directory renames don't orphan messages.
-        let batches = self.state.drain_pending_writes();
-        for (dir, msgs) in batches {
-            self.persistence.send(
-                autocode_core::persistence::PersistenceCommand::AppendMessages {
-                    dir,
-                    messages: msgs,
-                },
-            );
-        }
+        self.flush_pending_writes();
 
         // Periodically check for sessions deleted from disk while the app is
         // running. Disk is the source of truth — purge anything missing.
@@ -435,15 +440,7 @@ impl eframe::App for AutocodeApp {
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         // Flush pending message writes to the persistence thread and await completion.
-        let batches = self.state.drain_pending_writes();
-        for (dir, msgs) in batches {
-            self.persistence.send(
-                autocode_core::persistence::PersistenceCommand::AppendMessages {
-                    dir,
-                    messages: msgs,
-                },
-            );
-        }
+        self.flush_pending_writes();
         self.persistence.flush();
         {
             // Sync current session state into the active session before saving.
@@ -510,15 +507,7 @@ impl eframe::App for AutocodeApp {
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         // Flush all pending message writes to the persistence thread before shutdown.
-        let batches = self.state.drain_pending_writes();
-        for (dir, msgs) in batches {
-            self.persistence.send(
-                autocode_core::persistence::PersistenceCommand::AppendMessages {
-                    dir,
-                    messages: msgs,
-                },
-            );
-        }
+        self.flush_pending_writes();
 
         for runtime in self.runtimes.values_mut() {
             runtime.drain();
