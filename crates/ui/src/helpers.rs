@@ -430,56 +430,6 @@ pub fn append_rich_inline_to_job(job: &mut egui::text::LayoutJob, text: &str) {
     }
 }
 
-// -- Screen pixel sampling (eyedropper) -----------------------------------------
-// Uses Windows GetPixel to grab the color at the current cursor position.
-// Returns None on non-Windows or on failure.
-
-#[cfg(windows)]
-unsafe extern "system" {
-    fn GetDC(hwnd: isize) -> isize;
-    fn GetPixel(hdc: isize, x: i32, y: i32) -> u32;
-    fn ReleaseDC(hwnd: isize, hdc: isize) -> i32;
-    fn GetCursorPos(lpPoint: *mut Point) -> i32;
-}
-
-#[cfg(windows)]
-#[repr(C)]
-struct Point {
-    x: i32,
-    y: i32,
-}
-
-/// Sample the screen pixel at the current cursor position.
-/// Returns `[r, g, b]` with each component in 0.0–1.0 range.
-pub fn sample_screen_pixel() -> Option<[f32; 3]> {
-    #[cfg(windows)]
-    {
-        unsafe {
-            let hdc = GetDC(0);
-            if hdc == 0 {
-                return None;
-            }
-            let mut pt = Point { x: 0, y: 0 };
-            if GetCursorPos(&mut pt as *mut Point) == 0 {
-                ReleaseDC(0, hdc);
-                return None;
-            }
-            let color = GetPixel(hdc, pt.x, pt.y);
-            ReleaseDC(0, hdc);
-            // COLORREF is 0x00BBGGRR, 0xFFFFFFFF = error
-            if color == 0xFFFFFFFF {
-                return None;
-            }
-            let r = (color & 0xFF) as f32 / 255.0;
-            let g = ((color >> 8) & 0xFF) as f32 / 255.0;
-            let b = ((color >> 16) & 0xFF) as f32 / 255.0;
-            Some([r, g, b])
-        }
-    }
-    #[cfg(not(windows))]
-    None
-}
-
 /// Returns the index of the "currently working" item:
 /// the first `InProgress` item, falling back to the first `Pending` item.
 pub fn find_current_task_index(items: &[TodoItem]) -> Option<usize> {
