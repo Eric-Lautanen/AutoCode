@@ -15,19 +15,9 @@ use autocode_ai::chat::{self, ChatRuntime};
 use autocode_ai::provider;
 use autocode_core::{
     helpers::sanitize_display_text,
-    state::{AppState, ChatMessage, DesignSettings, Role, ToolMeta},
+    state::{AppState, ChatMessage, Role, ToolMeta},
     theme::{Palette, ROUND_MD, ROUND_SM, project_accent},
 };
-
-// -- Live theme colors from design settings ------------------------------------
-
-fn rgb(c: [f32; 3]) -> Color32 {
-    Color32::from_rgb(
-        (c[0] * 255.0) as u8,
-        (c[1] * 255.0) as u8,
-        (c[2] * 255.0) as u8,
-    )
-}
 
 pub struct ThemeColors {
     pub accent: Color32,
@@ -65,50 +55,44 @@ pub struct ThemeColors {
 
 impl Default for ThemeColors {
     fn default() -> Self {
-        Self::from_design(&DesignSettings::default())
-    }
-}
-
-impl ThemeColors {
-    pub fn from_design(d: &DesignSettings) -> Self {
         Self {
-            accent: rgb(d.accent_color),
+            accent: Color32::from_rgb(99, 156, 235),
             accent_dim: Palette::ACCENT_DIM,
             bg_surface: Palette::BG_SURFACE,
             bg_base: Palette::BG_BASE,
-            text_primary: rgb(d.text_primary),
-            text_secondary: rgb(d.text_secondary),
-            text_muted: rgb(d.muted_color),
-            text_code: rgb(d.code_text),
+            text_primary: Color32::from_rgb(219, 224, 232),
+            text_secondary: Color32::from_rgb(161, 168, 186),
+            text_muted: Color32::from_rgb(89, 99, 117),
+            text_code: Color32::from_rgb(189, 209, 181),
             border: Palette::BORDER,
-            success: rgb(d.success_color),
-            warning: rgb(d.warning_color),
-            error: rgb(d.error_color),
-            user_badge: rgb(d.user_badge),
-            assist_badge: rgb(d.assist_badge),
-            tool_badge: rgb(d.tool_badge),
-            system_badge: rgb(d.system_badge),
-            user_bubble_fill: rgb(d.user_bubble_fill),
-            user_bubble_stroke: rgb(d.user_bubble_stroke),
-            terminal_bg: rgb(d.terminal_bg),
-            terminal_text: rgb(d.terminal_text),
-            terminal_border: rgb(d.terminal_border),
-            terminal_label: rgb(d.terminal_label_color),
-            live_terminal_bg: rgb(d.live_terminal_bg),
-            live_terminal_border: rgb(d.live_terminal_border),
-            code_frame_bg: rgb(d.code_frame_bg),
-            diff_frame_bg: rgb(d.diff_frame_bg),
-            diff_del_text: rgb(d.diff_del_text),
-            diff_add_text: rgb(d.diff_add_text),
-            diff_num: rgb(d.diff_num_color),
-            reason_bg: rgb(d.reason_bg),
-            reason_border: rgb(d.reason_border),
+            success: Color32::from_rgb(79, 181, 120),
+            warning: Color32::from_rgb(209, 161, 61),
+            error: Color32::from_rgb(209, 79, 79),
+            user_badge: Color32::from_rgb(99, 156, 235),
+            assist_badge: Color32::from_rgb(79, 181, 120),
+            tool_badge: Color32::from_rgb(209, 161, 61),
+            system_badge: Color32::from_rgb(161, 120, 219),
+            user_bubble_fill: Color32::from_rgb(28, 41, 74),
+            user_bubble_stroke: Color32::from_rgb(46, 64, 110),
+            terminal_bg: Color32::from_rgb(13, 13, 18),
+            terminal_text: Color32::from_rgb(171, 199, 166),
+            terminal_border: Color32::from_rgb(36, 46, 36),
+            terminal_label: Color32::from_rgb(89, 99, 117),
+            live_terminal_bg: Color32::from_rgb(13, 13, 18),
+            live_terminal_border: Color32::from_rgb(36, 46, 36),
+            code_frame_bg: Color32::from_rgb(15, 18, 26),
+            diff_frame_bg: Color32::from_rgb(15, 18, 26),
+            diff_del_text: Color32::from_rgb(255, 140, 140),
+            diff_add_text: Color32::from_rgb(140, 255, 161),
+            diff_num: Color32::from_rgb(89, 99, 117),
+            reason_bg: Color32::from_rgb(18, 20, 26),
+            reason_border: Color32::from_rgb(41, 48, 61),
         }
     }
 }
 
 fn theme() -> ThemeColors {
-    ThemeColors::from_design(&DesignSettings::default())
+    ThemeColors::default()
 }
 
 // -- Panel state ---------------------------------------------------------------
@@ -813,7 +797,7 @@ fn empty_state(ui: &mut egui::Ui, state: &AppState) {
 // -- Message bubbles -----------------------------------------------------------
 
 fn show_user_bubble(ui: &mut egui::Ui, msg: &ChatMessage, panel_w: f32) -> bool {
-    let max_w = (panel_w * DesignSettings::default().user_bubble_max_width_pct).max(240.0);
+    let max_w = (panel_w * 0.72).max(240.0);
     let clicked = std::cell::Cell::new(false);
     ui.push_id(msg.timestamp, |ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {

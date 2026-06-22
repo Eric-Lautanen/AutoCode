@@ -1,5 +1,5 @@
 // ui_settings.rs -- Settings window.
-// Tabs: Providers * Projects * Prompt * Timeouts * Design * About
+// Tabs: Providers * Projects * Prompt * Timeouts * About
 
 use crate::helpers;
 use autocode_ai::provider;

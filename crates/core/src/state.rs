@@ -949,103 +949,6 @@ pub struct ShellTask {
 
 // -- Todo list -----------------------------------------------------------------
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(default)]
-pub struct DesignSettings {
-    // User bubble width
-    pub user_bubble_max_width_pct: f32,
-
-    // User bubble colors
-    pub user_bubble_fill: [f32; 3],
-    pub user_bubble_stroke: [f32; 3],
-
-    // Terminal colors
-    pub terminal_bg: [f32; 3],
-    pub terminal_text: [f32; 3],
-    pub terminal_border: [f32; 3],
-    pub live_terminal_bg: [f32; 3],
-    pub live_terminal_border: [f32; 3],
-    pub terminal_label_color: [f32; 3],
-
-    // Code block colors
-    pub code_frame_bg: [f32; 3],
-    pub code_text: [f32; 3],
-    pub code_label_color: [f32; 3],
-
-    // Diff colors
-    pub diff_frame_bg: [f32; 3],
-    pub diff_del_bg: [f32; 3],
-    pub diff_del_text: [f32; 3],
-    pub diff_add_bg: [f32; 3],
-    pub diff_add_text: [f32; 3],
-    pub diff_ctx_bg: [f32; 3],
-    pub diff_ctx_text: [f32; 3],
-    pub diff_num_color: [f32; 3],
-    pub diff_label_color: [f32; 3],
-
-    // Reasoning collapse colors
-    pub reason_bg: [f32; 3],
-    pub reason_border: [f32; 3],
-    pub reason_header: [f32; 3],
-
-    // Badge / label colors
-    pub assist_badge: [f32; 3],
-    pub tool_badge: [f32; 3],
-    pub user_badge: [f32; 3],
-    pub system_badge: [f32; 3],
-
-    // Tool result header colors
-    pub success_color: [f32; 3],
-    pub error_color: [f32; 3],
-    pub accent_color: [f32; 3],
-    pub warning_color: [f32; 3],
-    pub muted_color: [f32; 3],
-    pub text_primary: [f32; 3],
-    pub text_secondary: [f32; 3],
-}
-
-impl Default for DesignSettings {
-    fn default() -> Self {
-        Self {
-            user_bubble_max_width_pct: 0.72,
-            user_bubble_fill: [0.11, 0.16, 0.29],
-            user_bubble_stroke: [0.18, 0.25, 0.43],
-            terminal_bg: [0.05, 0.05, 0.07],
-            terminal_text: [0.67, 0.78, 0.65],
-            terminal_border: [0.14, 0.18, 0.14],
-            live_terminal_bg: [0.05, 0.05, 0.07],
-            live_terminal_border: [0.14, 0.18, 0.14],
-            terminal_label_color: [0.35, 0.39, 0.46],
-            code_frame_bg: [0.06, 0.07, 0.10],
-            code_text: [0.74, 0.82, 0.71],
-            code_label_color: [0.35, 0.39, 0.46],
-            diff_frame_bg: [0.06, 0.07, 0.10],
-            diff_del_bg: [0.71, 0.24, 0.24],
-            diff_del_text: [1.0, 0.55, 0.55],
-            diff_add_bg: [0.24, 0.63, 0.31],
-            diff_add_text: [0.55, 1.0, 0.63],
-            diff_ctx_bg: [0.24, 0.25, 0.29],
-            diff_ctx_text: [0.63, 0.66, 0.73],
-            diff_num_color: [0.35, 0.39, 0.46],
-            diff_label_color: [0.35, 0.39, 0.46],
-            reason_bg: [0.07, 0.08, 0.10],
-            reason_border: [0.16, 0.19, 0.24],
-            reason_header: [0.39, 0.61, 0.92],
-            assist_badge: [0.31, 0.71, 0.47],
-            tool_badge: [0.82, 0.63, 0.24],
-            user_badge: [0.39, 0.61, 0.92],
-            system_badge: [0.63, 0.47, 0.86],
-            success_color: [0.31, 0.71, 0.47],
-            error_color: [0.82, 0.31, 0.31],
-            accent_color: [0.39, 0.61, 0.92],
-            warning_color: [0.82, 0.63, 0.24],
-            muted_color: [0.35, 0.39, 0.46],
-            text_primary: [0.86, 0.88, 0.91],
-            text_secondary: [0.63, 0.66, 0.73],
-        }
-    }
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum TodoStatus {
     Pending,
@@ -1286,9 +1189,6 @@ pub struct AppState {
     #[serde(default)]
     pub inspection_open: bool,
 
-    #[serde(default)]
-    pub design: DesignSettings,
-
     // -- Configurable timeouts ---------------------------------------------------
     /// Seconds with no SSE delta before declaring the stream stalled.
     #[serde(default = "crate::helpers::default_stream_idle_timeout")]
@@ -1395,7 +1295,6 @@ impl Default for AppState {
             sysinfo: crate::sysinfo::SysInfo::default(),
             debug_mode: false,
             inspection_open: false,
-            design: DesignSettings::default(),
             stream_idle_timeout_secs: crate::helpers::default_stream_idle_timeout(),
             request_timeout_secs: crate::helpers::default_request_timeout(),
             tool_timeout_secs: crate::helpers::default_tool_timeout(),
