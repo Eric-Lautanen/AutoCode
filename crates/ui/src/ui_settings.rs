@@ -404,7 +404,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                 );
                             });
                             if ui
-                                .small_button("✎")
+                                .small_button("R")
                                 .on_hover_text("Rename provider")
                                 .clicked()
                             {
