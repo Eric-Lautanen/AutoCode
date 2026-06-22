@@ -333,7 +333,7 @@ pub fn show(
                                 ui.add_space(8.0);
                                 ui.separator();
                                 ui.add_space(4.0);
-                                render_markdown_streaming(ui, &r.pending_response, true);
+                                render_markdown(ui, &r.pending_response, true, true);
                                 ui.label(RichText::new("|").color(theme().accent).size(13.0));
                             } else if !r.live_shell_buf.is_empty() {
                                 render_shell_terminal(
@@ -810,7 +810,7 @@ fn show_user_bubble(ui: &mut egui::Ui, msg: &ChatMessage, panel_w: f32) -> bool 
                     .stroke(Stroke::new(1.0, theme().user_bubble_stroke))
                     .inner_margin(Margin::symmetric(12, 8))
                     .show(ui, |ui| {
-                        render_markdown(ui, &sanitize_display_text(&msg.content), true);
+                        render_markdown(ui, &sanitize_display_text(&msg.content), true, false);
                     });
 
                 let bubble_rect = frame_resp.response.rect;
@@ -866,11 +866,11 @@ fn show_assistant_content(
                 .stroke(Stroke::new(1.0, theme().reason_border))
                 .inner_margin(Margin::same(8))
                 .show(ui, |ui| {
-                    render_markdown(ui, reasoning, true);
+                    render_markdown(ui, reasoning, true, false);
                 });
             ui.add_space(6.0);
         }
-        render_markdown(ui, &sanitize_display_text(&msg.content), true);
+        render_markdown(ui, &sanitize_display_text(&msg.content), true, false);
     });
 }
 
@@ -894,7 +894,7 @@ fn render_tool_result(ui: &mut egui::Ui, msg: &ChatMessage, idx: usize, sid: &st
                 render_code_block(ui, "", &body);
             });
     } else {
-        render_markdown(ui, content, false);
+        render_markdown(ui, content, false, false);
     }
 }
 
@@ -1148,7 +1148,7 @@ fn render_structured_tool_result(
                         .color(theme().accent)
                         .strong(),
                 );
-                render_markdown(ui, &sanitize_display_text(&msg.content), false);
+                render_markdown(ui, &sanitize_display_text(&msg.content), false, false);
             } else {
                 let url = meta.file_path.as_deref().unwrap_or("URL");
                 let bytes = meta.byte_count.unwrap_or(0);
@@ -1255,7 +1255,7 @@ fn render_structured_tool_result(
             }
         }
         _ => {
-            render_markdown(ui, &sanitize_display_text(&msg.content), false);
+            render_markdown(ui, &sanitize_display_text(&msg.content), false, false);
         }
     }
 }
@@ -1621,7 +1621,7 @@ fn show_live_reasoning(ui: &mut egui::Ui, text: &str) {
         .inner_margin(Margin::same(8))
         .show(ui, |ui| {
             ui.set_max_width(ui.available_width());
-            render_markdown_streaming(ui, text, false);
+            render_markdown(ui, text, false, true);
         });
 }
 
@@ -2192,7 +2192,7 @@ fn show_input_row(
 
 // -- Markdown-lite renderer with bold, italic, inline code, tables -------------
 
-fn render_markdown(ui: &mut egui::Ui, text: &str, word_wrap: bool) {
+fn render_markdown(ui: &mut egui::Ui, text: &str, word_wrap: bool, streaming: bool) {
     ui.set_max_width(ui.available_width());
     let mut in_code = false;
     let mut code_lang = String::new();
@@ -2208,7 +2208,7 @@ fn render_markdown(ui: &mut egui::Ui, text: &str, word_wrap: bool) {
         }
         if in_code {
             if line.trim() == "```" {
-                render_code_block_impl(ui, &code_lang, &code_buf, false, code_idx);
+                render_code_block_impl(ui, &code_lang, &code_buf, streaming, code_idx);
                 code_idx += 1;
                 in_code = false;
                 code_buf.clear();
@@ -2222,41 +2222,7 @@ fn render_markdown(ui: &mut egui::Ui, text: &str, word_wrap: bool) {
     }
 
     if in_code && !code_buf.is_empty() {
-        render_code_block_impl(ui, &code_lang, &code_buf, false, code_idx);
-    }
-}
-
-fn render_markdown_streaming(ui: &mut egui::Ui, text: &str, word_wrap: bool) {
-    ui.set_max_width(ui.available_width());
-    let mut in_code = false;
-    let mut code_lang = String::new();
-    let mut code_buf = String::new();
-    let mut code_idx = 0u64;
-
-    for line in text.lines() {
-        if !in_code && line.starts_with("```") {
-            in_code = true;
-            code_lang = line.trim_start_matches('`').trim().to_string();
-            code_buf.clear();
-            continue;
-        }
-        if in_code {
-            if line.trim() == "```" {
-                render_code_block_impl(ui, &code_lang, &code_buf, true, code_idx);
-                code_idx += 1;
-                in_code = false;
-                code_buf.clear();
-            } else {
-                code_buf.push_str(line);
-                code_buf.push('\n');
-            }
-            continue;
-        }
-        render_inline(ui, line, word_wrap);
-    }
-
-    if in_code && !code_buf.is_empty() {
-        render_code_block_impl(ui, &code_lang, &code_buf, true, code_idx);
+        render_code_block_impl(ui, &code_lang, &code_buf, streaming, code_idx);
     }
 }
 
