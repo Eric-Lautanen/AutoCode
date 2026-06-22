@@ -183,6 +183,62 @@ declare module "express" {
 
 **`noUncheckedIndexedAccess`** is the most impactful: `arr[0]` returns `T | undefined` instead of `T`, preventing the most common runtime error (accessing an array element that doesn't exist).
 
+## Windows-Specific Notes
+
+### Windows Path Types in TypeScript
+```typescript
+// Use path.join for cross-platform compatibility
+import path from 'path';
+
+const filePath = path.join('data', 'users', `${userId}.json`);
+// Works on both Windows (backslash) and Unix (forward slash)
+
+// For type-safe path handling
+function isWindowsPath(path: string): boolean {
+    return /^[A-Za-z]:[/\\\\]/.test(path) || path.startsWith('\\\\');
+}
+```
+
+### Windows Development Environment
+- **Line endings**: Configure VS Code for consistent LF:
+  ```json
+  {
+    "files.eol": "\n",
+    "editor.formatOnSave": true
+  }
+  ```
+- **TypeScript compiler**: Use `tsc` with `--pretty` for colored output on Windows terminals
+- **npm scripts**: Use `cross-env` for environment variables:
+  ```bash
+  npm install --save-dev cross-env
+  ```
+  ```json
+  {
+    "scripts": {
+      "build": "cross-env NODE_ENV=production tsc"
+    }
+  }
+  ```
+
+### Windows File System Types
+```typescript
+// Handle Windows-specific file system operations
+import fs from 'fs';
+import path from 'path';
+
+function readConfigWindows(configPath: string): Config {
+    // Resolve to absolute path on Windows
+    const resolved = path.resolve(configPath);
+    
+    // Check for long path (over 260 chars)
+    if (process.platform === 'win32' && resolved.length > 260) {
+        throw new Error(`Path too long: ${resolved}`);
+    }
+    
+    return JSON.parse(fs.readFileSync(resolved, 'utf-8'));
+}
+```
+
 ## Anti-Patterns
 
 - **Using `any`.** It defeats the type system. Use `unknown` instead.

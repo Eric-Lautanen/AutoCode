@@ -322,6 +322,40 @@ element.classList.add('exiting');
 element.addEventListener('transitionend', () => element.remove());
 ```
 
+## Windows-Specific Notes
+
+### Windows Browser Considerations
+Windows users primarily use:
+- **Edge**: Chromium-based, supports all modern web APIs
+- **Chrome**: Full support for modern animations
+- **Firefox**: Good support, occasional differences in composite timing
+
+All modern Windows browsers support:
+- `requestAnimationFrame`
+- CSS Animations and Transitions
+- Web Animations API
+- IntersectionObserver
+
+### Windows High DPI and Animation
+
+Windows handles DPI scaling which can affect animations:
+- **Subpixel rendering**: At 125%, 150%, 175% scaling, `transform: translate()` may snap to different subpixel positions
+- **Test at multiple DPI settings**: Animations that look smooth at 100% may jitter at 150%
+- **Use `transform` over `left`/`top`**: More resilient to DPI scaling issues
+
+### Windows Reduced Motion
+Windows has a system-wide setting for reduced motion:
+```css
+@media (prefers-reduced-motion: reduce) {
+  /* Respects Windows accessibility settings */
+}
+```
+
+### Performance on Windows
+- **Antivirus scanning**: Real-time protection can cause frame drops during heavy animation
+- **GPU drivers**: Outdated Intel/AMD/NVIDIA drivers are a common cause of animation jank on Windows
+- **Power modes**: Windows "Battery Saver" or "Best Power Efficiency" modes may throttle animations
+
 ## Checklist
 
 - [ ] Only animating `transform` and `opacity` (GPU-composited properties)

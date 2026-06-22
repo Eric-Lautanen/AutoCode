@@ -134,6 +134,44 @@ A system design diagram should show:
                                         [Queue] → [Worker ×2]
 ```
 
+## Windows-Specific Notes
+
+### Windows Server vs Linux Server
+When designing systems for Windows Server environments:
+- **IIS vs nginx/Apache**: IIS integrates with Windows auth (Active Directory, Kerberos)
+- **Windows Services**: Long-running background processes should run as Windows Services
+- **Event Log**: Windows has its own logging system. Consider using it for enterprise deployments.
+
+### Windows Containers (Docker)
+```dockerfile
+# Windows container base images
+FROM mcr.microsoft.com/windows/servercore:ltsc2022
+# or for smaller footprint
+FROM mcr.microsoft.com/windows/nanoserver:ltsc2022
+```
+- Windows containers require Windows host (or Windows Server VM)
+- Nano Server is minimal but lacks PowerShell and .NET Framework
+- Server Core includes more but is larger
+
+### Active Directory Integration
+For enterprise systems on Windows:
+- Use Windows Authentication (Kerberos/NTLM) for SSO
+- LDAP queries against AD for user/group information
+- Group Policy for configuration management
+
+### Windows Performance Counters
+Monitor Windows-specific metrics:
+```powershell
+# Get CPU usage
+Get-Counter '\Processor(_Total)\% Processor Time'
+
+# Get memory usage
+Get-Counter '\Memory\Available MBytes'
+
+# Get disk I/O
+Get-Counter '\PhysicalDisk(_Total)\Disk Reads/sec'
+```
+
 ## Checklist
 
 - [ ] Monolith vs. microservices decision made with clear reasoning

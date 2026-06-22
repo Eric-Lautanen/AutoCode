@@ -193,6 +193,55 @@ def test_cancel_from_paid():
     assert order.state == OrderState.CANCELLED
 ```
 
+## Windows-Specific Notes
+
+### Windows Service State Machines
+When implementing state machines in Windows services:
+- **Service Control Manager (SCM)**: Windows services respond to SCM events (start, stop, pause, continue)
+- **Service states**: map your application states to Windows service states for proper integration
+
+```csharp
+// C# Windows Service with state machine
+public enum ServiceState
+{
+    Stopped = 1,
+    StartPending = 2,
+    StopPending = 3,
+    Running = 4,
+    ContinuePending = 5,
+    PausePending = 6,
+    Paused = 7
+}
+```
+
+### Windows Named Events for State Transitions
+Use Windows named events for cross-process state notifications:
+```python
+import win32event
+import win32con
+
+# Create a named event for state transition signaling
+event = win32event.CreateEvent(None, 0, 0, "Global\\MyAppStateChange")
+win32event.SetEvent(event)  # Signal state change
+```
+
+### Registry for State Persistence
+Persist state to Windows Registry for recovery after reboot:
+```python
+import winreg
+
+def persist_state(state: str):
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\MyApp") as key:
+        winreg.SetValueEx(key, "CurrentState", 0, winreg.REG_SZ, state)
+
+def load_state() -> str:
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\MyApp") as key:
+            return winreg.QueryValueEx(key, "CurrentState")[0]
+    except FileNotFoundError:
+        return "initial"
+```
+
 ## Checklist
 
 - [ ] All states enumerated and named in domain language

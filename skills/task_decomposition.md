@@ -113,6 +113,56 @@ If a step would break the build:
 
 See also: `code_refactoring` for safe change sequences, `file_editing_strategy` for how to make edits that land correctly.
 
+## Windows-Specific Notes
+
+### Windows Development Workflow
+When decomposing tasks on Windows, consider platform-specific steps:
+
+1. **Environment setup**: Verify Windows-specific tools (Visual Studio Build Tools, Windows SDK)
+2. **Path handling**: Account for Windows path length limits and backslash separators
+3. **File locking**: Plan for Windows file locking in build/test steps
+4. **Line endings**: Ensure `.gitattributes` is configured for the team
+
+### Windows Build Steps
+```
+1. Check Windows SDK / Build Tools installed
+2. Verify long path support enabled (if needed)
+3. Run npm install / cargo build / etc.
+4. Handle Windows-specific build errors (missing VC++ redist, etc.)
+5. Run tests
+6. Verify no file locking issues prevent cleanup
+```
+
+### Windows-Specific Dependencies
+Some dependencies require Windows-specific handling:
+- **Node.js native modules**: May need `node-gyp` with Python and Visual Studio Build Tools
+- **Python packages**: Some packages require Microsoft Visual C++ 14.0 or greater
+- **Rust**: MSVC toolchain vs GNU toolchain — choose based on your C dependencies
+
+### PowerShell for Task Automation
+```powershell
+# Decompose a task into PowerShell functions
+function Step-Build {
+    npm run build
+    if ($LASTEXITCODE -ne 0) { throw "Build failed" }
+}
+
+function Step-Test {
+    npm test
+    if ($LASTEXITCODE -ne 0) { throw "Tests failed" }
+}
+
+# Run steps in order
+try {
+    Step-Build
+    Step-Test
+    Write-Host "All steps completed successfully"
+} catch {
+    Write-Error $_.Exception.Message
+    exit 1
+}
+```
+
 ## Anti-Patterns
 
 - **Planning too much.** If a step takes less than 2 minutes, don't decompose it further. Just do it.

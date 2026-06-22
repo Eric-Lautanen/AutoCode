@@ -161,4 +161,73 @@ def test_create_user_with_long_name_truncates():
 - **Not testing error paths.** If you only test the happy path, you'll ship bugs that error handling should have caught.
 - **Asserting on mock call counts.** This couples tests to implementation. Assert on outcomes, not on how many times something was called.
 
+## Windows-Specific Notes
+
+### Windows Test Environment Setup
+- **Line endings**: Configure Git to use LF to avoid test failures due to CRLF:
+  ```bash
+  git config --global core.autocrlf true
+  ```
+- **Path handling**: Use `pathlib` or `os.path.join` in tests. Never hardcode path separators.
+- **File locking**: Windows locks files during tests. Ensure proper cleanup in teardown.
+
+```python
+import tempfile
+import os
+
+def test_file_processing():
+    # Use tempfile for cross-platform temp files
+    with tempfile.NamedTemporaryFile(mode='w', delete=False) as f:
+        f.write("test data")
+        temp_path = f.name
+    
+    try:
+        result = process_file(temp_path)
+        assert result == "expected"
+    finally:
+        # Windows: file may be locked, retry deletion
+        for _ in range(5):
+            try:
+                os.unlink(temp_path)
+                break
+            except PermissionError:
+                import time
+                time.sleep(0.1)
+```
+
+### Windows-Specific Testing Tools
+- **Visual Studio Test Explorer**: For .NET projects
+- **pytest**: Works on Windows. Use `pytest -v` for verbose output.
+- **Jest**: Works on Windows. Use `jest --watch` for watch mode.
+
+### PowerShell Testing with Pester
+```powershell
+# Install Pester
+Install-Module -Name Pester -Force -SkipPublisherCheck
+
+# Write a test
+Describe "MyFunction" {
+    It "Returns expected output" {
+        $result = MyFunction
+        $result | Should -Be "expected"
+    }
+}
+```
+
+### Windows CI/CD Testing
+GitHub Actions Windows runners:
+```yaml
+jobs:
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pytest
+      - run: pytest
+```
+
 See also: `testing_strategies` for test suite design, `debugging_workflow` for debugging failing tests.

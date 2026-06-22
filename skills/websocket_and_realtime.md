@@ -200,6 +200,48 @@ async def event_stream():
 - Limited to text data (no binary)
 - Some proxy/buffering issues with older infrastructure
 
+## Windows-Specific Notes
+
+### Windows WebSocket Support
+All modern Windows browsers support WebSocket (RFC 6455):
+- **Edge**: Full WebSocket support
+- **Chrome/Firefox**: Full support
+- **IE11**: Limited support, not recommended for new development
+
+### Windows Firewall and WebSockets
+Windows Firewall may block WebSocket connections:
+```powershell
+# Allow WebSocket port through firewall
+netsh advfirewall firewall add rule name="WebSocket" dir=in action=allow protocol=tcp localport=8080
+```
+
+### Windows IIS WebSocket Support
+For ASP.NET Core apps behind IIS:
+- Install **WebSocket Protocol** feature in IIS
+- Configure `web.config`:
+```xml
+<system.webServer>
+  <webSocket enabled="true" />
+</system.webServer>
+```
+
+### Windows Named Pipes (Alternative to WebSocket)
+For local inter-process communication on Windows, consider Named Pipes instead of WebSocket:
+```csharp
+// C# Named Pipe Server
+using System.IO.Pipes;
+
+var pipe = new NamedPipeServerStream("MyPipe", PipeDirection.InOut);
+pipe.WaitForConnection();
+// Read/write to pipe
+```
+
+### Windows Service Hosting WebSocket
+When hosting WebSocket server as a Windows Service:
+- Use `TopShelf` or `Microsoft.Extensions.Hosting.WindowsServices`
+- Handle service stop events to gracefully close WebSocket connections
+- Log to Windows Event Log for debugging
+
 ## Anti-Patterns
 
 - **Not handling reconnection.** Networks are unreliable. Plan for disconnect.

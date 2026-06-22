@@ -130,6 +130,36 @@ The same action should always look and work the same way across the application.
 | Auto-advance without warning | Form advances to next step before user is ready | Explicit "Next" button |
 | Non-skippable onboarding | Forced tutorial before the user can do anything | Let users skip, offer help on demand |
 
+## Windows-Specific Notes
+
+### Windows UX Conventions
+When designing for Windows users, follow platform conventions:
+- **Keyboard shortcuts**: Use Ctrl (not Cmd) for shortcuts. Ctrl+S, Ctrl+C, Ctrl+V
+- **Context menus**: Right-click for context menus. Windows users expect this.
+- **Window management**: Support minimize, maximize, close. Windows users expect standard window chrome.
+- **File dialogs**: Use native Windows file dialogs (OpenFileDialog, SaveFileDialog) for familiarity.
+
+### Windows Notification Patterns
+```csharp
+// Windows Toast Notification (WinRT/UWP)
+using Windows.UI.Notifications;
+
+var toastXml = ToastNotificationManager.GetTemplateContent(ToastTemplateType.ToastText02);
+var toast = new ToastNotification(toastXml);
+ToastNotificationManager.CreateToastNotifier().Show(toast);
+```
+
+### Windows Accessibility
+- **Narrator**: Windows screen reader. Test with Narrator enabled (Ctrl+Windows+Enter)
+- **High Contrast**: Windows has built-in high contrast themes. Test your UI with high contrast enabled.
+- **Touch**: Windows supports touch, pen, and mouse. Design for all input methods.
+
+### Windows-Specific Error Handling
+Windows users expect specific error dialog patterns:
+- **Error dialogs**: Use TaskDialog (modern) or MessageBox (legacy) for errors
+- **Progress dialogs**: Use IProgressDialog or modern equivalents for long operations
+- **UAC prompts**: Request elevation only when necessary. Explain why elevation is needed.
+
 ## Checklist
 
 - [ ] Every user action produces visible feedback

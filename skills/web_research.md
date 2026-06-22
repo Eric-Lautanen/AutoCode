@@ -118,6 +118,49 @@ This summary becomes your implementation plan. If you can't write it, you don't 
 - You're reading the same information in different sources
 - You have enough to start — you can research specific details as they come up
 
+## Windows-Specific Notes
+
+### Windows Development Research
+When researching Windows-specific development:
+- **Microsoft Learn**: Official docs at learn.microsoft.com. Most authoritative source for Windows APIs.
+- **Windows Dev Center**: For UWP, WinUI, WPF, and WinForms development
+- **PowerShell docs**: Microsoft has extensive PowerShell documentation
+- **Windows Terminal docs**: For terminal customization and scripting
+
+### Windows-Specific Search Queries
+```
+# Windows API
+"Win32 API CreateFile example C++"
+
+# PowerShell
+"PowerShell Get-ChildItem filter examples"
+
+# Windows Registry
+"Windows Registry HKCU vs HKLM differences"
+
+# Windows Services
+"Create Windows Service C# .NET 8"
+
+# WSL
+"WSL2 file system performance vs native"
+```
+
+### Windows Version Considerations
+When researching Windows solutions, note the version:
+- **Windows 10**: Still widely used (support ends October 2025 for 22H2)
+- **Windows 11**: Current version. Some APIs differ from Windows 10.
+- **Windows Server 2022**: Server-specific APIs and behaviors
+- **LTSC versions**: Long-Term Servicing Channel has different feature availability
+
+### Windows Registry and System Info
+```powershell
+# Check Windows version
+Get-ComputerInfo | Select OsName, OsVersion, WindowsVersion
+
+# Check .NET version installed
+Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP' -Recurse
+```
+
 ## Anti-Patterns
 
 - **Researching without a question.** Browsing docs aimlessly wastes time. Always have a specific question.

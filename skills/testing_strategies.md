@@ -123,6 +123,64 @@ tests/
 - Shared fixtures in a dedicated directory, not copy-pasted across tests
 - Factory functions for creating test data — never hand-construct complex objects in each test
 
+## Windows-Specific Notes
+
+### Windows Test Environment
+- **Line endings**: Tests that compare file content may fail due to CRLF vs LF. Normalize or use `.gitattributes`.
+- **Path separators**: Use `pathlib` or `os.path.join` in tests, never hardcode `/` or `\`.
+- **File locking**: Windows locks files during tests. Ensure proper cleanup in teardown.
+
+```python
+import tempfile
+import os
+
+def test_file_processing():
+    # Use tempfile for cross-platform temp files
+    with tempfile.NamedTemporaryFile(mode='w', delete=False) as f:
+        f.write("test data")
+        temp_path = f.name
+    
+    try:
+        result = process_file(temp_path)
+        assert result == "expected"
+    finally:
+        # Windows: file may be locked, retry deletion
+        for _ in range(5):
+            try:
+                os.unlink(temp_path)
+                break
+            except PermissionError:
+                time.sleep(0.1)
+```
+
+### Windows CI/CD Testing
+GitHub Actions Windows runners have specific considerations:
+```yaml
+# .github/workflows/test.yml
+jobs:
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+      - run: npm test
+```
+
+### PowerShell Testing
+```powershell
+# Pester is the standard testing framework for PowerShell
+Describe "MyFunction" {
+    It "Returns expected output" {
+        $result = MyFunction
+        $result | Should -Be "expected"
+    }
+}
+```
+
 ## Checklist
 
 - [ ] Test pyramid shape: many unit, some integration, few E2E

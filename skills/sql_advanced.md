@@ -292,6 +292,55 @@ SELECT id FROM table_a EXCEPT SELECT id FROM table_b;
 4. **Limit early**: If you need 10 rows, add `LIMIT 10` — don't fetch all and truncate in code.
 5. **Parameterize, don't interpolate**: `WHERE id = $1` not `WHERE id = 42` — parameterized queries can reuse execution plans.
 
+## Windows-Specific Notes
+
+### SQL Server vs PostgreSQL/MySQL
+Windows developers often work with SQL Server, which has syntax differences:
+
+| Feature | PostgreSQL/MySQL | SQL Server |
+|---------|------------------|------------|
+| Limit | `LIMIT n` | `TOP n` or `OFFSET ... FETCH` |
+| String concat | `\|\|` | `+` or `CONCAT()` |
+| Current timestamp | `NOW()` | `GETDATE()` |
+| Auto-increment | `SERIAL` / `AUTO_INCREMENT` | `IDENTITY` |
+| Full-text search | `tsvector` / `FULLTEXT` | `CONTAINS()` / `FREETEXT()` |
+| Window functions | Supported | Supported (SQL Server 2012+) |
+
+### SQL Server Window Functions
+```sql
+-- SQL Server: ROW_NUMBER with PARTITION
+SELECT 
+    category, 
+    product, 
+    revenue,
+    ROW_NUMBER() OVER (PARTITION BY category ORDER BY revenue DESC) AS rank
+FROM product_sales;
+
+-- SQL Server: Date truncation (no DATE_TRUNC function)
+SELECT 
+    DATEADD(month, DATEDIFF(month, 0, order_date), 0) AS month_start,
+    SUM(amount) AS revenue
+FROM orders
+GROUP BY DATEADD(month, DATEDIFF(month, 0, order_date), 0);
+```
+
+### Windows File Paths in SQL
+When loading data from files on Windows:
+```sql
+-- SQL Server BULK INSERT with Windows paths
+BULK INSERT mytable
+FROM 'C:\\data\\import.csv'
+WITH (FORMAT = 'CSV', FIRSTROW = 2);
+
+-- PostgreSQL COPY (backslashes need escaping)
+COPY mytable FROM 'C:/data/import.csv' DELIMITER ',' CSV HEADER;
+```
+
+### Case Sensitivity on Windows
+- **SQL Server**: Default collation is case-insensitive (`CI`). Use `COLLATE` for case-sensitive comparisons.
+- **PostgreSQL**: Default is case-sensitive. Use `ILIKE` for case-insensitive matching.
+- **SQLite**: Case-insensitive for ASCII by default.
+
 ## Checklist
 
 - [ ] CTEs used for readability instead of nested subqueries

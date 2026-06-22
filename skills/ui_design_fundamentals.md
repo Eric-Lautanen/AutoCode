@@ -141,6 +141,49 @@ Design for both from the start. It's much harder to retrofit.
 | Different button styles for same action type | Reuse the same component with same variants |
 | Ignoring dark mode | Design with semantic tokens from day one |
 
+## Windows-Specific Notes
+
+### Windows UI Frameworks
+When designing for Windows applications:
+- **WinUI 3**: Modern Windows UI framework. Uses Fluent Design System.
+- **WPF (Windows Presentation Foundation)**: Older but still widely used. XAML-based.
+- **WinForms**: Legacy, but simple for quick tools.
+
+### Windows High DPI Handling
+Windows handles DPI scaling at the OS level:
+- **Per-monitor DPI**: Apps should handle `WM_DPICHANGED` message
+- **Scaling values**: 100%, 125%, 150%, 175%, 200%, 225%, 250%, 300%, 400%, 500%
+- **Design at 100% (96 DPI)**: Windows scales up. Test at multiple DPI settings
+
+```css
+/* CSS for Windows high DPI */
+@media (min-resolution: 120dpi) {
+  /* Adjustments for 125% scaling */
+}
+
+@media (min-resolution: 144dpi) {
+  /* Adjustments for 150% scaling */
+}
+```
+
+### Windows Font Rendering
+Windows ClearType renders fonts differently than macOS:
+- **Segoe UI**: Windows system font. Use for native Windows apps
+- **Arial/Helvetica**: Common fallbacks, but Segoe UI is preferred on Windows
+- **Font smoothing**: Windows uses subpixel rendering (ClearType). Test text legibility
+
+### Windows Dark Mode
+Windows 10/11 has system-wide dark mode:
+```css
+/* Detect Windows dark mode preference */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-primary: #1e1e1e;
+    --text-primary: #ffffff;
+  }
+}
+```
+
 ## Checklist
 
 - [ ] Visual hierarchy is clear — the most important element is visually dominant
