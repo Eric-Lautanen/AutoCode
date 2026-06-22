@@ -1,6 +1,6 @@
 use autocode_core::{
     session_storage,
-    state::{AppState, ProjectMeta},
+    state::AppState,
 };
 
 use crate::ui_todo_window::{TodoWindowConfig, show_todo_window};
@@ -30,11 +30,9 @@ pub fn show_window(ctx: &egui::Context, state: &mut AppState) {
         state.project_task_list.clear();
         // Persist cleared list to project meta.
         if let Some(proj) = state.active_project_mut() {
-            let meta = ProjectMeta {
-                version: 1,
-                project_task_list: Default::default(),
-                ..Default::default()
-            };
+            let mut meta = session_storage::load_project_meta(proj).unwrap_or_default();
+            meta.version = 1;
+            meta.project_task_list = Default::default();
             let _ = session_storage::save_project_meta(proj, &meta);
         }
     }
@@ -45,11 +43,9 @@ pub fn show_window(ctx: &egui::Context, state: &mut AppState) {
         // Persist cleared state to disk.
         let ptl = state.project_task_list.clone();
         if let Some(proj) = state.active_project_mut() {
-            let meta = ProjectMeta {
-                version: 1,
-                project_task_list: ptl,
-                ..Default::default()
-            };
+            let mut meta = session_storage::load_project_meta(proj).unwrap_or_default();
+            meta.version = 1;
+            meta.project_task_list = ptl;
             let _ = session_storage::save_project_meta(proj, &meta);
         }
         ctx.data_mut(|d| {

@@ -466,11 +466,10 @@ impl eframe::App for AutocodeApp {
         // Persist project metadata to disk.
         let ptl = self.state.project_task_list.clone();
         if let Some(proj) = self.state.active_project_mut() {
-            let meta = autocode_core::state::ProjectMeta {
-                version: 1,
-                project_task_list: ptl,
-                ..Default::default()
-            };
+            let mut meta = autocode_core::session_storage::load_project_meta(proj)
+                .unwrap_or_default();
+            meta.version = 1;
+            meta.project_task_list = ptl;
             if let Err(e) = autocode_core::session_storage::save_project_meta(proj, &meta) {
                 eprintln!("[app] Failed to save project meta: {}", e);
             }
@@ -507,11 +506,10 @@ impl eframe::App for AutocodeApp {
         // Persist project metadata to disk before shutdown.
         let ptl = self.state.project_task_list.clone();
         if let Some(proj) = self.state.active_project_mut() {
-            let meta = autocode_core::state::ProjectMeta {
-                version: 1,
-                project_task_list: ptl,
-                ..Default::default()
-            };
+            let mut meta = autocode_core::session_storage::load_project_meta(proj)
+                .unwrap_or_default();
+            meta.version = 1;
+            meta.project_task_list = ptl;
             if let Err(e) = autocode_core::session_storage::save_project_meta(proj, &meta) {
                 eprintln!("[app] Failed to save project meta on exit: {}", e);
             }
