@@ -175,6 +175,72 @@ git log --since="2 weeks"    # Recent history
 - "What was this code like before this change?" → `git log -p <file>`
 - "Who wrote this feature?" → `git log --follow <file>`
 
+## Windows-Specific Git Notes
+
+### Line Endings on Windows
+Windows uses CRLF (`\r\n`) while Git expects LF (`\n`). Configure Git properly:
+
+```bash
+# Configure Git for Windows
+git config core.autocrlf false  # Don't convert line endings
+
+# Or use .gitattributes for per-project control
+echo "* text=auto" >> .gitattributes
+echo "*.sh text eol=lf" >> .gitattributes
+echo "*.bat text eol=crlf" >> .gitattributes
+
+# Normalize existing files
+git add --renormalize .
+```
+
+### Windows File Locking
+Windows locks files that are open. Handle this when switching branches:
+
+```bash
+# Close all files before switching branches
+# If you get "error: unable to create file" errors:
+
+# Check which process has the file open
+# PowerShell:
+Get-Process | Where-Object {$_.Path -like "*project*"}
+
+# Or use Resource Monitor (resmon.exe) > CPU > Associated Handles
+```
+
+### Git Credential Manager on Windows
+Windows has built-in Git Credential Manager:
+
+```bash
+# Store credentials in Windows Credential Manager
+git config credential.helper manager
+
+# Or use Windows Credential Manager directly
+git config credential.helper manager-core
+```
+
+### Windows Path Length
+Windows has a 260-character path limit. Git may fail with long paths:
+
+```bash
+# Enable long path support in Git
+git config core.longpaths true
+
+# Or use the \\?\ prefix for absolute paths
+# In PowerShell:
+$env:GIT_CONFIG_GLOBAL = "\\?\C:\Users\username\.gitconfig"
+```
+
+### Case Sensitivity on Windows
+Windows file system is case-insensitive. Git is case-sensitive. This causes issues:
+
+```bash
+# Renaming a file by case only
+git mv OldName.txt oldname.txt
+# May fail on Windows - use two-step rename:
+git mv OldName.txt temp.txt
+git mv temp.txt oldname.txt
+```
+
 ## Anti-Patterns
 
 - **Committing unrelated changes together.** Each commit should be one logical change.
@@ -183,3 +249,4 @@ git log --since="2 weeks"    # Recent history
 - **Force pushing to main.** This loses history for everyone.
 - **Not checking status before operations.** `git status` takes 1 second and saves you from losing work.
 - **Giant merge commits.** If your feature branch diverged significantly, rebase it first to keep history readable.
+- **Not configuring line endings on Windows.** CRLF issues cause endless problems.

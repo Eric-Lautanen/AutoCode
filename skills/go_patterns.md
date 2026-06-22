@@ -271,6 +271,92 @@ my-app/
 - **Not closing channels**: Producers should close channels, not consumers. Closed channels return zero values forever.
 - **Ignoring context cancellation**: Long-running operations should check `ctx.Done()`.
 
+## Windows-Specific Go Notes
+
+### Building Go on Windows
+```powershell
+# Build for Windows (native)
+go build -o app.exe ./cmd/app
+
+# Cross-compile from Linux/macOS to Windows
+GOOS=windows GOARCH=amd64 go build -o app.exe ./cmd/app
+
+# Build with Windows-specific flags
+# -ldflags "-H windowsgui" for GUI applications (no console window)
+go build -ldflags "-H windowsgui" -o app.exe ./cmd/gui-app
+```
+
+### Windows Service in Go
+```go
+package main
+
+import (
+    "fmt"
+    "os"
+    "golang.org/x/sys/windows/svc"
+)
+
+type myService struct{}
+
+func (s *myService) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (ssec bool, errno uint32) {
+    changes <- svc.Status{State: svc.StartPending}
+    // Service logic here
+    changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop}
+    
+    for {
+        select {
+        case c := <-r:
+            switch c.Cmd {
+            case svc.Stop:
+                return
+            case svc.Interrogate:
+                changes <- c.CurrentStatus
+            }
+        }
+    }
+}
+
+func main() {
+    if len(os.Args) > 1 && os.Args[1] == "service" {
+        svc.Run("MyService", &myService{})
+        return
+    }
+    // Normal execution
+}
+```
+
+### Windows Paths in Go
+```go
+import "path/filepath"
+
+// Always use filepath for cross-platform paths
+configPath := filepath.Join("config", "app.yaml")
+// Windows: config\app.yaml
+// Unix: config/app.yaml
+
+// Convert to Windows long path format
+func toLongPath(path string) string {
+    if runtime.GOOS == "windows" && !strings.HasPrefix(path, "\\\\?\\") {
+        abs, _ := filepath.Abs(path)
+        return "\\\\?\\" + abs
+    }
+    return path
+}
+```
+
+### Windows Console Output
+```go
+import "golang.org/x/sys/windows"
+
+// Enable ANSI colors on Windows
+func enableANSI() {
+    handle := windows.Handle(os.Stdout.Fd())
+    var mode uint32
+    windows.GetConsoleMode(handle, &mode)
+    windows.SetConsoleMode(handle, mode|windows.ENABLE_VIRTUAL_TERMINAL_PROCESSING)
+}
+```
+
 ## Anti-Patterns
 
 - **Large interfaces.** Keep interfaces small (1-3 methods).
@@ -278,3 +364,4 @@ my-app/
 - **Panic for error handling.** Use `error` returns. Panic only for truly unrecoverable programmer errors.
 - **Not using context.Context.** Every function that does I/O should accept a context.
 - **Goroutines without lifecycle management.** Every goroutine should have a clear exit condition.
+- **Hardcoding Unix paths.** Use `filepath.Join` and `os.PathSeparator` for cross-platform compatibility.

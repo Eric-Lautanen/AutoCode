@@ -242,6 +242,66 @@ def test_parse_config():
 - Test the library works with common bundlers/runtimes, not just your dev setup
 - Integration test: create a minimal project that depends on your library, build and run it
 
+## Windows-Specific Library Notes
+
+### NuGet Package Design (C#)
+When publishing libraries for Windows developers:
+
+```xml
+<!-- MyLibrary.csproj -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net6.0;net48</TargetFrameworks>
+    <PackageId>MyCompany.MyLibrary</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>Your Name</Authors>
+    <Description>Library description</Description>
+    <PackageTags>windows;utility</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+  </PropertyGroup>
+</Project>
+```
+
+### Windows-Specific APIs in Libraries
+Expose Windows-specific functionality cleanly:
+
+```csharp
+// Cross-platform interface
+public interface IPlatformService {
+    void DoSomething();
+}
+
+// Windows implementation
+public class WindowsPlatformService : IPlatformService {
+    public void DoSomething() {
+        // Windows-specific implementation
+    }
+}
+```
+
+### PowerShell Module Design
+For PowerShell modules distributed via PowerShell Gallery:
+
+```powershell
+# MyModule.psd1
+@{
+    ModuleVersion = '1.0.0'
+    GUID = '12345678-1234-1234-1234-123456789012'
+    Author = 'Your Name'
+    Description = 'Module description'
+    PowerShellVersion = '5.1'
+    FunctionsToExport = @('Get-MyData', 'Set-MyData')
+}
+```
+
+### Windows Installer (MSI/MSIX)
+For libraries that need Windows installer packaging:
+
+- **MSI**: Traditional installer, requires admin privileges
+- **MSIX**: Modern packaging, sandboxed, auto-updating
+- **Chocolatey**: Package manager for Windows
+- **winget**: Modern Windows package manager
+
 ## Checklist
 
 - [ ] Public API is minimal — only what consumers need
@@ -253,3 +313,6 @@ def test_parse_config():
 - [ ] Changelog maintained in Keep a Changelog format
 - [ ] Package metadata complete (name, version, description, license, repo)
 - [ ] Tests exercise the public API, not internals
+- [ ] Windows: NuGet package metadata complete
+- [ ] Windows: PowerShell module manifest complete
+- [ ] Windows: Installer packaging considered (MSI/MSIX)

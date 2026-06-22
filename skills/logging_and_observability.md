@@ -157,6 +157,72 @@ logger.info("Cache stats", misses=cache_misses.last_minute(), hit_rate=hit_rate)
 - Development: TRACE and above
 - When debugging production: temporarily enable DEBUG for the affected service
 
+## Windows-Specific Logging Notes
+
+### Windows Event Log
+Log to the Windows Event Log for system-level events:
+
+```python
+import win32evtlog
+importcowin32evtlogutil
+
+def log_to_windows_event(message, event_type=win32evtlog.EVENTLOG_INFORMATION_TYPE):
+    """Log an event to the Windows Event Log."""
+    win32evtlogutil.ReportEvent(
+        appName="MyApp",
+        eventID=1,
+        eventCategory=0,
+        eventType=event_type,
+        strings=[message]
+    )
+
+# Usage
+log_to_windows_event("Application started successfully")
+```
+
+### ETW (Event Tracing for Windows)
+For high-performance tracing on Windows:
+
+```csharp
+// C# ETW example
+using System.Diagnostics.Tracing;
+
+[EventSource(Name = "MyCompany.MyApp")]
+public class MyAppEventSource : EventSource {
+    public static MyAppEventSource Log = new MyAppEventSource();
+
+    [Event(1, Level = EventLevel.Informational)]
+    public void AppStarted(string message) {
+        WriteEvent(1, message);
+    }
+}
+```
+
+### Windows Performance Counters
+Expose metrics via Windows Performance Counters:
+
+```csharp
+using System.Diagnostics;
+
+// Create performance counter
+var counter = new PerformanceCounter("MyApp", "Requests/sec", false);
+counter.RawValue = 0;
+
+// Increment counter
+counter.Increment();
+```
+
+### PowerShell Logging
+Log from PowerShell scripts:
+
+```powershell
+# Write to Windows Event Log
+Write-EventLog -LogName Application -Source "MyApp" -EventId 1 -EntryType Information -Message "Script started"
+
+# Write to transcript file
+Start-Transcript -Path "C:\Logs\myapp.log" -Append
+```
+
 ## Anti-Patterns
 
 - **Logging everything at INFO.** If everything is INFO, nothing stands out.
@@ -165,3 +231,4 @@ logger.info("Cache stats", misses=cache_misses.last_minute(), hit_rate=hit_rate)
 - **No correlation IDs.** Without them, you can't trace a request across services.
 - **Only logging, no metrics.** Logs tell you what happened; metrics tell you how often and how fast.
 - **Not logging errors with context.** "Operation failed" without the operation name or inputs is useless.
+- **Not using Windows Event Log on Windows.** Native Windows logging should be used for system events.

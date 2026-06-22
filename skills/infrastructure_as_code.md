@@ -215,6 +215,104 @@ data "terraform_remote_state" "networking" {
 subnet_id = data.terraform_remote_state.networking.outputs.subnet_id
 ```
 
+## Windows-Specific IaC Notes
+
+### Terraform on Windows
+```powershell
+# Install Terraform on Windows via Chocolatey
+choco install terraform
+
+# Or via winget
+winget install HashiCorp.Terraform
+
+# Initialize Terraform
+terraform init
+
+# Plan with Windows paths
+terraform plan -var-file="environments\dev\terraform.tfvars"
+```
+
+### Windows VM Provisioning with Terraform
+```hcl
+resource "azurerm_windows_virtual_machine" "example" {
+  name                = "win-vm"
+  resource_group_name = azurerm_resource_group.example.name
+  location            = azurerm_resource_group.example.location
+  size                = "Standard_F2"
+  admin_username      = "adminuser"
+  adminLTSPassword      = var.admin_password
+
+  network_interface_ids = [azurerm_network_interface.example.id]
+
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
+  }
+
+  source_image_reference {
+    publisher = "MicrosoftWindowsServer"
+    offer     = "WindowsServer"
+    sku       = "2019-Datacenter"
+    version   = "latest"
+  }
+}
+```
+
+### PowerShell for Windows Provisioning
+```hcl
+resource "azurerm_virtual_machine_extension" "example" {
+  name                 = "powershell-provision"
+  virtual_machine_id   = azurerm_windows_virtual_machine.example.id
+  publisher            = "Microsoft.Compute"
+  type                 = "CustomScriptExtension"
+  type_handler_version = "1.10"
+
+  settings = jsonencode({
+    commandToExecute = "powershell.exe -Command \"Write-Output 'Hello from Terraform'\""
+  })
+}
+```
+
+### Windows Container Support
+```hcl
+resource "azurerm_container_group" "example" {
+  name                = "win-container"
+  location            = azurerm_resource_group.example.location
+  resource_group_name = azurerm_resource_group.example.name
+  os_type             = "Windows"
+
+  container {
+    name   = "windows-app"
+    image  = "mcr.microsoft.com/windows/servercore:ltsc2019"
+    cpu    = "2"
+    memory = "4"
+  }
+}
+```
+
+### Ansible on Windows
+```yaml
+# playbook.yml for Windows
+- name: Configure Windows Server
+  hosts: windows
+  gather_facts: yes
+  tasks:
+    - name: Install IIS
+      win_feature:
+        name: Web-Server
+        state: present
+        include_management_tools: yes
+
+    - name: Ensure firewall allows HTTP
+      win_firewall_rule:
+        name: HTTP
+        enabled: yes
+        direction: in
+        protocol: tcp
+        localport: 80
+        action: allow
+```
+
 ## Checklist
 
 - [ ] State is stored remotely with encryption and locking
@@ -225,3 +323,6 @@ subnet_id = data.terraform_remote_state.networking.outputs.subnet_id
 - [ ] Drift detection runs regularly in CI
 - [ ] Production resources have `prevent_destroy` lifecycle
 - [ ] State file access is restricted (contains sensitive data)
+- [ ] Windows: PowerShell provisioning scripts tested
+- [ ] Windows: VM size and image appropriate for workload
+- [ ] Windows: Firewall rules configured correctly

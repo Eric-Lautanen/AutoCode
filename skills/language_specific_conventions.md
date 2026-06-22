@@ -190,9 +190,71 @@ my-project/
 
 ---
 
+## Windows-Specific Language Notes
+
+### C# / .NET
+C# is the primary language for Windows development:
+
+**Conventions:**
+- **Style**: 4 spaces, PascalCase for methods/classes, camelCase for variables
+- **Naming**: `PascalCase` for everything public, `_camelCase` for private fields
+- **Framework**: .NET 6+ for new projects, .NET Framework 4.8 for legacy
+- **Build**: MSBuild, `dotnet build`, `dotnet test`
+
+**Project Layout:**
+```
+my-project/
+├── MyProject.sln          # Solution file
+├── src/
+│   └── MyProject/
+│       ├── MyProject.csproj
+│       └── Program.cs
+└── tests/
+    └── MyProject.Tests/
+        └── UnitTest1.cs
+```
+
+**Key Idioms:**
+- Use `async`/`await` for I/O operations
+- Use `var` when the type is obvious
+- Prefer `IEnumerable<T>` over `List<T>` for return types
+- Use `using` statements for IDisposable resources
+- Handle Windows-specific APIs with P/Invoke or CsWin32
+
+### PowerShell
+PowerShell is essential for Windows automation:
+
+**Conventions:**
+- **Style**: 4 spaces, PascalCase for functions, Verb-Noun naming
+- **Naming**: `Get-Process`, `Set-Location`, `Invoke-RestMethod`
+- **Execution policy**: Scripts may be blocked by default
+
+**Example:**
+```powershell
+# Good PowerShell
+function Get-ServiceStatus {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [string]$ServiceName
+    )
+    
+    Get-Service -Name $ServiceName | Select-Object Name, Status
+}
+```
+
+### Batch / CMD
+Legacy but still used on Windows:
+
+**Conventions:**
+- Use `.cmd` extension (not `.bat` for new scripts)
+- Use `setlocal enabledelayedexpansion` for variables in loops
+- Quote paths: `"%VAR%"` not `%VAR%`
+
 ## Anti-Patterns
 
 - **Writing language X in language Y's style.** Don't write Python with Java patterns, or Go with Rust patterns.
 - **Ignoring the project's existing config.** If the project uses tabs and you add spaces, you create inconsistency.
 - **Not running the formatter.** `cargo fmt`, `npx prettier --write`, `ruff format` — just run it.
 - **Debating style.** Use the community's formatter and move on. Style debates are a productivity sink.
+- **Not considering C# for Windows projects.** C# is the native Windows language.

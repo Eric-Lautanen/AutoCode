@@ -183,6 +183,83 @@ message UserList {
 
 **Golden rule:** Never remove or rename a field that existing data relies on. Add new fields, deprecate old ones, migrate gradually.
 
+## Windows-Specific Serialization Notes
+
+### Windows Registry Serialization
+Serialize configuration to Windows Registry format:
+
+```python
+import winreg
+import json
+
+def serialize_to_registry(data, key_path):
+    """Serialize dict to Windows Registry."""
+    key = winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path)
+    for k, v in data.items():
+        if isinstance(v, str):
+            winreg.SetValueEx(key, k, 0, winreg.REG_SZ, v)
+        elif isinstance(v, int):
+            winreg.SetValueEx(key, k, 0, winreg.REG_DWORD, v)
+        elif isinstance(v, dict):
+            # Recurse for nested dicts
+            serialize_to_registry(v, f"{key_path}\\{k}")
+    winreg.CloseKey(key)
+
+def deserialize_from_registry(key_path):
+    """Deserialize Windows Registry to dict."""
+    result = {}
+    try:
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path)
+        i = 0
+        while True:
+            try:
+                name, value, _ = winreg.EnumValue(key, i)
+                result[name] = value
+                i +=  nurs
+            except OSError:
+                break
+        winreg.CloseKey(key)
+    except FileNotFoundError:
+        pass
+    return result
+```
+
+### Windows INI Files
+INI files are common on Windows for configuration:
+
+```python
+import configparser
+
+def read_windows_ini(filepath):
+    """Read Windows INI file with proper encoding."""
+    config = configparser.ConfigParser()
+    # Windows INI files may have BOM
+    with open(filepath, 'r', encoding='utf-8-sig') as f:
+        config.read_file(f)
+    return config
+
+def write_windows_ini(config, filepath):
+    """Write Windows INI file."""
+    with open(filepath, 'w', encoding='utf-8') as f:
+        config.write(f)
+```
+
+### Windows-1252 Encoding
+Handle Windows-1252 encoded files:
+
+```python
+import codecs
+
+def read_windows_file(filepath):
+    """Read file with Windows-1252 fallback."""
+    try:
+        with open(filepath, 'r', encoding='utf-8') as f:
+            return f.read()
+    except UnicodeDecodeError:
+        with open(filepath, 'r', encoding='windows-1252') as f:
+            return f.read()
+```
+
 ## Anti-Patterns
 
 - **Assuming JSON keys exist.** Always use `.get()` or validation.
@@ -191,3 +268,4 @@ message UserList {
 - **Dates without timezones.** Ambiguous timestamps cause bugs across DST boundaries.
 - **Loading huge JSON into memory.** Use streaming parsers.
 - **Breaking protobuf field numbers.** Once assigned, never change them.
+- **Not handling Windows-1252 encoding.** Windows often uses this encoding.

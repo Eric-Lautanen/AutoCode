@@ -157,8 +157,92 @@ When picking up a task from a previous session:
 - Waiting would block more work than the decision is worth
 - Document the decision and the reasoning so it can be revisited
 
+## Windows-Specific Task Management Notes
+
+### Windows Service Long-Running Tasks
+When implementing long-running tasks as Windows services:
+
+```python
+import win32serviceutil
+import win32service
+import win32event
+
+class LongRunningService(win32serviceutil.ServiceFramework):
+    _svc_name_ = "MyLongTask"
+    _svc_display_name_ = "My Long Running Task"
+
+    def __init__(self, args):
+        win32serviceutil.ServiceFramework.__init__(self, args)
+        self.stop_event = win32event.CreateEvent(None, 0, 0, None)
+
+    def SvcStop(self):
+        # Signal the service to stop
+        win32event.SetEvent(self.stop_event)
+
+    def SvcDoRun(self):
+        # Main task loop
+        while True:
+            result = win32event.WaitForSingleObject(self.stop_event, 5000)
+            if result == win32event.WAIT_OBJECT_0:
+                break
+            # Do work here
+            self.run_task()
+
+    def run_task(self):
+        # Implement your long-running task
+        pass
+```
+
+### Windows Task Scheduler
+Use Windows Task Scheduler for periodic long-running tasks:
+
+```powershell
+# Create a scheduled task for a long-running script
+$action = New-ScheduledTaskAction -Execute "python.exe" -Argument "C:\Scripts\long_task.py"
+$trigger = New-ScheduledTaskTrigger -Daily -At 2am
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+Register-ScheduledTask -TaskName "MyLongTask" -Action $action -Trigger $trigger -Settings $settings
+```
+
+### Windows Performance Monitoring
+Monitor long-running tasks on Windows:
+
+```powershell
+# Get process info for a running task
+Get-Process -Name "python" | Select-Object Name, Id, CPU, WorkingSet
+
+# Check Windows Event Log for task events
+Get-EventLog -LogName Application -Source "MyApp" -Newest 10
+```
+
+### Checkpointing on Windows
+When checkpointing on Windows, consider:
+
+- **File locking**: Windows locks open files; close handles before checkpointing
+- **Path length**: Keep checkpoint paths under 260 characters
+- **Permissions**: Ensure the service account can write checkpoint files
+
+```python
+import os
+from pathlib import Path
+
+def create_checkpoint(data, checkpoint_dir="checkpoints"):
+    """Create a checkpoint file on Windows."""
+    checkpoint_path = Path(checkpoint_dir) / f"checkpoint_{int(time.time())}.json"
+    
+    # Ensure directory exists
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Write atomically on Windows
+    temp_path = checkpoint_path.with_suffix('.tmp')
+    temp_path.write_text(json.dumps(data))
+    temp_path.replace(checkpoint_path)  # Atomic on Windows with os.replace
+```
+
 ## Anti-Patterns
 
+- **Windows: Not handling service stop signals.** Windows services must respond to stop requests promptly.
+- **Windows: Not using Task Scheduler for periodic tasks.** Reinventing scheduling is error-prone.
 - **No checkpoints.** If you lose context, you lose hours of work.
 - **Not committing between steps.** Uncommitted changes are one `git reset` away from oblivion.
 - **Vague handoff notes.** "Did some stuff, more to do" is useless. Be specific about what's done and what's next.

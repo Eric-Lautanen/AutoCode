@@ -321,6 +321,93 @@ el.addEventListener('click', handler, { signal: ac.signal });
 // When removing: ac.abort(); — removes all listeners on this signal
 ```
 
+## Windows-Specific DOM Notes
+
+### Windows High Contrast Mode Detection
+Detect and respond to Windows High Contrast Mode:
+
+```javascript
+// Check if Windows High Contrast Mode is active
+const isHighContrast = window.matchMedia('(forced-colors: active)').matches;
+
+// Listen for changes
+window.matchMedia('(forced-colors: active)').addEventListener('change', (e) => {
+  if (e.matches) {
+    document.body.classList.add('high-contrast');
+  } else {
+    document.body.classList.remove('high-contrast');
+  }
+});
+```
+
+### Windows Touch Events
+Windows tablets and 2-in-1 devices require touch event handling:
+
+```javascript
+// Detect touch support on Windows devices
+const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+
+// Handle both mouse and touch events
+function handlePointerEvent(e) {
+  // Pointer events work on both mouse and touch
+  console.log(e.pointerType); // 'mouse', 'touch', or 'pen'
+}
+
+element.addEventListener('pointerdown', handlePointerEvent);
+```
+
+### Windows Snap Layout Detection
+Detect when the window is in a snap layout:
+
+```javascript
+// Use ResizeObserver to detect snap layout changes
+const resizeObserver = new ResizeObserver((entries) => {
+  for (const entry of entries) {
+    const { width, height } = entry.contentRect;
+    // Adjust layout based on snapped size
+    if (width < 600) {
+      document.body.classList.add('snap-small');
+    } else {
+      document.body.classList.remove('snap-small');
+    }
+  }
+});
+
+resizeObserver.observe(document.body);
+```
+
+### Windows File System Access API
+Use the File System Access API for native file operations on Windows:
+
+```javascript
+// Open file picker (Chrome/Edge on Windows)
+async function openFile() {
+  try {
+    const [fileHandle] = await window.showOpenFilePicker();
+    const file = await fileHandle.getFile();
+    const contents = await file.text();
+    return contents;
+  } catch (err) {
+    console.error('File access cancelled or failed:', err);
+  }
+}
+
+// Save file
+async function saveFile(contents, filename) {
+  try {
+    const fileHandle = await window.showSaveFilePicker({
+      suggestedName: filename,
+      types: [{ accept: { 'text/plain': ['.txt'] } }]
+    });
+    const writable = await fileHandle.createWritable();
+    await writable.write(contents);
+    await writable.close();
+  } catch (err) {
+    console.error('Save failed:', err);
+  }
+}
+```
+
 ## Checklist
 
 - [ ] `textContent` used instead of `innerHTML` for plain text (XSS prevention)
@@ -330,3 +417,6 @@ el.addEventListener('click', handler, { signal: ac.signal });
 - [ ] Event listeners cleaned up on element removal (AbortController)
 - [ ] `querySelector`/`querySelectorAll` used (not legacy methods)
 - [ ] IntersectionObserver for scroll-based behavior (not scroll events)
+- [ ] Windows High Contrast Mode detected and handled
+- [ ] Windows touch events supported
+- [ ] Windows snap layouts tested

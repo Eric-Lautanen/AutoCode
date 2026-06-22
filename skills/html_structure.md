@@ -250,6 +250,80 @@ Only use tables for tabular data — never for layout.
 <link rel="icon" href="/favicon.ico">                     <!-- Browser tab icon -->
 ```
 
+## Windows-Specific HTML Notes
+
+### Windows High Contrast Mode
+Support Windows High Contrast Mode with proper meta tags and CSS:
+
+```html
+<!-- No special meta tag needed, but ensure CSS uses system colors -->
+<style>
+  @media (forced-colors: active) {
+    .button {
+      border: 2px solid ButtonText;
+    }
+    .button:focus {
+      outline: 3px solid Highlight;
+    }
+  }
+</style>
+```
+
+### Windows Tile and Pinned Site
+Configure Windows tile for pinned sites:
+
+```html
+<!-- Windows tile configuration -->
+<meta name="msapplication-TileColor" content="#2b5797">
+<meta name="msapplication-TileImage" content="/mstile-144x144.png">
+<meta name="msapplication-config" content="/browserconfig.xml">
+```
+
+```xml
+<!-- browserconfig.xml -->
+<?xml version="1.0" encoding="utf-8"?>
+<browserconfig>
+  <msapplication>
+    <tile>
+      <square150x150logo src="/mstile-150x150.png"/>
+      <TileColor>#2b5797</TileColor>
+    </tile>
+  </msapplication>
+</browserconfig>
+```
+
+### Windows Font Stack
+Include Windows system fonts for native feel:
+
+```html
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  }
+</style>
+```
+
+### Windows Touch Targets
+Ensure adequate touch targets for Windows tablets:
+
+```html
+<style>
+  /* Minimum 44px touch target */
+  .touch-target {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  
+  /* Windows tablet-specific */
+  @media (pointer: coarse) {
+    .button {
+      min-height: 48px;
+      padding: 12px 24px;
+    }
+  }
+</style>
+```
+
 ## Checklist
 
 - [ ] Document has DOCTYPE, lang, charset, viewport meta
@@ -261,3 +335,6 @@ Only use tables for tabular data — never for layout.
 - [ ] Tables used only for tabular data, with caption and scope attributes
 - [ ] Open Graph meta tags for social sharing
 - [ ] Canonical URL specified
+- [ ] Windows tile configuration (if applicable)
+- [ ] Windows High Contrast Mode supported
+- [ ] Windows touch targets adequate for tablets
