@@ -531,14 +531,16 @@ impl LruPathCache {
     }
 
     pub fn insert(&mut self, key: String, value: std::path::PathBuf) {
-        if self.map.contains_key(&key) {
+        // Replace existing entry without touching eviction or order.
+        if self.map.remove(&key).is_some() {
             self.map.insert(key, value);
             return;
         }
-        if self.map.len() >= self.capacity {
-            if let Some(oldest) = self.order.pop_front() {
-                self.map.remove(&oldest);
-            }
+        // Vacant: evict oldest if at capacity, then insert.
+        if self.map.len() >= self.capacity
+            && let Some(oldest) = self.order.pop_front()
+        {
+            self.map.remove(&oldest);
         }
         self.order.push_back(key.clone());
         self.map.insert(key, value);

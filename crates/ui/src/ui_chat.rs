@@ -224,7 +224,7 @@ pub fn show(
             // Messages were removed (trimmed or errors cleared by send_message).
             // Rebuild the display buffer so stale entries (e.g. cleared errors)
             // don't accumulate.
-            panel_state.display_buffer = sess.messages.iter().cloned().collect();
+            panel_state.display_buffer = sess.messages.to_vec();
             panel_state.prev_message_count = current_count;
             if !panel_state.user_scrolled_up {
                 panel_state.scroll_to_bottom = true;
@@ -434,11 +434,7 @@ pub fn show(
     {
         // Rebuild the display buffer from the truncated session.
         if let Some(sess) = state.active_session() {
-            panel_state.display_buffer = sess
-                .messages
-                .iter()
-                .cloned()
-                .collect();
+            panel_state.display_buffer = sess.messages.to_vec();
             panel_state.loaded_min_id = panel_state
                 .display_buffer
                 .first()
@@ -534,11 +530,7 @@ fn load_new_session(state: &mut AppState, panel_state: &mut ChatPanelState) -> O
                 } else {
                     panel_state.oldest_disk_id = 0;
                 }
-                panel_state.display_buffer = new_sess
-                    .messages
-                    .iter()
-                    .cloned()
-                    .collect();
+                panel_state.display_buffer = new_sess.messages.to_vec();
                 panel_state.loaded_min_id = panel_state
                     .display_buffer
                     .first()
