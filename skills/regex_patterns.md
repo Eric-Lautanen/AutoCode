@@ -188,6 +188,44 @@ Occurs with nested quantifiers on ambiguous patterns:
 - **Nested structures**: Regex can't handle arbitrary nesting (balanced parentheses, HTML tags)
 - **Complex grammars**: If the pattern is 50+ characters, it's probably a parser problem
 
+## Windows-Specific Notes
+
+### Windows Path Matching with Regex
+Windows paths use backslashes, which are regex escape characters:
+```python
+import re
+from pathlib import Path
+
+# BAD: backslash is an regex escape character
+pattern = r"C:\Users\Alice\file.txt"  # \U, \A, \f are escape sequences
+
+# GOOD: use raw strings and escape backslashes, or use pathlib
+path = Path("C:/Users/Alice/file.txt")
+pattern = re.escape(str(path))  # Safely escape for regex
+
+# Or match Windows paths cross-platform
+pattern = r"[A-Za-z]:[/\\\\].*"  # Match C:/ or C:\\ style paths
+```
+
+### PowerShell Regex
+PowerShell uses .NET regex syntax, which has some differences:
+```powershell
+# PowerShell -match operator (case-insensitive by default)
+"hello world" -match "hello.*"
+
+# Case-sensitive match
+"Hello World" -cmatch "hello.*"
+
+# .NET regex class
+[regex]::Match("hello world", "hello.*")
+```
+
+### Windows Command Line (CMD) Wildcards vs Regex
+CMD uses wildcards, not regex:
+- `dir *.txt` — wildcard (not regex)
+- `findstr /R "pattern"` — uses a limited regex subset
+- For full regex in scripts, use PowerShell instead
+
 ## Anti-Patterns
 
 - **Using regex for HTML parsing.** It can't handle nested tags. Use a parser.

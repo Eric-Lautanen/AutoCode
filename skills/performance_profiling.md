@@ -170,6 +170,40 @@ After making an optimization:
 
 **Rule of thumb:** A 2x improvement is usually worth some complexity. A 5% improvement is usually not.
 
+## Windows-Specific Notes
+
+### Windows Profiling Tools
+```powershell
+# Windows Performance Recorder (WPR) and Analyzer (WPA)
+wpr -start GeneralProfile
+# ... run your app ...
+wpr -stop trace.etl
+
+# PowerShell: Measure command execution time
+Measure-Command { node app.js }
+
+# Resource Monitor (GUI)
+perfmon /res
+```
+
+### Windows-Specific Performance Considerations
+- **File I/O**: Windows file system (NTFS) has different performance characteristics than ext4. Antivirus real-time scanning can significantly slow file operations.
+- **Process creation**: Spawning processes on Windows is slower than on Linux. Minimize subprocess calls in hot paths.
+- **Path handling**: `Path` operations in .NET/Python are slower on Windows due to path normalization. Cache path results if used repeatedly.
+- **Memory-mapped files**: Windows uses different APIs (`CreateFileMapping`/`MapViewOfFile`) but conceptually similar to Linux mmap.
+
+### Antivirus Impact
+Windows Defender (and other AV) can severely impact performance:
+- Exclude development directories from real-time scanning
+- Exclude `node_modules`, `.git`, build output directories
+- AV scanning of every file write during builds can add 20-50% overhead
+
+### Windows Subsystem for Linux (WSL)
+When profiling on WSL:
+- WSL2 has a Linux kernel but runs in a VM — disk I/O is slower than native Windows or native Linux
+- Network performance may differ due to virtualized networking
+- Use native Windows tools for the most accurate Windows performance data
+
 ## Anti-Patterns
 
 - **Optimizing without profiling.** You'll optimize the wrong thing.

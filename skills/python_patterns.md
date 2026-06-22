@@ -313,11 +313,78 @@ my-project/
     └── test_cli.py
 ```
 
-## Performance
+## Windows-Specific Notes
 
-- **Generators over lists for large data**: `sum(x for x in large_iterable)` vs `sum([x for x in large_iterable])`
-- **Avoid quadratic string concatenation**: Use `"".join(parts)` not `result += part` in a loop
-- **Use `__slots__`** for classes with many instances to reduce memory
+### Windows Path Handling
+```python
+from pathlib import Path
+import os
+
+# pathlib works identically on Windows, but be aware of differences
+path = Path("data") / "users" / f"{user_id}.json"
+
+# Windows-specific: check for long paths
+if os.name == 'nt' and len(str(path)) > 260:
+    # Use \\?\ prefix for paths over 260 characters
+    path = Path("\\\\?\\" + str(path.resolve()))
+```
+
+### Windows Virtual Environment Activation
+```powershell
+# Windows CMD
+.venv\Scripts\activate.bat
+
+# Windows PowerShell
+.venv\Scripts\Activate.ps1
+# Note: May need to run Set-ExecutionPolicy -ExecutionPolicy RemoteSigned first
+```
+
+### Windows-Specific stdlib Usage
+```python
+import os
+import sys
+
+# Check platform
+if sys.platform == 'win32':
+    # Windows-specific logic
+    config_dir = os.path.join(os.environ['APPDATA'], 'myapp')
+else:
+    config_dir = os.path.join(os.path.expanduser('~'), '.config', 'myapp')
+
+# Cross-platform path handling (preferred)
+from pathlib import Path
+config_dir = Path.home() / '.config' / 'myapp'
+if sys.platform == 'win32':
+    config_dir = Path(os.environ['APPDATA']) / 'myapp'
+```
+
+### File Locking on Windows
+Windows locks files during read/write, unlike Linux:
+```python
+import time
+
+def safe_read(filepath):
+    """Read file with retry for Windows locking."""
+    for i in range(5):
+        try:
+            with open(filepath, 'r') as f:
+                return f.read()
+        except PermissionError:
+            time.sleep(0.1 * (2 ** i))
+    raise PermissionError(f"Could not read {filepath}")
+```
+
+### Windows Subprocess
+```python
+import subprocess
+
+# Always use list form, not shell=True
+result = subprocess.run(['dir'], shell=True, capture_output=True, text=True)  # BAD
+result = subprocess.run(['cmd', '/c', 'dir'], capture_output=True, text=True)  # BETTER
+
+# For PowerShell
+result = subprocess.run(['powershell', '-Command', 'Get-Process'], capture_output=True, text=True)
+```
 
 ## Anti-Patterns
 
@@ -326,3 +393,5 @@ my-project/
 - **Mutable default arguments.** The #1 Python gotcha. Use `None` as default.
 - **Not using pathlib.** `os.path.join` is the old way; `Path / operator` is the new way.
 - **Ignoring type annotations.** They catch bugs and improve IDE support. Use them.
+
+

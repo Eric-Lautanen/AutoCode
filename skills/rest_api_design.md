@@ -201,6 +201,41 @@ X-Auth-Token: eyJhbGciOi...
 
 **For POST idempotency:** Use an idempotency key — client sends a unique key, server stores the result, returns the stored result for duplicate requests.
 
+## Windows-Specific Notes
+
+### Windows Development for APIs
+- **Line endings**: Windows CRLF can cause issues with JSON parsers or HTTP clients. Normalize to LF for API payloads.
+- **File uploads**: Windows paths in multipart/form-data need proper escaping
+
+```python
+# Flask/FastAPI file upload on Windows
+from pathlib import Path
+
+@app.post("/upload")
+async def upload_file(file: UploadFile):
+    # Safe cross-platform path handling
+    save_path = Path("uploads") / file.filename
+    with open(save_path, "wb") as f:
+        f.write(await file.read())
+```
+
+### Windows PowerShell and APIs
+PowerShell's `Invoke-RestMethod` and `Invoke-WebRequest` have different defaults than curl:
+```powershell
+# PowerShell API call
+$headers = @{ "Authorization" = "Bearer $token" }
+Invoke-RestMethod -Uri "http://api.example.com/users" -Headers $headers
+
+# Equivalent curl (works in PowerShell 7+)
+curl -H "Authorization: Bearer $token" http://api.example.com/users
+```
+
+### Windows Service Hosting
+For production APIs on Windows:
+- Use IIS with ASP.NET Core, or run Node/Python behind IIS reverse proxy
+- Windows Service: Use `nssm` (Non-Sucking Service Manager) to run Node/Python apps as services
+- Consider Windows containers (Docker) for consistent deployment
+
 ## Anti-Patterns
 
 - **Verbs in URLs.** `/createUser` → `POST /users`

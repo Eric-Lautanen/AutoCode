@@ -171,6 +171,41 @@ serde = { version = "1.0", features = ["derive"] }
 - **No caching**: Rebuild packages that haven't changed. Use Turborepo/Nx caching.
 - **Circular dependencies**: Package A depends on B, B depends on A. Break the cycle.
 
+## Windows-Specific Notes
+
+### Path Length Issues on Windows
+- Windows has a 260-character path limit by default (`MAX_PATH`)
+- Monorepos with deeply nested `node_modules` easily exceed this
+- **Solutions**:
+  - Enable long path support: `HKLM\SYSTEM\CurrentControlSet\Control\FileSystem\LongPathsEnabled = 1`
+  - Use `\\?\` prefix for paths over 260 chars in native code
+  - Prefer pnpm over npm — pnpm's flat node_modules reduces path depth
+
+### Windows Build Tooling
+```powershell
+# Turborepo on Windows — use forward slashes in configs
+turbo run build --filter=web
+
+# Nx on Windows — same commands, but watch for path separator issues
+nx build web
+
+# Cargo workspaces work identically on Windows
+cargo build -p my-crate
+```
+
+### Line Endings in Monorepos
+Mixed line endings (CRLF/LF) cause issues with shared configs and generated code:
+```bash
+# Enforce LF in .gitattributes
+* text=auto eol=lf
+```
+
+### Windows CI Considerations
+- GitHub Actions Windows runners are slower than Linux runners
+- Cache `node_modules` or `.turbo` directory aggressively
+- Use `actions/cache` with Windows-specific paths
+- File watching (for hot reload) is less reliable on Windows — use polling mode if needed
+
 ## Anti-Patterns
 
 - **No scoped builds.** Building everything on every change is too slow.

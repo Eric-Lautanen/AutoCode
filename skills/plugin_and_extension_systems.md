@@ -204,6 +204,50 @@ Plugin authors need more than API signatures:
 - **Migration guide**: what changed between core versions, how to update
 - **Debugging tips**: how to see logs, how to test locally, common errors
 
+## Windows-Specific Notes
+
+### Dynamic Loading on Windows
+- **DLL loading**: Windows uses `.dll` files instead of `.so` (Linux) or `.dylib` (macOS)
+- **Search order**: Windows searches for DLLs in a specific order (application dir → system dirs → PATH). Use `SetDllDirectory` to control this.
+- **Plugin directories**: Store plugins in a subdirectory of the application, not in system directories
+
+```python
+# Windows-safe plugin loading
+import ctypes
+import os
+from pathlib import Path
+
+def load_plugin(dll_path: str):
+    """Load a Windows DLL plugin safely."""
+    # Resolve to absolute path to avoid search order issues
+    path = Path(dll_path).resolve()
+    if not path.exists():
+        raise FileNotFoundError(f"Plugin not found: {path}")
+    return ctypes.CDLL(str(path))
+```
+
+### Windows Plugin Security
+- **Code signing**: Windows SmartScreen and antivirus software flag unsigned DLLs. Sign plugins if distributing to users.
+- **UAC**: Installing plugins to Program Files requires admin privileges. Use `%LOCALAPPDATA%` for user-installed plugins.
+- **Antivirus**: Real-time scanning can block plugin loading. Document this for users if plugins trigger false positives.
+
+### Registry-Based Discovery on Windows
+```python
+import winreg
+
+def discover_plugins_from_registry():
+    """Discover plugins registered in Windows Registry."""
+    plugins = []
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\MyApp\Plugins") as key:
+            for i in range(winreg.QueryInfoKey(key)[0]):
+                name = winreg.EnumKey(key, i)
+                plugins.append(name)
+    except FileNotFoundError:
+        pass
+    return plugins
+```
+
 ## Checklist
 
 - [ ] Plugin pattern chosen (hooks, middleware, strategy, dynamic loading)

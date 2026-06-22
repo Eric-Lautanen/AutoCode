@@ -229,6 +229,38 @@ npx svgo input.svg -o output.svg
 
 **Rule**: Use `<img>` for simple icons. Use inline SVG only when you need CSS styling or JS interaction.
 
+## Windows-Specificamac
+
+### Windows Image Processing Tools
+- **Sharp (Node.js)**: Works on Windows but requires Visual C++ Redistributable
+- **ImageMagick**: Available for Windows. Add to PATH or use full path
+- **FFmpeg**: Essential for video processing on Windows
+
+```powershell
+# Windows: Install FFmpeg via winget
+winget install Gyan.FFmpeg
+
+# Or via chocolatey
+choco install ffmpeg
+```
+
+### Windows File Paths in Build Scripts
+When referencing image paths in build scripts on Windows:
+```javascript
+// Vite/Webpack handle paths cross-platform, but custom scripts may need:
+import path from 'path';
+
+const imagePath = path.join(__dirname, 'assets', 'images', 'hero.jpg');
+// Produces: assets\images\hero.jpg on Windows
+// Use path.posix.join for forward slashes if needed
+```
+
+### Windows High DPI Displays
+Windows handles DPI scaling differently than macOS:
+- Windows may scale images at 125%, 150%, 175%, or 200%
+- Provide `srcset` with enough resolution for 200%+ scaling
+- Test on actual Windows devices, not just browser emulation
+
 ## Checklist
 
 - [ ] Images served in modern formats (WebP/AVIF) with fallbacks

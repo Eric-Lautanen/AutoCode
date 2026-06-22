@@ -191,6 +191,45 @@ Proxies sit between client and server. They affect:
 | `tcpdump` / `Wireshark` | Capture and analyze network packets |
 | `nc` (netcat) | Test TCP/UDP connectivity |
 
+## Windows-Specific Notes
+
+### Windows Networking Differences
+- **TCP stack**: Windows TCP implementation has different defaults than Linux (e.g., TCP window scaling, congestion algorithms)
+- **Firewall**: Windows Defender Firewall blocks inbound connections by default. Use `netsh advfirewall` to configure:
+  ```powershell
+  # Allow a port through Windows Firewall
+  netsh advfirewall firewall add rule name="MyApp" dir=in action=allow protocol=tcp localport=8080
+  ```
+- **DNS**: Windows uses its own DNS resolver cache. Flush with `ipconfig /flushdns`
+
+### Windows Network Debugging Tools
+```powershell
+# Test-NetConnection (modern replacement for telnet)
+Test-NetConnection -ComputerName example.com -Port 443
+
+# Check listening ports
+Get-NetTCPConnection -State Listen | Select-Object LocalAddress, LocalPort, OwningProcess
+
+# View active connections
+Get-NetTCPConnection | Select-Object LocalAddress, LocalPort, RemoteAddress, RemotePort, State
+
+# DNS lookup
+Resolve-DnsName example.com
+
+# Network path trace
+Test-NetConnection -ComputerName example.com -TraceRoute
+```
+
+### Windows-Specific Issues
+- **Port binding**: On Windows, binding to port < 1024 requires admin privileges (like Linux)
+- **Loopback**: `localhost` resolves to `::1` (IPv6) first on modern Windows. Use `127.0.0.1` explicitly if IPv4 is required
+- **Winsock**: Some legacy Windows apps use Winsock directly — behavior may differ from BSD sockets
+
+### Windows TLS/Certificate Handling
+- Windows has its own certificate store (MMC → Certificates). Python/Node may use this instead of OpenSSL's store
+- `certifi` package in Python provides Mozilla's CA bundle, which may differ from Windows store
+- PowerShell `Invoke-WebRequest` uses Windows certificate store; `curl` may use a different one
+
 ## Checklist
 
 - [ ] Identified which layer the problem is at (DNS, TCP, TLS, HTTP)

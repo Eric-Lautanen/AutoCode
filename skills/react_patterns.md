@@ -215,6 +215,48 @@ Only helps when the parent re-renders frequently but the component's props don't
 - **Over-using useEffect**: If you can compute something from props/state, don't put it in useEffect — compute it during render
 - **Premature memoization**: Adding `useMemo`/`useCallback` everywhere without measuring
 
+## Windows-Specific Notes
+
+### Windows Development Environment
+- **Line endings**: Configure Git to handle CRLF properly:
+  ```bash
+  git config --global core.autocrlf true
+  ```
+  Or use `.gitattributes` to enforce LF:
+  ```
+  * text=auto eol=lf
+  ```
+- **Path separators**: Use forward slashes in React code (works on all platforms). Node.js handles this automatically.
+- **npm vs npx on Windows**: Use `npx` for local packages. On Windows, global installs sometimes require admin privileges.
+
+### Windows File Watching
+Hot reload (HMR) may be unreliable on Windows:
+- **Vite/Webpack**: Use polling mode if file watching fails:
+  ```javascript
+  // vite.config.js
+  export default {
+    server: {
+      watch: {
+        usePolling: true,  // Enable on Windows if HMR is unreliable
+      }
+    }
+  }
+  ```
+- **WSL**: File watching across WSL/Windows boundary is slow. Keep project files in WSL filesystem, not Windows mount.
+
+### Windows Terminal Considerations
+- **PowerShell**: Some npm scripts use bash syntax. Use `cross-env` package for environment variables:
+  ```bash
+  npm install --save-dev cross-env
+  ```
+  ```json
+  {
+    "scripts": {
+      "build": "cross-env NODE_ENV=production vite build"
+    }
+  }
+  ```
+
 ## Anti-Patterns
 
 - **Giant components.** If it's 200+ lines, split it.

@@ -155,6 +155,70 @@ Before deploying any external-facing code:
 - [ ] Dependencies are audited for known vulnerabilities
 - [ ] The service runs with minimum necessary permissions
 
+## Windows-Specific Notes
+
+### Windows Security Model
+- **UAC (User Account Control)**: Apps run with standard user privileges by default. Request elevation only when necessary.
+- **Windows Defender**: Real-time protection can block file operations. Exclude development directories to avoid false positives.
+- **Windows Firewall**: Blocks inbound connections by default. Add rules for development servers:
+  ```powershell
+  netsh advfirewall firewall add rule name="Dev Server" dir=in action=allow protocol=tcp localport=3000
+  ```
+
+### Windows Credential Storage
+```python
+# Windows Credential Manager (via keyring package)
+import keyring
+
+# Store credentials securely
+credential = keyring.set_password("myapp", "username", "password")
+
+# Retrieve
+credential = keyring.get_password("myapp", "username")
+```
+
+### Windows File Permissions
+```powershell
+# Check file permissions
+Get-Acl file.txt | Format-List
+
+# Set restrictive permissions (remove inherited, add specific)
+$path = "secret.txt"
+$acl = Get-Acl $path
+
+# Remove all access
+$acl.SetAccessRuleProtection($true, $false)
+
+# Add specific user access
+$rule = New-Object System.Security.AccessControl.FileSystemAccessRule("DOMAIN\User", "Read", "Allow")
+$acl.SetAccessRule($rule)
+Set-Acl $path $acl
+```
+
+### Windows-Specific Path Traversal
+Windows has additional path traversal vectors:
+```python
+from pathlib import Path
+
+def safe_windows_path(user_input: str, base_dir: str) -> Path:
+    """Validate path on Windows, accounting for drive letters and UNC paths."""
+    base = Path(base_dir).resolve()
+    target = (base / user_input).resolve()
+    
+    # Check for drive letter traversal (C:\ → D:\)
+    if target.drive != base.drive:
+        raise ValueError("Invalid path: drive traversal detected")
+    
+    # Check for UNC path traversal
+    if str(target).startswith("\\\\"):
+        raise ValueError("Invalid path: UNC paths not allowed")
+    
+    if not str(target).startswith(str(base)):
+        raise ValueError("Invalid path: directory traversal detected")
+    
+    return target
+```
+
 ## Anti-Patterns
 
 - **"It's only internal."** Internal services get breached too. Apply the same standards.

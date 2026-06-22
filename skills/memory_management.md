@@ -194,7 +194,42 @@ for offset in range(0, total_records, CHUNK_SIZE):
     process_chunk(chunk)
 ```
 
-## Anti-Patterns
+## Windows-Specific Notes
+
+### Memory Limits on Windows
+- **32-bit processes**: Limited to 2GB RAM (3GB with `/LARGEADDRESSAWARE`). Use 64-bit builds for large data processing.
+- **Page file**: Windows uses a page file for virtual memory. Monitor `ura` (unavailable rather than used) — high page file usage indicates memory pressure.
+- **Large address aware**: For 32-bit legacy apps, compile with `/LARGEADDRESSAWARE` to access up to 3GB on 64-bit Windows.
+
+### Windows Memory Profiling Tools
+```powershell
+# Windows Performance Monitor - track memory counters
+perfmon /res  # Resource Monitor (real-time memory usage)
+
+# PowerShell: Get process memory usage
+Get-Process | Sort-Object WorkingSet -Descending | Select-Object -First 10 Name, WorkingSet
+
+# Windows Task Manager: Details tab → right-click columns → add "Commit size", "Working set"
+```
+
+### File Mapping for Large Data
+On Windows, use memory-mapped files for large data that doesn't fit in RAM:
+```python
+import mmap
+
+# Windows: memory-map a file for efficient large data access
+with open("huge_file.dat", "r+b") as f:
+    mm = mmap.mmap(f.fileno(), 0)
+    # Access mm like a byte string without loading into memory
+    mm.close()
+```
+
+### Heap Behavior Differences
+- Windows heap is managed by the Windows Heap Manager, not `malloc`/`free` directly
+- Fragmentation can be worse on Windows due to different allocation strategies
+- Use `HeapSetInformation` with `HeapCompatibilityInformation` for LFH (Low Fragmentation Heap) on Windows Server 2003+
+
+### Anti-Patterns
 
 - **Loading entire datasets into memory.** Use streaming or chunked processing.
 - **Unbounded caches.** Without size limits or eviction, caches grow until OOM.

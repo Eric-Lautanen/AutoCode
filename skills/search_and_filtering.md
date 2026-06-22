@@ -193,6 +193,30 @@ function onSearchInput(value) {
 
 **Rule:** Name/title matches should almost always rank higher than body/description matches.
 
+## Windows-Specific Notes
+
+### Windows Search and Indexing
+Windows has its own indexing service that can interfere with application search:
+- **Windows Search Indexer**: May lock files while indexing. Exclude app data directories.
+- **File system filtering**: Windows Defender real-time scanning can slow file-based search operations.
+
+### PowerShell Data Filtering
+```powershell
+# Filter objects in PowerShell
+$users | Where-Object { $_.is_active -eq $true }
+
+# Search files
+Get-ChildItem -Recurse -Filter "*.log" | Select-String -Pattern "ERROR"
+
+# SQL-like operations with SQLite (cross-platform)
+# Install: winget install SQLite.SQLite
+```
+
+### Windows-Specific Database Considerations
+- **SQLite**: Popular on Windows for local apps. File locking differs from Linux (mandatory vs advisory).
+- **SQL Server**: Full-text search uses `CONTAINS` and `FREETEXT` instead of PostgreSQL's `tsvector`.
+- **Case-insensitive search**: Windows file systems are case-insensitive by default. SQL Server is case-insensitive by default (`CI` collation).
+
 ## Anti-Patterns
 
 - **Using LIKE '%term%' on large tables.** Full table scan, no index usage.
