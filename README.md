@@ -2,7 +2,7 @@
 
 **AutoCode** is an autonomous AI coding agent — a native Rust desktop app that connects to LLMs and gives them full access to your filesystem and shell. Not a harness or scaffold — a single self-contained binary. Built in simple code editor, handoff system.  Run tasks for days/weeks.
 
-> **[v0.2.2 Release](https://github.com/Eric-Lautanen/AutoCode/releases/tag/v0.2.2)** — Download for Windows, Linux, and macOS
+> **[v0.2.3 Release](https://github.com/Eric-Lautanen/AutoCode/releases/tag/v0.2.3)** — Download for Windows, Linux, and macOS
 
 > **⚠️ WARNING — You're piloting a chainsaw**
 > AutoCode reads, writes, deletes, and runs code with **zero confirmation prompts**. No "Are you sure?" popup. No safety rail. If you tell it to `rm -rf /`, it will try its hardest. Use at your own risk.
@@ -18,19 +18,19 @@
 | **Streaming** | Real-time SSE with auto-recovery, exponential backoff, auto-continue on drop |
 | **Sessions** | Named sessions per project (up to 50), JSONL history, lazy-load display buffer, per-project tab colors |
 | **Token Management** | 3-tier counting (API → tiktoken → heuristic), auto-handoff at configurable threshold |
-| **File Explorer** | gitignore-aware tree, text/image preview, inline rename/delete, simple code editor |
+| **File Explorer** | gitignore-aware tree with git status colors, text/image preview, inline rename/delete, simple code editor |
 | **Task Tracking** | Session-level floating todo list + project-level task list (disk-persisted) |
 | **Session Handoff** | Auto-continuation when context limits hit — trigger prompt, RESUME.md generation |
 | **System Info** | Auto-detect OS, CPU, GPU, RAM, shell, and tool availability (Win32 FFI / `/proc` / `lspci`) |
 | **Security** | Heap-zeroed `SecretString`, path traversal blocking, scoped shell, atomic writes |
-| **Dark Theme** | 20-color palette, 72 customizable design colors, per-project accent colors |
+| **Dark Theme** | 20-color palette |
 | **Cross-Platform** | Windows, macOS, Linux — egui/eframe 0.34, OpenGL/Wgpu auto-select |
 
 ## Skills
 
 Skill files live in the `skills/` directory at project root and ship with the binary. Each file uses YAML frontmatter with a `description` field (fallback to first `# Heading`). The agent discovers skills via `get_skill` — filename, description, and heading are matched by exact, fuzzy, and substring search. Call `get_skill` with an empty keyword to list everything available.
 
-Built-in skills (43 so far) cover task decomposition, codebase orientation, debugging, refactoring, testing, API design, data modeling, error handling, Git workflows, environment/config, security, logging, performance, documentation, language conventions, code review, dependency management, shell usage, web research, file editing strategy, and more.
+Built-in skills (76 so far) cover task decomposition, codebase orientation, debugging, refactoring, testing, API design, data modeling, error handling, Git workflows, environment/config, security, logging, performance, documentation, language conventions, code review, dependency management, shell usage, web research, file editing strategy, and more.
 
 ## Quick Start
 
@@ -150,7 +150,7 @@ AutoCode ships with built-in configs for popular providers. You can also add any
 ## Project Structure
 
 <details>
-<summary><code>~19,520 lines of Rust across 35 source files (5 crates)</code></summary>
+<summary><code>~20,500 lines of Rust across 37 source files (5 crates)</code></summary>
 
 ```
 Cargo.toml                               # workspace root, resolver = "2"
@@ -159,7 +159,7 @@ Cargo.toml                               # workspace root, resolver = "2"
 │   ├── providers.json                    # built-in provider configs (edit or add your own)
 │   ├── icon.icns / icon.ico              # macOS / Windows icons
 │   └── linux/                           # Linux icons (16–512px)
-├── skills/               — skill .md files indexed by YAML `description` (scanned at runtime, 43 shipped)
+├── skills/               — skill .md files indexed by YAML `description` (scanned at runtime, 74 shipped)
 ├── crates/
 │   ├── autocode/        — binary (~583 lines)
 │   │   ├── main.rs       (51)    # entry, rustls init, eframe::run_native
@@ -180,25 +180,26 @@ Cargo.toml                               # workspace root, resolver = "2"
 │   │   ├── shell_task_storage.rs (82) # Shell task save/load/delete
 │   │   └── tokenizer/
 │   │       └── mod.rs    (88) # TiktokenTokenizer, HeuristicTokenizer
-│   ├── ai/               — AI client + orchestration (~6,461 lines)
-│   │   ├── chat.rs     (3868) # send_message, SSE polling, 21 tool handlers, retry/backoff
+│   ├── ai/               — AI client + orchestration (~6,460 lines)
+│   │   ├── chat.rs     (4035) # send_message, SSE polling, 21 tool handlers, retry/backoff
 │   │   ├── provider.rs (1712) # raw TCP+rustls HTTP, SSE parsing, tool definitions
 │   │   ├── session.rs   (168) # system prompt seeding, message prep
 │   │   ├── helpers.rs   (895) # fuzzy patching (7 strategies), similarity metrics
 │   │   └── thread_pool.rs (125) # Background pool with panic isolation
-│   ├── fs/               — filesystem tools (~980 lines)
+│   ├── fs/               — filesystem tools (~1,180 lines)
 │   │   ├── shell.rs     (199) # background shell via channels (cmd/sh)
-│   │   ├── explorer.rs  (467) # gitignore-aware list_dir/glob/grep/project_tree
+│   │   ├── explorer.rs  (599) # gitignore-aware list_dir/glob/grep/project_tree, git status merge
+│   │   ├── git.rs       (201) # git status caching, parsing, dir aggregation
 │   │   ├── skills.rs    (167) # runtime skills directory scanning + YAML description extraction
 │   │   └── helpers.rs   (206) # code fence extraction, glob matching
-│   └── ui/               — egui panels (~5,971 lines)
-│       ├── ui_chat.rs  (2198) # chat bubbles, markdown, diff, streaming, tool cards
+│   └── ui/               — egui panels (~6,100 lines)
+│       ├── ui_chat.rs  (2363) # chat bubbles, markdown, diff, streaming, tool cards
 │       ├── ui_settings.rs (1535) # 6-tab settings (Providers/Projects/Prompt/Session/Timeouts/About)
-│       ├── ui_explorer.rs (857) # file tree, preview, rename/delete
+│       ├── ui_explorer.rs (990) # file tree with git status coloring, preview, rename/delete
 │       ├── ui_toolbar.rs (340) # project/session/provider pickers, budget meter
-│       ├── ui_todo.rs   (285) # floating session task list
-│       ├── ui_project_tasks.rs (297) # floating project task list
-│       └── helpers.rs   (445) # time formatting, LayoutJob, screen pixel sampling
+│       ├── ui_todo.rs   (312) # floating session task list
+│       ├── ui_project_tasks.rs (318) # floating project task list
+│       └── helpers.rs   (526) # time formatting, LayoutJob, screen pixel sampling, todo scroll helper
 ```
 </details>
 
