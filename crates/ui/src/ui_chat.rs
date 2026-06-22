@@ -214,19 +214,21 @@ pub fn show(
         let current_count = sess.messages.len();
         if current_count > panel_state.prev_message_count {
             for msg in &sess.messages[panel_state.prev_message_count..current_count] {
-                if msg.role != Role::Error {
-                    panel_state.display_buffer.push(msg.clone());
-                }
+                panel_state.display_buffer.push(msg.clone());
             }
             panel_state.prev_message_count = current_count;
             if !panel_state.user_scrolled_up {
                 panel_state.scroll_to_bottom = true;
             }
         } else if current_count < panel_state.prev_message_count {
-            // Session was trimmed in RAM — keep the display buffer intact
-            // (it already has all messages loaded), just remember the new
-            // count so we can detect future new messages.
+            // Messages were removed (trimmed or errors cleared by send_message).
+            // Rebuild the display buffer so stale entries (e.g. cleared errors)
+            // don't accumulate.
+            panel_state.display_buffer = sess.messages.iter().cloned().collect();
             panel_state.prev_message_count = current_count;
+            if !panel_state.user_scrolled_up {
+                panel_state.scroll_to_bottom = true;
+            }
         }
     }
 
@@ -254,7 +256,7 @@ pub fn show(
         let scroll_resp = ScrollArea::both()
             .id_salt(("chat_scroll", active_sid.as_deref().unwrap_or("")))
             .max_height(scroll_h)
-            .stick_to_bottom(panel_state.scroll_to_bottom)
+            .stick_to_bottom(true)
             .auto_shrink([false; 2])
             .show(ui, |ui| {
                 let inner_max_w = (chat_w - 30.0).max(200.0);
@@ -304,7 +306,15 @@ pub fn show(
                                                 render_tool_result(ui, msg, i, sid);
                                             });
                                         }
-                                        Role::System | Role::Error => {}
+                                        Role::System => {}
+                                        Role::Error => {
+                                            ui.add_space(4.0);
+                                            ui.label(
+                                                RichText::new(msg.content.as_str())
+                                                    .size(11.0)
+                                                    .color(theme().error),
+                                            );
+                                        }
                                     }
                                     ui.add_space(8.0);
                                 }
@@ -356,12 +366,17 @@ pub fn show(
         panel_state.scroll_area_id = Some(scroll_resp.id);
 
         if let Some(sa_id) = panel_state.scroll_area_id {
-            let sa_state = ui.ctx().data_mut(|d| {
-                d.get_persisted::<egui::scroll_area::State>(sa_id)
-                    .unwrap_or_default()
-            });
             let max_y = (scroll_resp.content_size.y - scroll_resp.inner_rect.height()).max(0.0);
+            let mut sa_state: egui::scroll_area::State = ui
+                .ctx()
+                .data_mut(|d| d.get_persisted(sa_id).unwrap_or_default());
             panel_state.user_scrolled_up = sa_state.offset.y < max_y - 20.0;
+            // Force scroll to bottom when within 20px threshold so new content
+            // (user, assistant, or tool) appears right away.
+            if !panel_state.user_scrolled_up && sa_state.offset.y < max_y {
+                sa_state.offset.y = max_y;
+                ui.ctx().data_mut(|d| d.insert_persisted(sa_id, sa_state));
+            }
             // Evict loaded history when back near bottom.
             if !panel_state.user_scrolled_up {
                 let window = state.ui_display_window;
@@ -406,10 +421,6 @@ pub fn show(
                 ui.ctx().data_mut(|d| d.insert_persisted(scroll_id, state));
             }
         }
-
-        if !streaming {
-            panel_state.scroll_to_bottom = false;
-        }
     } // end scoped block — runtime borrow is released here
 
     // Handle any pending replay action from a ↺ button click.
@@ -426,7 +437,6 @@ pub fn show(
             panel_state.display_buffer = sess
                 .messages
                 .iter()
-                .filter(|m| m.role != Role::Error)
                 .cloned()
                 .collect();
             panel_state.loaded_min_id = panel_state
@@ -527,7 +537,6 @@ fn load_new_session(state: &mut AppState, panel_state: &mut ChatPanelState) -> O
                 panel_state.display_buffer = new_sess
                     .messages
                     .iter()
-                    .filter(|m| m.role != Role::Error)
                     .cloned()
                     .collect();
                 panel_state.loaded_min_id = panel_state
@@ -1907,7 +1916,7 @@ fn show_input_row(
         .fill(theme().bg_base)
         .inner_margin(Margin {
             left: 10,
-            right: 16,
+            right: 24,
             top: 6,
             bottom: 6,
         })
@@ -1920,15 +1929,15 @@ fn show_input_row(
                             .get(sid)
                             .is_some_and(|r| r.is_busy() || r.retry_after.is_some())
                     });
-                    let input_w = (ui.available_width() - 240.0).max(0.0);
+                    let input_w = (ui.available_width() - 256.0).max(0.0);
                     let send_enabled = !panel_state.input.trim().is_empty() && !busy;
 
-                    let resp = ui.add(
+                    let resp = ui.add_sized(
+                        egui::vec2(input_w, 60.0),
                         TextEdit::multiline(&mut panel_state.input)
                             .id(egui::Id::new(format!("chat_input_{}", sid)))
                             .hint_text("Describe a task... Shift+Enter for newline")
-                            .desired_width(input_w)
-                            .desired_rows(3)
+                            .desired_width(f32::INFINITY)
                             .font(egui::TextStyle::Body)
                             .text_color(theme().text_primary),
                     );
@@ -2038,6 +2047,7 @@ fn show_input_row(
                                 let text = std::mem::take(&mut panel_state.input);
                                 chat::send_message(state, runtimes, text);
                                 panel_state.scroll_to_bottom = true;
+                                panel_state.user_scrolled_up = false;
                             }
                         }
 
