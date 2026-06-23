@@ -215,11 +215,11 @@ impl AutocodeApp {
             .unwrap_or_else(|| "AutoCode -- Autonomous AI Coder".into())
     }
 
-    fn prune_shell_tasks(&self) {
-        let tasks = &mut self.state.shell_tasks.clone();
-        if tasks.len() > 200 {
-            let excess = tasks.len() - 200;
-            tasks
+    fn prune_shell_tasks(&mut self) {
+        if self.state.shell_tasks.len() > 200 {
+            let excess = self.state.shell_tasks.len() - 200;
+            self.state
+                .shell_tasks
                 .extract_if(0..excess, |t| {
                     matches!(
                         t.status,
@@ -228,9 +228,9 @@ impl AutocodeApp {
                     )
                 })
                 .for_each(drop);
-            if tasks.len() > 200 {
-                let extra = tasks.len() - 200;
-                tasks.drain(0..extra);
+            if self.state.shell_tasks.len() > 200 {
+                let extra = self.state.shell_tasks.len() - 200;
+                self.state.shell_tasks.drain(0..extra);
             }
         }
     }
