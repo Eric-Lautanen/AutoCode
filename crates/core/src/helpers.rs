@@ -1317,7 +1317,7 @@ pub fn update_full_estimate(session: &mut crate::state::Session, tools_json: &se
     session.recompute_full_tokens(tools_json, model_ref);
 }
 
-/// Replace or strip Unicode characters that egui's default fonts don't support
+/// Replace or strip Unicode characters that the UI framework's default fonts don't support
 /// (emojis, symbols, etc.) to avoid tofu blocks (□□□) in the UI.
 /// Lightweight — no extra font files needed.
 pub fn sanitize_display_text(s: &str) -> String {
@@ -1367,7 +1367,7 @@ pub fn sanitize_display_text(s: &str) -> String {
                 0x2018 | 0x2019 => Some('\''), // Smart quotes single
                 0x201C | 0x201D => Some('"'),  // Smart quotes double
                 0x2026 => Some('.'),           // Ellipsis -> .
-                // Keep anything in egui's safe ranges
+                // Keep anything in the UI framework's safe ranges
                 _ if u <= 0x007F => Some(c),                    // ASCII
                 _ if (0x00A0..=0x024F).contains(&u) => Some(c), // Latin + extended
                 _ if (0x0370..=0x03FF).contains(&u) => Some(c), // Greek

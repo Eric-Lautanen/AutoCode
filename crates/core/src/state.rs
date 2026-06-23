@@ -1,5 +1,5 @@
 // state.rs -- Canonical persistent application state.
-// All fields that must survive restarts are here; serialized to eframe storage.
+// All fields that must survive restarts are here; serialized to app storage.
 
 use std::sync::atomic::Ordering;
 
@@ -1101,7 +1101,7 @@ pub struct AppState {
     #[serde(default)]
     pub sysinfo: crate::sysinfo::SysInfo,
 
-    /// When true, egui paints widget IDs and debug info on hover (F12 to toggle).
+    /// When true, the UI framework paints widget IDs and debug info on hover (F12 to toggle).
     #[serde(default)]
     pub debug_mode: bool,
     #[serde(default)]
@@ -1231,8 +1231,8 @@ impl Default for AppState {
 }
 
 impl AppState {
-    pub fn load(storage: &dyn eframe::Storage) -> Self {
-        let mut state: Self = eframe::get_value(storage, "app_state").unwrap_or_default();
+    pub fn load(storage: &impl crate::storage::StorageLoad) -> Self {
+        let mut state: Self = storage.get("app_state").unwrap_or_default();
 
         // Discover projects and sessions from disk (source of truth).
         let disk_projects = crate::session_storage::discover_projects_from_disk();
@@ -1401,13 +1401,13 @@ impl AppState {
         }
     }
 
-    pub fn save(&mut self, storage: &mut dyn eframe::Storage) {
+    pub fn save(&mut self, storage: &mut impl crate::storage::AppStorage) {
         self.prune_disk_state();
         // Persist providers to their own file (not app.ron).
         if let Err(e) = crate::provider_file::save_providers_file(&self.providers) {
             eprintln!("[state] Failed to save providers file: {}", e);
         }
-        eframe::set_value(storage, "app_state", self);
+        storage.set("app_state", self);
     }
 
     pub fn active_session_mut(&mut self) -> Option<&mut Session> {

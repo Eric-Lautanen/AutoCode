@@ -369,10 +369,11 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
                 };
                 let model_ref = model_owned.as_deref();
                 session.recompute_messages_tokens(model_ref);
-                // estimated_full_tokens will be set on the next API request
-                // (prepare_request_messages_for_session includes tool definitions).
-                // This is a cosmetic ~500-token difference that resolves after
-                // the first completion.
+                // estimated_full_tokens is kept in sync incrementally in
+                // push_to_session, but on initial load we only have messages
+                // (no tools_overhead cached). Set to messages_tokens as a
+                // reasonable baseline; the next API request or completion
+                // will add the tools overhead via recompute_full_tokens.
                 session.estimated_full_tokens = session.estimated_messages_tokens;
             }
             Err(_e) => {}
