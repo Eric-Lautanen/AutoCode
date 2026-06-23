@@ -139,18 +139,8 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 name = "autocode"
 version = "0.2.3"
 dependencies = [
- "autocode-ai",
- "autocode-core",
- "autocode-fs",
  "autocode-ui",
- "eframe",
- "egui",
  "embed-resource",
- "image",
- "rfd",
- "rustls",
- "serde",
- "webpki-roots",
 ]
 
 [[package]]
@@ -189,8 +179,12 @@ dependencies = [
  "autocode-ai",
  "autocode-core",
  "autocode-fs",
+ "eframe",
  "egui",
  "image",
+ "rfd",
+ "rustls",
+ "serde",
 ]
 
 [[package]]

@@ -1,6 +1,3 @@
-// app.rs -- Root eframe::App implementation.
-// Owns all state, wires panels together, drives the per-frame update loop.
-
 use std::collections::HashMap;
 
 use eframe::CreationContext;
@@ -10,17 +7,18 @@ use autocode_ai::{
     chat::{self, ChatRuntime},
     provider, session,
 };
-use autocode_core::{persistence::PersistenceThread, state::AppState, storage::AppStorage, storage::StorageLoad};
-use autocode_ui::{
-    ui_chat::{self, ChatPanelState},
-    ui_explorer::{self, ExplorerPanelState},
-    ui_project_tasks,
-    ui_settings::{self, SettingsState},
-    ui_todo, ui_toolbar,
-};
+use autocode_core::state::AppState;
+use autocode_core::{persistence::PersistenceThread, storage::AppStorage, storage::StorageLoad};
+
+use crate::ui_chat::{self, ChatPanelState};
+use crate::ui_explorer::{self, ExplorerPanelState};
+use crate::ui_project_tasks;
+use crate::ui_settings::{self, SettingsState};
+use crate::ui_todo;
+use crate::ui_toolbar;
 
 /// Adapter: wraps an immutable `&dyn eframe::Storage` for loading state.
-struct EframeStorage<'a>(&'a dyn eframe::Storage);
+pub struct EframeStorage<'a>(pub &'a dyn eframe::Storage);
 
 impl StorageLoad for EframeStorage<'_> {
     fn get<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<T> {
@@ -29,7 +27,7 @@ impl StorageLoad for EframeStorage<'_> {
 }
 
 /// Adapter: wraps a mutable `&mut dyn eframe::Storage` for saving state.
-struct EframeStorageMut<'a>(&'a mut dyn eframe::Storage);
+pub struct EframeStorageMut<'a>(pub &'a mut dyn eframe::Storage);
 
 impl StorageLoad for EframeStorageMut<'_> {
     fn get<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<T> {
@@ -63,7 +61,7 @@ impl AutocodeApp {
         } else {
             AppState::default()
         };
-        autocode_ui::theme::apply(&cc.egui_ctx);
+        crate::theme::apply(&cc.egui_ctx);
 
         state.prune_disk_state();
         Self::restore_active_session(&mut state);
@@ -74,8 +72,6 @@ impl AutocodeApp {
             Some(autocode_core::sysinfo::start_detect())
         };
 
-        // Drain any remaining pending writes from the loaded state into the
-        // persistence thread so they are not lost.
         let persistence = PersistenceThread::new();
         let batches = state.drain_pending_writes();
         for (dir, msgs) in batches {
@@ -101,7 +97,6 @@ impl AutocodeApp {
         }
     }
 
-    /// Drain pending message writes and send them to the persistence thread.
     fn flush_pending_writes(&mut self) {
         let batches = self.state.drain_pending_writes();
         for (dir, msgs) in batches {
@@ -135,8 +130,6 @@ impl AutocodeApp {
                 .map(|p| p.supports_strict_tools())
                 .unwrap_or(true);
             autocode_core::helpers::update_full_estimate(sess, &provider::tool_definitions(strict));
-            // Keep only the last window of messages in RAM for API requests.
-            // Full history lives on disk and is loaded on demand.
             let window = state.ui_display_window;
             let total = sess.messages.len();
             if total > window * 2 {
@@ -150,7 +143,6 @@ impl AutocodeApp {
             state.handoff_enabled = sess.handoff_enabled;
             state.show_explorer = sess.show_explorer;
             state.settings_open = sess.settings_open;
-            // Load project-level tasks from disk.
             if let Some(meta) = autocode_core::session_storage::load_project_meta(proj) {
                 state.project_task_list = meta.project_task_list;
             }
@@ -166,7 +158,6 @@ impl AutocodeApp {
             && state.providers.contains_key(&label)
         {
             state.active_provider = label.clone();
-            // Snapshot the session's per-model params before mutating the provider.
             let sess_params = state.active_session().map(|s| {
                 (
                     s.temperature,
@@ -205,9 +196,6 @@ impl AutocodeApp {
                 .iter()
                 .find(|p| Some(&p.id) == sess.project_id.as_ref())
             {
-                // Only write metadata if the session files still exist on disk.
-                // Disk is the source of truth - if the user deleted the session
-                // manually we must not recreate it.
                 if autocode_core::session_storage::session_exists(proj, sess)
                     && let Err(e) = autocode_core::session_storage::save_session_meta(proj, sess)
                 {
@@ -216,12 +204,58 @@ impl AutocodeApp {
             }
         }
     }
+
+    fn window_title(&self) -> String {
+        self.state
+            .active_session()
+            .map(|s| {
+                let label = if s.label.is_empty() { &s.id } else { &s.label };
+                format!("AutoCode :: {}", label)
+            })
+            .unwrap_or_else(|| "AutoCode -- Autonomous AI Coder".into())
+    }
+
+    fn prune_shell_tasks(&self) {
+        let tasks = &mut self.state.shell_tasks.clone();
+        if tasks.len() > 200 {
+            let excess = tasks.len() - 200;
+            tasks
+                .extract_if(0..excess, |t| {
+                    matches!(
+                        t.status,
+                        autocode_core::state::ShellStatus::Done { .. }
+                            | autocode_core::state::ShellStatus::Failed(_)
+                    )
+                })
+                .for_each(drop);
+            if tasks.len() > 200 {
+                let extra = tasks.len() - 200;
+                tasks.drain(0..extra);
+            }
+        }
+    }
+
+    fn cleanup_temp_files() {
+        if let Some(lock) = autocode_core::fsutil::TEMP_FILES.get() {
+            let mut temp_files = match lock.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => {
+                    lock.clear_poison();
+                    poisoned.into_inner()
+                }
+            };
+            for path in temp_files.drain(..) {
+                if let Err(e) = std::fs::remove_file(&path) {
+                    eprintln!("[app] Failed to remove temp file {:?}: {}", path, e);
+                }
+            }
+        }
+    }
 }
 
 impl eframe::App for AutocodeApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Update window title with active session name.
-        let title = crate::helpers::window_title(&self.state);
+        let title = self.window_title();
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
 
         ctx.options_mut(|o| {
@@ -240,12 +274,8 @@ impl eframe::App for AutocodeApp {
             }
         }
 
-        // Send pending message writes to the background persistence thread.
-        // Path is resolved at send time so directory renames don't orphan messages.
         self.flush_pending_writes();
 
-        // Periodically check for sessions deleted from disk while the app is
-        // running. Disk is the source of truth — purge anything missing.
         {
             let now = autocode_core::helpers::unix_now();
             let last = ctx.data_mut(|d| {
@@ -257,7 +287,6 @@ impl eframe::App for AutocodeApp {
             }
         }
 
-        // Persist session meta immediately when provider/model changes in the UI.
         if self.state.session_meta_dirty {
             self.state.session_meta_dirty = false;
             if let Some(sess) = self.state.active_session()
@@ -279,7 +308,7 @@ impl eframe::App for AutocodeApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
 
-        crate::helpers::prune_shell_tasks(&mut self.state.shell_tasks);
+        self.prune_shell_tasks();
 
         let session_changed = self.prev_session_id != self.state.active_session_id;
         if session_changed {
@@ -327,7 +356,6 @@ impl eframe::App for AutocodeApp {
             });
         }
 
-        // Poll folder picker result (can arrive while minimized).
         if let Some(rx) = &self.folder_picker
             && let Ok(maybe_path) = rx.try_recv()
         {
@@ -354,7 +382,6 @@ impl eframe::App for AutocodeApp {
                 ) {
                     eprintln!("[app] Failed to create project directories: {}", e);
                 }
-                // Persist project identity to disk so it survives restarts.
                 if let Some(proj) = self.state.projects.last()
                     && let Err(e) = autocode_core::session_storage::save_project_identity(proj)
                 {
@@ -370,7 +397,6 @@ impl eframe::App for AutocodeApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
-        // Native folder picker (New Project) --------------------------------
         let wants_picker = ctx.data_mut(|d| {
             d.remove_temp::<bool>(egui::Id::new("open_new_project"))
                 .unwrap_or(false)
@@ -389,36 +415,32 @@ impl eframe::App for AutocodeApp {
             });
         }
 
-        // Floating windows (drawn before panels so they appear on top).
         ui_settings::show_window(&ctx, &mut self.state, &mut self.settings);
         ui_explorer::show_file_viewer(&ctx, &mut self.explorer_panel);
         ui_todo::show_window(&ctx, &mut self.state);
         ui_project_tasks::show_window(&ctx, &mut self.state);
 
-        // Toolbar -- top.
         Panel::top("toolbar")
-            .frame(Frame::new().fill(autocode_ui::theme::Palette::BG_BASE))
+            .frame(Frame::new().fill(crate::theme::Palette::BG_BASE))
             .show_inside(ui, |ui| {
                 ui_toolbar::show(ui, &mut self.state, &mut self.runtimes);
             });
 
-        // File explorer -- left.
         if self.state.show_explorer {
             Panel::left("explorer_panel")
                 .resizable(true)
                 .default_size(self.state.explorer_width)
                 .min_size(160.0)
                 .max_size(480.0)
-                .frame(Frame::NONE.fill(autocode_ui::theme::Palette::BG_PANEL))
+                .frame(Frame::NONE.fill(crate::theme::Palette::BG_PANEL))
                 .show_inside(ui, |ui| {
                     self.state.explorer_width = ui.available_width();
                     ui_explorer::show(ui, &mut self.state, &mut self.explorer_panel);
                 });
         }
 
-        // Main chat panel.
         CentralPanel::default()
-            .frame(Frame::NONE.fill(autocode_ui::theme::Palette::BG_PANEL))
+            .frame(Frame::NONE.fill(crate::theme::Palette::BG_PANEL))
             .show_inside(ui, |ui| {
                 ui_chat::show(
                     ui,
@@ -428,7 +450,6 @@ impl eframe::App for AutocodeApp {
                 );
             });
 
-        // Debug inspection panel (shows widget IDs, input state, memory).
         if self.state.inspection_open {
             egui::Window::new("Debug — Inspection")
                 .id(egui::Id::new("debug_inspect"))
@@ -441,11 +462,9 @@ impl eframe::App for AutocodeApp {
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        // Flush pending message writes to the persistence thread and await completion.
         self.flush_pending_writes();
         self.persistence.flush();
         {
-            // Sync current session state into the active session before saving.
             let prov_label = self.state.active_provider.clone();
             let model = self
                 .state
@@ -487,7 +506,6 @@ impl eframe::App for AutocodeApp {
                 }
             }
         }
-        // Persist project metadata to disk.
         let ptl = self.state.project_task_list.clone();
         if let Some(proj) = self.state.active_project_mut() {
             let mut meta =
@@ -507,7 +525,6 @@ impl eframe::App for AutocodeApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        // Flush all pending message writes to the persistence thread before shutdown.
         self.flush_pending_writes();
 
         for runtime in self.runtimes.values_mut() {
@@ -515,7 +532,6 @@ impl eframe::App for AutocodeApp {
         }
 
         {
-            // Sync current provider/model into the active session before final save.
             let prov_label = self.state.active_provider.clone();
             let model = self
                 .state
@@ -527,7 +543,6 @@ impl eframe::App for AutocodeApp {
                 sess.model = model;
             }
         }
-        // Persist project metadata to disk before shutdown.
         let ptl = self.state.project_task_list.clone();
         if let Some(proj) = self.state.active_project_mut() {
             let mut meta =
@@ -540,11 +555,10 @@ impl eframe::App for AutocodeApp {
         }
         self.save_sessions();
 
-        // Flush and shut down the persistence thread.
         self.persistence.flush();
 
         std::thread::yield_now();
 
-        crate::helpers::cleanup_temp_files();
+        Self::cleanup_temp_files();
     }
 }
