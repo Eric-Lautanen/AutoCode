@@ -146,14 +146,19 @@ fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: Chat
         msg.full_token_estimate =
             autocode_core::helpers::estimate_single_message_json_tokens(&msg, model);
         sess.messages.push(msg);
-        // Incrementally update the messages-only token estimate (O(1)).
-        // estimated_full_tokens will be refreshed on the next API request
-        // (prepare_request_messages_for_session includes tool definitions).
+        // Incrementally update both the messages-only and full token estimates (O(1)).
+        // estimated_full_tokens = messages + tools_overhead, and tools_overhead is
+        // constant (sent once per request), so adding the delta keeps it in sync
+        // in real-time — no need to wait for the next API request.
         if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
             let last = sess.messages.last().unwrap();
+            let delta = last.full_token_estimate;
             sess.estimated_messages_tokens = sess
                 .estimated_messages_tokens
-                .saturating_add(last.full_token_estimate);
+                .saturating_add(delta);
+            sess.estimated_full_tokens = sess
+                .estimated_full_tokens
+                .saturating_add(delta);
         }
     }
 }
@@ -212,7 +217,10 @@ pub fn replay_to_message(
             Some(sess.model.clone())
         };
         sess.recompute_messages_tokens(model_owned.as_deref());
-        sess.estimated_full_tokens = sess.estimated_messages_tokens;
+        // Re-add the constant tools overhead so estimated_full_tokens stays
+        // in sync (messages + tools), not just messages.
+        let tools_json = crate::provider::tool_definitions(true);
+        sess.recompute_full_tokens(&tools_json, model_owned.as_deref());
 
         let proj = &state.projects[proj_idx];
         autocode_core::session_storage::truncate_messages_after(
@@ -342,6 +350,15 @@ struct ToolResult {
     project_todo_update: Option<(String, Vec<TodoItem>)>,
 }
 
+/// Semantic blink state for `NetworkStatus::blink_dot()`.
+/// The UI crate maps each variant to a color.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlinkKind {
+    Inactive,
+    Active,
+    Stalled,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct NetworkStatus {
     pub bytes: u64,
@@ -352,10 +369,9 @@ pub struct NetworkStatus {
 }
 
 impl NetworkStatus {
-    pub fn blink_dot(&mut self) -> (char, egui::Color32) {
-        use autocode_core::theme::Palette;
+    pub fn blink_dot(&mut self) -> (char, BlinkKind) {
         if !self.active {
-            return ('*', Palette::TEXT_MUTED);
+            return ('*', BlinkKind::Inactive);
         }
         let now = std::time::Instant::now();
         let start = self.blink_start.get_or_insert(now);
@@ -363,12 +379,12 @@ impl NetworkStatus {
         const SPINNER: &[char] = &['-', '\\', '|', '/'];
         let idx = (elapsed / 150) as usize % SPINNER.len();
         let ch = SPINNER[idx];
-        let color = if self.stalled {
-            Palette::ERROR
+        let kind = if self.stalled {
+            BlinkKind::Stalled
         } else {
-            Palette::SUCCESS
+            BlinkKind::Active
         };
-        (ch, color)
+        (ch, kind)
     }
 
     pub fn reset(&mut self) {
