@@ -138,7 +138,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, panel: &mut ExplorerPanelSt
                     ui.add_space(4.0);
 
                     ScrollArea::both()
-                        .id_salt("explorer_scroll")
+                        .id_salt(("explorer_scroll", &root_path))
                         .auto_shrink([false; 2])
                         .show(ui, |ui| {
                             // Tighter row spacing inside the tree.
@@ -154,6 +154,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, panel: &mut ExplorerPanelSt
                                 file_edit_buffer: &mut panel.file_edit_buffer,
                                 repo_root,
                                 git_status,
+                                root_path: root_path.clone(),
                             };
                             show_tree(ui, root, &mut tree_state);
                         });
@@ -192,6 +193,8 @@ struct TreeState<'a> {
         std::collections::HashMap<std::path::PathBuf, GitFileStatus>,
         std::collections::HashMap<std::path::PathBuf, GitFileStatus>,
     )>,
+    /// Project root path used as namespace salt for widget IDs.
+    root_path: String,
 }
 
 fn show_tree(ui: &mut egui::Ui, dir: &std::path::Path, state: &mut TreeState<'_>) {
@@ -220,7 +223,7 @@ fn show_tree(ui: &mut egui::Ui, dir: &std::path::Path, state: &mut TreeState<'_>
 
         if entry.is_dir {
             let is_open = state.expanded.contains(&path_str);
-            let id = ui.make_persistent_id(&path_str);
+            let id = ui.make_persistent_id((&state.root_path, &path_str));
 
             let is_renaming = state.renaming.as_deref() == Some(&path_str);
             let mut header_clicked = false;
@@ -329,7 +332,7 @@ fn show_tree(ui: &mut egui::Ui, dir: &std::path::Path, state: &mut TreeState<'_>
                 state.expanded.remove(&path_str);
             }
         } else {
-            ui.push_id(("file", &path_str), |ui| {
+            ui.push_id(("file", &state.root_path, &path_str), |ui| {
                 let is_selected = state.selected.as_deref() == Some(&path_str);
                 let is_renaming = state.renaming.as_deref() == Some(&path_str);
 

@@ -148,286 +148,291 @@ pub fn show(
     show_session_tabs(ui, state, runtimes, panel_state);
     ui.separator();
 
-    // On session switch: persist old session, evict from RAM only if no live runtime.
-    if panel_state.prev_session_id != state.active_session_id {
-        save_old_session(state, runtimes, panel_state);
-        let purge_on_missing = load_new_session(state, panel_state);
-        handle_purge_on_missing(purge_on_missing, state, panel_state);
-        panel_state.prev_message_count = panel_state.display_buffer.len();
-        panel_state.wants_older_messages = false;
-        panel_state.oldest_disk_id = 0;
-        restore_scroll_offset(ui, state, panel_state);
-        panel_state.prev_session_id = state.active_session_id.clone();
-    }
+    let chat_salt = state.active_session_id.as_deref().unwrap_or("").to_owned();
+    ui.push_id(("chat_panel", chat_salt), |ui| {
+        // On session switch: persist old session, evict from RAM only if no live runtime.
+        if panel_state.prev_session_id != state.active_session_id {
+            save_old_session(state, runtimes, panel_state);
+            let purge_on_missing = load_new_session(state, panel_state);
+            handle_purge_on_missing(purge_on_missing, state, panel_state);
+            panel_state.prev_message_count = panel_state.display_buffer.len();
+            panel_state.wants_older_messages = false;
+            panel_state.oldest_disk_id = 0;
+            restore_scroll_offset(ui, state, panel_state);
+            panel_state.prev_session_id = state.active_session_id.clone();
+        }
 
-    // Handle "Load full history" — load all messages from disk.
-    if panel_state.wants_older_messages {
-        panel_state.wants_older_messages = false;
-        if let (Some(proj), Some(sess)) = (state.active_project(), state.active_session()) {
-            let mut all = autocode_core::session_storage::load_all_messages(proj, sess);
-            all.retain(|m| m.role != Role::Error);
-            // Deduplicate by ID — the persistence thread may have appended
-            // stale messages after a replay truncation rewrote the files.
-            {
-                let mut seen = std::collections::HashSet::new();
-                all.retain(|m| seen.insert(m.id));
-            }
-            if !all.is_empty() {
-                let max_disk = all.iter().map(|m| m.id).max().unwrap_or(0);
-                for msg in &sess.messages {
-                    if msg.id > max_disk && msg.role != Role::Error {
-                        all.push(msg.clone());
-                    }
+        // Handle "Load full history" — load all messages from disk.
+        if panel_state.wants_older_messages {
+            panel_state.wants_older_messages = false;
+            if let (Some(proj), Some(sess)) = (state.active_project(), state.active_session()) {
+                let mut all = autocode_core::session_storage::load_all_messages(proj, sess);
+                all.retain(|m| m.role != Role::Error);
+                // Deduplicate by ID — the persistence thread may have appended
+                // stale messages after a replay truncation rewrote the files.
+                {
+                    let mut seen = std::collections::HashSet::new();
+                    all.retain(|m| seen.insert(m.id));
                 }
-                panel_state.display_buffer = all;
-                panel_state.prev_message_count = sess.messages.len();
-            }
-        }
-    }
-
-    // Track oldest message ID for scroll-back eviction.
-    panel_state.loaded_min_id = panel_state
-        .display_buffer
-        .iter()
-        .map(|m| m.id)
-        .min()
-        .unwrap_or(0);
-
-    // Phase 2: new messages arrived — append to display_buffer.
-    if let Some(sess) = state.active_session() {
-        let current_count = sess.messages.len();
-        if current_count > panel_state.prev_message_count {
-            for msg in &sess.messages[panel_state.prev_message_count..current_count] {
-                panel_state.display_buffer.push(msg.clone());
-            }
-            panel_state.prev_message_count = current_count;
-            if !panel_state.user_scrolled_up {
-                panel_state.scroll_to_bottom = true;
-            }
-        } else if current_count < panel_state.prev_message_count {
-            // Messages were removed (trimmed or errors cleared by send_message).
-            // Rebuild the display buffer so stale entries (e.g. cleared errors)
-            // don't accumulate.
-            panel_state.display_buffer = sess.messages.to_vec();
-            panel_state.prev_message_count = current_count;
-            if !panel_state.user_scrolled_up {
-                panel_state.scroll_to_bottom = true;
-            }
-        }
-    }
-
-    // --- scoped active-runtime block ----------------------------------------
-    let active_sid_str = state.active_session_id.clone().unwrap_or_default();
-    {
-        let active_sid = state.active_session_id.clone();
-        let mut runtime = active_sid.as_ref().and_then(|sid| runtimes.get_mut(sid));
-        let is_live_session = active_sid.is_some() && runtime.is_some();
-        let streaming = is_live_session
-            && runtime.as_ref().is_some_and(|r| {
-                r.is_busy()
-                    || !r.pending_response.is_empty()
-                    || !r.reasoning_buf.is_empty()
-                    || !r.live_shell_buf.is_empty()
-            });
-        if streaming {
-            panel_state.scroll_to_bottom = true;
-        }
-
-        let chat_w = ui.available_width();
-        let input_row_h = 92.0;
-        let scroll_h = (ui.available_height() - input_row_h).max(40.0);
-
-        let scroll_resp = ScrollArea::both()
-            .id_salt(("chat_scroll", active_sid.as_deref().unwrap_or("")))
-            .max_height(scroll_h)
-            .stick_to_bottom(true)
-            .auto_shrink([false; 2])
-            .show(ui, |ui| {
-                let inner_max_w = (chat_w - 30.0).max(200.0);
-                ui.set_min_width(inner_max_w);
-                ui.set_max_width(inner_max_w);
-                ui.add_space(6.0);
-                let bubble_indent = Margin {
-                    left: 6,
-                    right: 6,
-                    top: 0,
-                    bottom: 0,
-                };
-                Frame::NONE.inner_margin(bubble_indent).show(ui, |ui| {
-                    ui.set_min_width(inner_max_w - 12.0);
-                    ui.set_max_width(inner_max_w - 12.0);
-                    if !panel_state.display_buffer.is_empty() {
-                        if panel_state.oldest_disk_id > 0
-                            && panel_state.loaded_min_id > panel_state.oldest_disk_id
-                        {
-                            if ui.button("Load full history...").clicked() {
-                                panel_state.wants_older_messages = true;
-                            }
-                            ui.add_space(8.0);
+                if !all.is_empty() {
+                    let max_disk = all.iter().map(|m| m.id).max().unwrap_or(0);
+                    for msg in &sess.messages {
+                        if msg.id > max_disk && msg.role != Role::Error {
+                            all.push(msg.clone());
                         }
-                        ui.push_id(
-                            ("chat_messages", active_sid.as_deref().unwrap_or("")),
-                            |ui| {
-                                let show_reasoning = state.show_reasoning_inline;
-                                let sid = active_sid.as_deref().unwrap_or("");
-                                for (i, msg) in panel_state.display_buffer.iter().enumerate() {
-                                    match msg.role {
-                                        Role::User => {
-                                            if show_user_bubble(ui, msg, chat_w) {
-                                                ui.ctx().data_mut(|d| {
-                                                    d.insert_temp(
-                                                        egui::Id::new("replay_action"),
-                                                        Some((sid.to_string(), msg.id)),
-                                                    );
+                    }
+                    panel_state.display_buffer = all;
+                    panel_state.prev_message_count = sess.messages.len();
+                }
+            }
+        }
+
+        // Track oldest message ID for scroll-back eviction.
+        panel_state.loaded_min_id = panel_state
+            .display_buffer
+            .iter()
+            .map(|m| m.id)
+            .min()
+            .unwrap_or(0);
+
+        // Phase 2: new messages arrived — append to display_buffer.
+        if let Some(sess) = state.active_session() {
+            let current_count = sess.messages.len();
+            if current_count > panel_state.prev_message_count {
+                for msg in &sess.messages[panel_state.prev_message_count..current_count] {
+                    panel_state.display_buffer.push(msg.clone());
+                }
+                panel_state.prev_message_count = current_count;
+                if !panel_state.user_scrolled_up {
+                    panel_state.scroll_to_bottom = true;
+                }
+            } else if current_count < panel_state.prev_message_count {
+                // Messages were removed (trimmed or errors cleared by send_message).
+                // Rebuild the display buffer so stale entries (e.g. cleared errors)
+                // don't accumulate.
+                panel_state.display_buffer = sess.messages.to_vec();
+                panel_state.prev_message_count = current_count;
+                if !panel_state.user_scrolled_up {
+                    panel_state.scroll_to_bottom = true;
+                }
+            }
+        }
+
+        // --- scoped active-runtime block ----------------------------------------
+        let active_sid_str = state.active_session_id.clone().unwrap_or_default();
+        {
+            let active_sid = state.active_session_id.clone();
+            let mut runtime = active_sid.as_ref().and_then(|sid| runtimes.get_mut(sid));
+            let is_live_session = active_sid.is_some() && runtime.is_some();
+            let streaming = is_live_session
+                && runtime.as_ref().is_some_and(|r| {
+                    r.is_busy()
+                        || !r.pending_response.is_empty()
+                        || !r.reasoning_buf.is_empty()
+                        || !r.live_shell_buf.is_empty()
+                });
+            if streaming {
+                panel_state.scroll_to_bottom = true;
+            }
+
+            let chat_w = ui.available_width();
+            let input_row_h = 92.0;
+            let scroll_h = (ui.available_height() - input_row_h).max(40.0);
+
+            let scroll_resp = ScrollArea::both()
+                .id_salt(("chat_scroll", active_sid.as_deref().unwrap_or("")))
+                .max_height(scroll_h)
+                .stick_to_bottom(true)
+                .auto_shrink([false; 2])
+                .show(ui, |ui| {
+                    let inner_max_w = (chat_w - 30.0).max(200.0);
+                    ui.set_min_width(inner_max_w);
+                    ui.set_max_width(inner_max_w);
+                    ui.add_space(6.0);
+                    let bubble_indent = Margin {
+                        left: 6,
+                        right: 6,
+                        top: 0,
+                        bottom: 0,
+                    };
+                    Frame::NONE.inner_margin(bubble_indent).show(ui, |ui| {
+                        ui.set_min_width(inner_max_w - 12.0);
+                        ui.set_max_width(inner_max_w - 12.0);
+                        if !panel_state.display_buffer.is_empty() {
+                            if panel_state.oldest_disk_id > 0
+                                && panel_state.loaded_min_id > panel_state.oldest_disk_id
+                            {
+                                if ui.button("Load full history...").clicked() {
+                                    panel_state.wants_older_messages = true;
+                                }
+                                ui.add_space(8.0);
+                            }
+                            ui.push_id(
+                                ("chat_messages", active_sid.as_deref().unwrap_or("")),
+                                |ui| {
+                                    let show_reasoning = state.show_reasoning_inline;
+                                    let sid = active_sid.as_deref().unwrap_or("");
+                                    for (i, msg) in panel_state.display_buffer.iter().enumerate() {
+                                        match msg.role {
+                                            Role::User => {
+                                                if show_user_bubble(ui, msg, chat_w) {
+                                                    ui.ctx().data_mut(|d| {
+                                                        d.insert_temp(
+                                                            egui::Id::new("replay_action"),
+                                                            Some((sid.to_string(), msg.id)),
+                                                        );
+                                                    });
+                                                }
+                                            }
+                                            Role::Assistant => {
+                                                show_assistant_content(ui, msg, i, show_reasoning);
+                                            }
+                                            Role::Tool => {
+                                                ui.push_id(msg.id, |ui| {
+                                                    render_tool_result(ui, msg, i, sid);
                                                 });
                                             }
+                                            Role::System => {}
+                                            Role::Error => {
+                                                ui.add_space(4.0);
+                                                ui.label(
+                                                    RichText::new(msg.content.as_str())
+                                                        .size(11.0)
+                                                        .color(theme().error),
+                                                );
+                                            }
                                         }
-                                        Role::Assistant => {
-                                            show_assistant_content(ui, msg, i, sid, show_reasoning);
-                                        }
-                                        Role::Tool => {
-                                            ui.push_id((msg.timestamp, sid), |ui| {
-                                                render_tool_result(ui, msg, i, sid);
-                                            });
-                                        }
-                                        Role::System => {}
-                                        Role::Error => {
-                                            ui.add_space(4.0);
-                                            ui.label(
-                                                RichText::new(msg.content.as_str())
-                                                    .size(11.0)
-                                                    .color(theme().error),
-                                            );
-                                        }
+                                        ui.add_space(8.0);
                                     }
-                                    ui.add_space(8.0);
-                                }
-                            },
-                        ); // end push_id("chat_messages", ...)
-                    } else {
-                        empty_state(ui, state);
-                    }
-
-                    if is_live_session {
-                        let r = match runtime.as_mut() {
-                            Some(r) => r,
-                            None => return,
-                        };
-                        let has_streaming =
-                            !r.pending_response.is_empty() || !r.live_shell_buf.is_empty();
-
-                        if (r.is_busy() && !has_streaming) || r.retry_after.is_some() {
-                            ui.add_space(8.0);
-                            ui.label(
-                                RichText::new(&r.status)
-                                    .size(12.0)
-                                    .color(theme().text_muted),
-                            );
-                            ui.add_space(8.0);
+                                },
+                            ); // end push_id("chat_messages", ...)
                         } else {
-                            if state.show_reasoning_inline && !r.reasoning_buf.is_empty() {
-                                show_live_reasoning(ui, &r.reasoning_buf);
-                                ui.add_space(6.0);
-                            }
-                            if !r.pending_response.is_empty() {
+                            empty_state(ui, state);
+                        }
+
+                        if is_live_session {
+                            let r = match runtime.as_mut() {
+                                Some(r) => r,
+                                None => return,
+                            };
+                            let has_streaming =
+                                !r.pending_response.is_empty() || !r.live_shell_buf.is_empty();
+
+                            if (r.is_busy() && !has_streaming) || r.retry_after.is_some() {
                                 ui.add_space(8.0);
-                                ui.separator();
-                                ui.add_space(4.0);
-                                render_markdown(ui, &r.pending_response, true, true);
-                                ui.label(RichText::new("|").color(theme().accent).size(13.0));
-                            } else if !r.live_shell_buf.is_empty() {
-                                render_shell_terminal(
-                                    ui,
-                                    &r.live_shell_buf,
-                                    active_sid.as_deref().unwrap_or(""),
+                                ui.label(
+                                    RichText::new(&r.status)
+                                        .size(12.0)
+                                        .color(theme().text_muted),
                                 );
+                                ui.add_space(8.0);
+                            } else {
+                                if state.show_reasoning_inline && !r.reasoning_buf.is_empty() {
+                                    show_live_reasoning(ui, &r.reasoning_buf);
+                                    ui.add_space(6.0);
+                                }
+                                if !r.pending_response.is_empty() {
+                                    ui.add_space(8.0);
+                                    ui.separator();
+                                    ui.add_space(4.0);
+                                    render_markdown(ui, &r.pending_response, true, true);
+                                    ui.label(RichText::new("|").color(theme().accent).size(13.0));
+                                } else if !r.live_shell_buf.is_empty() {
+                                    render_shell_terminal(
+                                        ui,
+                                        &r.live_shell_buf,
+                                        active_sid.as_deref().unwrap_or(""),
+                                    );
+                                }
                             }
                         }
+                    });
+                }); // end ScrollArea
+
+            panel_state.scroll_area_id = Some(scroll_resp.id);
+
+            // Use scroll_resp.state directly instead of manual persistence round-trips.
+            let max_y = (scroll_resp.content_size.y - scroll_resp.inner_rect.height()).max(0.0);
+            panel_state.user_scrolled_up = scroll_resp.state.offset.y < max_y - 20.0;
+            // Force scroll to bottom when within 20px threshold so new content
+            // (user, assistant, or tool) appears right away.
+            if !panel_state.user_scrolled_up && scroll_resp.state.offset.y < max_y {
+                // scroll_to_bottom will be handled by stick_to_bottom on next frame
+                panel_state.scroll_to_bottom = true;
+            }
+            // Evict loaded history when back near bottom.
+            if !panel_state.user_scrolled_up {
+                let window = state.ui_display_window;
+                let overshoot = panel_state.display_buffer.len().saturating_sub(window);
+                if overshoot > 0 {
+                    let tail = panel_state.display_buffer.split_off(overshoot);
+                    panel_state.display_buffer = tail;
+                }
+            }
+
+            if !ui.ctx().text_edit_focused()
+                && !ui.ctx().memory(|mem| mem.has_focus(scroll_resp.id))
+            {
+                let delta = ui.ctx().input(|i| {
+                    if i.key_pressed(Key::ArrowDown) {
+                        100.0f32
+                    } else if i.key_pressed(Key::ArrowUp) {
+                        -100.0
+                    } else if i.key_pressed(Key::PageDown) {
+                        400.0
+                    } else if i.key_pressed(Key::PageUp) {
+                        -400.0
+                    } else {
+                        0.0
                     }
                 });
-            }); // end ScrollArea
+                if delta != 0.0 {
+                    panel_state.scroll_to_bottom = false;
+                    if delta < 0.0 {
+                        panel_state.user_scrolled_up = true;
+                    }
+                    ui.scroll_with_delta(egui::vec2(0.0, delta));
+                    // Re-check if we hit bottom after scrolling
+                    let max_offset =
+                        (scroll_resp.content_size.y - scroll_resp.inner_rect.height()).max(0.0);
+                    if scroll_resp.state.offset.y >= max_offset - 1.0 {
+                        panel_state.user_scrolled_up = false;
+                    }
+                }
+            }
+        } // end scoped block — runtime borrow is released here
 
-        panel_state.scroll_area_id = Some(scroll_resp.id);
-
-        // Use scroll_resp.state directly instead of manual persistence round-trips.
-        let max_y = (scroll_resp.content_size.y - scroll_resp.inner_rect.height()).max(0.0);
-        panel_state.user_scrolled_up = scroll_resp.state.offset.y < max_y - 20.0;
-        // Force scroll to bottom when within 20px threshold so new content
-        // (user, assistant, or tool) appears right away.
-        if !panel_state.user_scrolled_up && scroll_resp.state.offset.y < max_y {
-            // scroll_to_bottom will be handled by stick_to_bottom on next frame
+        // Handle any pending replay action from a ↺ button click.
+        // The action was stored by show_user_bubble during the message loop above.
+        let replay = ui
+            .ctx()
+            .data_mut(|d| d.remove_temp::<Option<(String, u64)>>(egui::Id::new("replay_action")))
+            .flatten();
+        if let Some((sid, msg_id)) = replay
+            && let Some(text) = autocode_ai::chat::replay_to_message(state, runtimes, &sid, msg_id)
+        {
+            // Rebuild the display buffer from the truncated session.
+            if let Some(sess) = state.active_session() {
+                panel_state.display_buffer = sess.messages.to_vec();
+                panel_state.loaded_min_id = panel_state
+                    .display_buffer
+                    .first()
+                    .map(|m| m.id)
+                    .unwrap_or(0);
+            }
+            // Force Phase 2 to re-read on the next frame as a safety net.
+            panel_state.prev_message_count = usize::MAX;
+            panel_state.input = text;
             panel_state.scroll_to_bottom = true;
-        }
-        // Evict loaded history when back near bottom.
-        if !panel_state.user_scrolled_up {
-            let window = state.ui_display_window;
-            let overshoot = panel_state.display_buffer.len().saturating_sub(window);
-            if overshoot > 0 {
-                let tail = panel_state.display_buffer.split_off(overshoot);
-                panel_state.display_buffer = tail;
-            }
-        }
-
-        if !ui.ctx().text_edit_focused() && !ui.ctx().memory(|mem| mem.has_focus(scroll_resp.id)) {
-            let delta = ui.ctx().input(|i| {
-                if i.key_pressed(Key::ArrowDown) {
-                    100.0f32
-                } else if i.key_pressed(Key::ArrowUp) {
-                    -100.0
-                } else if i.key_pressed(Key::PageDown) {
-                    400.0
-                } else if i.key_pressed(Key::PageUp) {
-                    -400.0
-                } else {
-                    0.0
-                }
+            ui.ctx().memory_mut(|mem| {
+                mem.request_focus(egui::Id::new(format!("chat_input_{}", sid)));
             });
-            if delta != 0.0 {
-                panel_state.scroll_to_bottom = false;
-                if delta < 0.0 {
-                    panel_state.user_scrolled_up = true;
-                }
-                ui.scroll_with_delta(egui::vec2(0.0, delta));
-                // Re-check if we hit bottom after scrolling
-                let max_offset =
-                    (scroll_resp.content_size.y - scroll_resp.inner_rect.height()).max(0.0);
-                if scroll_resp.state.offset.y >= max_offset - 1.0 {
-                    panel_state.user_scrolled_up = false;
-                }
-            }
+            ui.ctx().request_repaint();
         }
-    } // end scoped block — runtime borrow is released here
 
-    // Handle any pending replay action from a ↺ button click.
-    // The action was stored by show_user_bubble during the message loop above.
-    let replay = ui
-        .ctx()
-        .data_mut(|d| d.remove_temp::<Option<(String, u64)>>(egui::Id::new("replay_action")))
-        .flatten();
-    if let Some((sid, msg_id)) = replay
-        && let Some(text) = autocode_ai::chat::replay_to_message(state, runtimes, &sid, msg_id)
-    {
-        // Rebuild the display buffer from the truncated session.
-        if let Some(sess) = state.active_session() {
-            panel_state.display_buffer = sess.messages.to_vec();
-            panel_state.loaded_min_id = panel_state
-                .display_buffer
-                .first()
-                .map(|m| m.id)
-                .unwrap_or(0);
-        }
-        // Force Phase 2 to re-read on the next frame as a safety net.
-        panel_state.prev_message_count = usize::MAX;
-        panel_state.input = text;
-        panel_state.scroll_to_bottom = true;
-        ui.ctx().memory_mut(|mem| {
-            mem.request_focus(egui::Id::new(format!("chat_input_{}", sid)));
-        });
-        ui.ctx().request_repaint();
-    }
-
-    ui.separator();
-    show_input_row(ui, state, runtimes, panel_state, &active_sid_str);
+        ui.separator();
+        show_input_row(ui, state, runtimes, panel_state, &active_sid_str);
+    }); // end push_id("chat_panel", ...)
 }
 
 fn save_old_session(
@@ -790,7 +795,7 @@ fn empty_state(ui: &mut egui::Ui, state: &AppState) {
 fn show_user_bubble(ui: &mut egui::Ui, msg: &ChatMessage, panel_w: f32) -> bool {
     let max_w = (panel_w * 0.72).max(240.0);
     let clicked = std::cell::Cell::new(false);
-    ui.push_id(msg.timestamp, |ui| {
+    ui.push_id(msg.id, |ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
             ui.add_space(8.0);
             ui.vertical(|ui| {
@@ -810,7 +815,7 @@ fn show_user_bubble(ui: &mut egui::Ui, msg: &ChatMessage, panel_w: f32) -> bool 
                     egui::pos2(bubble_rect.left() + 4.0, bubble_rect.top() + 4.0),
                     overlay_size,
                 );
-                let overlay_id = ui.make_persistent_id(("resend", msg.timestamp));
+                let overlay_id = ui.make_persistent_id(("resend", msg.id));
                 let overlay_resp = ui
                     .interact(overlay_rect, overlay_id, egui::Sense::click())
                     .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -837,14 +842,8 @@ fn show_user_bubble(ui: &mut egui::Ui, msg: &ChatMessage, panel_w: f32) -> bool 
     clicked.into_inner()
 }
 
-fn show_assistant_content(
-    ui: &mut egui::Ui,
-    msg: &ChatMessage,
-    _idx: usize,
-    sid: &str,
-    show_reasoning: bool,
-) {
-    ui.push_id((msg.timestamp, sid), |ui| {
+fn show_assistant_content(ui: &mut egui::Ui, msg: &ChatMessage, _idx: usize, show_reasoning: bool) {
+    ui.push_id(msg.id, |ui| {
         ui.set_max_width(ui.available_width());
         if show_reasoning
             && let Some(reasoning) = &msg.reasoning_content
@@ -876,7 +875,7 @@ fn render_tool_result(ui: &mut egui::Ui, msg: &ChatMessage, idx: usize, sid: &st
     let content = &msg.content;
     let summary = helpers::extract_tool_summary(content);
     if let Some(summary) = summary {
-        let id_salt = format!("tool_{}_{}_{}", idx, msg.timestamp, sid);
+        let id_salt = format!("tool_{}_{}_{}", idx, msg.id, sid);
         CollapsingHeader::new(&summary)
             .id_salt(id_salt)
             .default_open(false)
@@ -892,7 +891,7 @@ fn render_tool_result(ui: &mut egui::Ui, msg: &ChatMessage, idx: usize, sid: &st
 fn render_structured_tool_result(
     ui: &mut egui::Ui,
     msg: &ChatMessage,
-    _idx: usize,
+    idx: usize,
     meta: &ToolMeta,
     sid: &str,
 ) {
@@ -908,7 +907,7 @@ fn render_structured_tool_result(
                     .color(theme().system_badge)
                     .strong(),
             );
-            ui.push_id(format!("code_{}", msg.timestamp), |ui| {
+            ui.push_id(format!("code_{}_{}", msg.id, idx), |ui| {
                 let body = helpers::get_tool_body(msg);
                 let name = std::path::Path::new(path)
                     .file_name()
@@ -931,7 +930,7 @@ fn render_structured_tool_result(
                     .color(theme().system_badge)
                     .strong(),
             );
-            ui.push_id(format!("code_{}", msg.timestamp), |ui| {
+            ui.push_id(format!("code_{}_{}", msg.id, idx), |ui| {
                 let body = helpers::get_tool_body(msg);
                 let name = std::path::Path::new(path)
                     .file_name()
@@ -962,7 +961,7 @@ fn render_structured_tool_result(
                     .color(theme().system_badge)
                     .strong(),
             );
-            ui.push_id(format!("code_{}", msg.timestamp), |ui| {
+            ui.push_id(format!("code_{}_{}", msg.id, idx), |ui| {
                 render_code_block(ui, "files", &body);
             });
         }
@@ -1002,7 +1001,7 @@ fn render_structured_tool_result(
                 let new_text = meta.new_text.as_deref().unwrap_or("");
                 // edit_line is 1-based in ToolMeta; convert to 0-based offset
                 let line_offset = meta.edit_line.map(|l| l.saturating_sub(1)).unwrap_or(0);
-                ui.push_id(format!("patch_{}", msg.timestamp), |ui| {
+                ui.push_id(format!("patch_{}_{}", msg.id, idx), |ui| {
                     render_unified_diff(ui, old_text, new_text, sid, line_offset);
                 });
             }
@@ -1026,7 +1025,7 @@ fn render_structured_tool_result(
             );
             let body = helpers::get_tool_body(msg);
             let display = strip_exit_code_trailer(&body);
-            ui.push_id(format!("shell_{}", msg.timestamp), |ui| {
+            ui.push_id(format!("shell_{}_{}", msg.id, idx), |ui| {
                 render_shell_terminal(ui, display, sid);
             });
         }
@@ -1040,7 +1039,7 @@ fn render_structured_tool_result(
                     .strong(),
             );
             let body = helpers::get_tool_body(msg);
-            ui.push_id(format!("list_{}", msg.timestamp), |ui| {
+            ui.push_id(format!("list_{}_{}", msg.id, idx), |ui| {
                 render_code_block(ui, path, &body);
             });
         }
@@ -1126,7 +1125,7 @@ fn render_structured_tool_result(
             );
             if matches > 0 {
                 let body = helpers::get_tool_body(msg);
-                ui.push_id(format!("grep_{}", msg.timestamp), |ui| {
+                ui.push_id(format!("grep_{}_{}", msg.id, idx), |ui| {
                     render_code_block(ui, "grep", &body);
                 });
             }
@@ -1198,7 +1197,7 @@ fn render_structured_tool_result(
             );
             if matches > 0 {
                 let body = helpers::get_tool_body(msg);
-                ui.push_id(format!("glob_{}", msg.timestamp), |ui| {
+                ui.push_id(format!("glob_{}_{}", msg.id, idx), |ui| {
                     render_code_block(ui, "glob", &body);
                 });
             }
@@ -1215,7 +1214,7 @@ fn render_structured_tool_result(
             );
             if count > 0 {
                 let body = helpers::get_tool_body(msg);
-                ui.push_id(format!("tree_{}", msg.timestamp), |ui| {
+                ui.push_id(format!("tree_{}_{}", msg.id, idx), |ui| {
                     render_code_block(ui, "tree", &body);
                 });
             }
@@ -1240,7 +1239,7 @@ fn render_structured_tool_result(
             );
             if !meta.is_error {
                 let body = sanitize_display_text(&helpers::get_tool_body(msg));
-                ui.push_id(format!("skill_{}", msg.timestamp), |ui| {
+                ui.push_id(format!("skill_{}_{}", msg.id, idx), |ui| {
                     render_code_block(ui, "markdown", &body);
                 });
             }
