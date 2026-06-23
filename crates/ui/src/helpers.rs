@@ -40,8 +40,25 @@ pub fn extract_tool_summary(content: &str) -> Option<String> {
             filename, total_lines, total_bytes
         ))
     } else if let Some(rest) = content.strip_prefix("Tool `read_files` result:\n") {
-        let total_lines = rest.lines().count();
-        let total_bytes = rest.len();
+        let total_lines: usize = rest
+            .lines()
+            .filter_map(|l| {
+                l.strip_prefix("-- ")
+                    .and_then(|l| l.split_once(" lines"))
+                    .and_then(|(n, _)| n.parse::<usize>().ok())
+            })
+            .sum();
+        let total_bytes: usize = rest
+            .lines()
+            .filter_map(|l| {
+                l.strip_prefix("-- ")
+                    .and_then(|l| {
+                        l.split_once(" lines, ")
+                            .and_then(|(_, rest)| rest.strip_suffix(" bytes --"))
+                    })
+                    .and_then(|b| b.parse::<usize>().ok())
+            })
+            .sum();
         Some(format!(
             "[File] read_files — {} lines, {} bytes",
             total_lines, total_bytes

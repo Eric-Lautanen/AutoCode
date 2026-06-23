@@ -2736,15 +2736,12 @@ fn build_tool_meta(tc: &ToolCall, result: &str, duration_ms: u64) -> ToolMeta {
                 .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
                 .unwrap_or_default();
             let file_list = paths.join(", ");
-            // Count content lines from the `path:` sections (each section
-            // is `path:X\n<content>\n---\n`).  Strip line-level truncation
-            // markers like "[... N bytes truncated ...]" from the count.
             let total_lines: usize = result
                 .split("\n---\n")
                 .flat_map(|section| {
                     section
                         .lines()
-                        .skip(1) // skip the "path:" line
+                        .skip(2) // skip "path:" and "-- N lines, M bytes --" lines
                         .collect::<Vec<_>>()
                 })
                 .filter(|l| !l.starts_with("[..."))
@@ -3135,7 +3132,6 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
             let paths = match args["paths"].as_array() {
                 Some(a) => a.clone(),
                 None => {
-                    // Accept a single string wrapped as a 1-element array.
                     if let Some(s) = args["paths"].as_str() {
                         vec![serde_json::Value::String(s.to_string())]
                     } else {
@@ -3150,6 +3146,7 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
             if paths.is_empty() {
                 return "Error: paths array is empty".to_string();
             }
+            const MAX_BYTES: usize = 32 * 1024;
             let mut out = String::new();
             for val in &paths {
                 let raw = match val.as_str() {
@@ -3165,7 +3162,72 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                 out.push_str(&format!("path:{}\n", path.display()));
                 match fsutil::read_to_string(&path) {
                     Ok(content) => {
-                        out.push_str(&core_helpers::truncate_middle(&content, 32 * 1024));
+                        let all_lines: Vec<&str> = content.lines().collect();
+                        let total_lines = all_lines.len();
+                        let total_bytes = content.len();
+                        let width = format!("{}", total_lines).len();
+                        out.push_str(&format!(
+                            "-- {} lines, {} bytes --\n",
+                            total_lines, total_bytes
+                        ));
+
+                        if content.len() <= MAX_BYTES {
+                            for (i, line) in all_lines.iter().enumerate() {
+                                out.push_str(&format!(
+                                    "{:>width$} | {}\n",
+                                    i + 1,
+                                    line,
+                                    width = width
+                                ));
+                            }
+                        } else {
+                            let head_bytes = (MAX_BYTES * 3) / 5;
+                            let tail_bytes = MAX_BYTES - head_bytes;
+
+                            let mut head_lines: Vec<&str> = Vec::new();
+                            let mut budget = head_bytes;
+                            for line in &all_lines {
+                                if line.len() + 1 > budget {
+                                    break;
+                                }
+                                budget -= line.len() + 1;
+                                head_lines.push(line);
+                            }
+
+                            let mut tail_lines: Vec<&str> = Vec::new();
+                            budget = tail_bytes;
+                            for line in all_lines.iter().rev() {
+                                if line.len() + 1 > budget {
+                                    break;
+                                }
+                                budget -= line.len() + 1;
+                                tail_lines.push(line);
+                            }
+                            tail_lines.reverse();
+
+                            for (i, line) in head_lines.iter().enumerate() {
+                                out.push_str(&format!(
+                                    "{:>width$} | {}\n",
+                                    i + 1,
+                                    line,
+                                    width = width
+                                ));
+                            }
+
+                            let omitted = total_lines - head_lines.len() - tail_lines.len();
+                            if omitted > 0 {
+                                out.push_str(&format!("\n[... {} lines omitted ...]\n\n", omitted));
+                                for (i, line) in tail_lines.iter().enumerate() {
+                                    let line_num = total_lines - tail_lines.len() + i + 1;
+                                    out.push_str(&format!(
+                                        "{:>width$} | {}\n",
+                                        line_num,
+                                        line,
+                                        width = width
+                                    ));
+                                }
+                            }
+                        }
                     }
                     Err(e) => {
                         out.push_str(&helpers::tool_error(
