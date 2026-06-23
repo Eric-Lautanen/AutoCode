@@ -14,7 +14,7 @@ pub fn ensure_session(state: &mut AppState) -> bool {
     if !needs_sysinfo {
         return false;
     }
-    if !autocode_core::sysinfo::is_ready() {
+    if !autocode_core::utils::sysinfo::is_ready() {
         return true;
     }
     let info = &state.sysinfo;
@@ -74,7 +74,7 @@ pub fn prepare_request_messages_for_session(
                     .projects
                     .iter()
                     .find(|p| p.id == *pid)
-                    .map(|proj| autocode_core::session_storage::load_all_messages(proj, s))
+                    .map(|proj| autocode_core::storage::load_all_messages(proj, s))
             })
         })
         .unwrap_or_default()
@@ -167,7 +167,7 @@ pub fn delete_session(state: &mut AppState, id: &str) {
         && let Some(pid) = sess.project_id.as_ref()
         && let Some(proj) = state.projects.iter().find(|p| &p.id == pid)
     {
-        autocode_core::session_storage::delete_session_file(proj, sess);
+        autocode_core::storage::delete_session_file(proj, sess);
     }
 
     state.sessions.retain(|s| s.id != id);

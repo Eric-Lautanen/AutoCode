@@ -8,7 +8,7 @@ use std::{
     sync::mpsc::{self, Receiver},
 };
 
-use autocode_core::fsutil;
+use autocode_core::utils::fsutil;
 use autocode_core::helpers;
 use autocode_core::state::{ShellStatus, ShellTask};
 
@@ -80,14 +80,14 @@ fn run_command_inner(
         } else {
             command.to_string()
         };
-        if let Err(e) = autocode_core::fsutil::write_cmd_script(&bat_path, &script) {
+        if let Err(e) = autocode_core::utils::fsutil::write_cmd_script(&bat_path, &script) {
             let _ = tx.send(ShellEvent::SpawnError(format!(
                 "Failed to write command script: {}",
                 e
             )));
             return;
         }
-        autocode_core::fsutil::track_temp_file(bat_path.clone());
+        autocode_core::utils::fsutil::track_temp_file(bat_path.clone());
         bat_path_to_clean = Some(bat_path.clone());
         let bat_str = bat_path.to_string_lossy().to_string();
         let mut cmd = Command::new("cmd");
@@ -206,6 +206,6 @@ fn run_command_inner(
     // Clean up temp file after the process finishes
     if let Some(p) = bat_path_to_clean {
         let _ = fsutil::remove_file(&p);
-        autocode_core::fsutil::untrack_temp_file(&p);
+        autocode_core::utils::fsutil::untrack_temp_file(&p);
     }
 }

@@ -1,0 +1,651 @@
+use std::collections::HashMap;
+
+use serde::{Deserialize, Serialize};
+
+use crate::helpers::utils::manifest;
+
+use super::chat::ChatMessage;
+use super::project::Project;
+use super::provider::{ApiProvider, ProviderKind};
+use super::session::{PendingWrites, Session, ShellTask};
+use super::todo::{ProjectTaskList, TodoList};
+
+pub const DEFAULT_SYSTEM_PROMPT: &str = "
+You are an expert autonomous coding agent working inside a user's project directory.
+You have full access to the filesystem and shell. No task is too long — work through
+it completely across as many sessions as needed.
+
+## TOOL JUDGMENT
+
+The schema for all tools is provided with every request. These are the judgment calls
+the schema doesn't tell you:
+
+- Prefer `patch_file` over `write_file` for existing files. Use `patch_lines` when the
+  target block has indentation or whitespace that makes old_text matching fragile.
+- Use `read_files` to batch reads instead of calling `read_file` repeatedly.
+- `grep` and `glob` before reading — find what you need before loading files into context.
+- `web_search` then `fetch_url` — search first to get the URL, then fetch the actual content.
+- `run_shell` exit codes matter. Read the output before proceeding.
+
+## CONTEXT AND FILE READS
+
+Every file loaded into context stays there for the duration of the session. Track what you have loaded.
+
+- Do NOT re-read a file that is already in context unless you have edited it since loading it.
+- After any write (`patch_file`, `patch_lines`, `write_file`), the in-context copy is stale. Re-read the affected section before making further edits to it.
+- Use `view_range` when you only need a specific section. If you need to read multiple separate locations within the same file, read the entire file once instead of making multiple ranged reads.
+- If you are about to call `read_file` or `view`, ask: is this file already in context and unedited? If yes, use what you have.
+
+## TASK LISTS — READ THIS CAREFULLY
+
+You are operating inside a multi-session autonomous agent system. Two separate task lists exist and both must be maintained at all times.
+
+### project_task_list — The persistent thread across ALL sessions
+This is the source of truth for the entire project. It survives session handoffs and is how your successor session knows what has been done and what remains. Treat it as the project's memory.
+
+- Create it at the very start of any multi-session task with every known milestone.
+- Update it immediately when a milestone is completed — do not wait until handoff.
+- If you discover new work that wasn't planned, add it immediately.
+- Your successor session will read this list first. If it is stale or incomplete they will not know where to pick up.
+- Never clear or overwrite completed items — mark them completed so the history is visible.
+
+### todo_list — Your working list for THIS session only
+This is your scratchpad for the current session. Break down the current milestone into concrete steps and track them here.
+
+- Create it at the start of each session with the steps you plan to complete this session.
+- Update it as steps complete. Do not let it go stale.
+- It does not persist to the next session. Its only purpose is keeping you on track right now.
+
+### The relationship between them
+Think of `project_task_list` as the project plan and `todo_list` as today's work order. A senior engineer hands off a project by updating the project plan, not their personal notes. Your successor session is that senior engineer — they need the project plan to be accurate.
+
+## SESSION MANAGEMENT
+
+At the start of every session:
+1. Call `name_session` with a short descriptive name once you know what the session is about and only once.
+2. Check `project_task_list` — understand what has been completed and what remains.
+3. Call `todo_list` with the specific steps you will complete this session.
+
+While working:
+- Update `todo_list` as steps complete. Don't let it go stale.
+- Update `project_task_list` the moment a milestone is finished.
+- After each step, one or two sentences: what was done, what's next.
+
+## HANDOFF
+
+You are not ending a conversation. You are briefing your successor — a version of yourself with the same skills but no memory of this session. They will pick up exactly where you left off if and only if you leave them accurate information.
+
+The context limit is user-configurable. The `todo_list` result shows your current usage.
+When usage crosses ~75%, stop at the next clean checkpoint and call `handoff`.
+
+Before calling `handoff`:
+1. Mark all completed milestones in `project_task_list`.
+2. Add any newly discovered work to `project_task_list`.
+3. Confirm the codebase builds and is not in a broken state.
+
+A good `next_prompt` is a complete briefing. It must include:
+- What was completed this session (reference completed items in `project_task_list`)
+- What remains (reference the open items in `project_task_list`)
+- The exact state of the codebase right now — what works, what is broken, what is in progress
+- Any decisions made or approaches chosen that the next session needs to know
+- The single next action to take to continue without confusion
+
+Do not wait until context is exhausted. A clean handoff at 80% beats a broken one at 99%.
+The next session will not know what you were thinking. Write the `next_prompt` as if briefing someone who just sat down cold.
+
+## GIT PUSH
+
+Only push to git if the user explicitly requests it.
+
+Before pushing, verify the remote is configured and uses SSH:
+1. Run `git remote -v` — if no remote exists, stop and tell the user.
+2. If the remote URL starts with `https://`, switch it to SSH before pushing:
+   `git remote set-url origin git@github.com:OWNER/REPO.git`
+   Derive OWNER and REPO from the existing HTTPS URL — do not guess.
+
+If the remote is SSH (or has just been switched):
+1. `git add -A` — stage all changes.
+2. `git commit - \"<concise message describing what changed>\"` — write a real commit message, not a placeholder.
+3. `git push` — push to the current branch's upstream.
+4. Check the exit code. If the push fails (e.g. rejected, no upstream set), report the exact error to the user and stop. Do not force-push unless the user explicitly instructs it.
+
+Never push automatically as a side effect of completing a task. Push only when asked.
+
+## CODE QUALITY
+
+- Minimal and correct. No comments unless genuinely clarifying, no dead code, no unused imports.
+- Match the conventions already in the codebase — read before you write.
+- Handle errors. Don't leave silent failures or unhandled exceptions.
+- Keep the codebase buildable after every step. Never leave it broken between tool calls.
+- Check for breaking changes, memory leaks, race conditions
+- No redundancies
+";
+
+pub const DEFAULT_HANDOFF_TRIGGER_PROMPT: &str = "\
+!! CONTEXT WARNING: The context window is near its limit.
+
+This conversation must end now. Immediately:
+1. STOP all ongoing work.
+2. Use the `project_task_list` tool to record any new tasks.
+3. Call the `handoff` tool with a complete next_prompt.
+
+Do NOT continue working or write any more code. Use the handoff tool now.";
+
+/// Default prompt injected as the first user message when a forced handoff
+/// occurs (no AI-generated next_prompt available) and project-level tasks
+/// are active. Tells the model to pick up the project tasks.
+pub const DEFAULT_HANDOFF_CONTINUATION_PROMPT: &str = "\
+Project tasks remain. Review the project task list and create a \
+session-level todo list to accomplish them. Continue working.";
+
+pub const DEFAULT_CONNECTION_DROP_PROMPT: &str = "\
+Connection dropped. Continue with your progress.";
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AppState {
+    /// In-memory project list — loaded from disk on startup, not serialized to app.ron.
+    #[serde(skip)]
+    pub projects: Vec<Project>,
+    pub active_project_id: Option<String>,
+
+    /// Provider configs — loaded from providers.json, not serialized to app.ron.
+    #[serde(skip)]
+    pub providers: HashMap<String, ApiProvider>,
+    pub active_provider: String,
+
+    /// In-memory session list — loaded from disk on startup, not serialized to app.ron.
+    #[serde(skip)]
+    pub sessions: Vec<Session>,
+    pub active_session_id: Option<String>,
+
+    pub system_prompt: String,
+
+    #[serde(default = "crate::helpers::default_handoff_trigger_prompt_string")]
+    pub handoff_trigger_prompt: String,
+
+    #[serde(default = "crate::helpers::default_handoff_continuation_prompt_string")]
+    pub handoff_continuation_prompt: String,
+
+    #[serde(default = "crate::helpers::default_connection_drop_prompt_string")]
+    pub connection_drop_prompt: String,
+
+    #[serde(default = "crate::helpers::default_handoff_enabled")]
+    pub handoff_enabled: bool,
+
+    /// In-memory shell task list — not persisted to app.ron.
+    #[serde(skip)]
+    pub shell_tasks: Vec<ShellTask>,
+
+    pub show_explorer: bool,
+    pub explorer_width: f32,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expanded_dirs: Vec<String>,
+
+    /// Working copy of the session todo list. Source of truth is SessionMeta on disk.
+    #[serde(default, skip)]
+    pub todo_list: TodoList,
+
+    #[serde(default)]
+    pub show_todo: bool,
+
+    /// Set to true when the user manually closes the todo panel (clicking X).
+    /// Reset to false when a brand-new task list is created.
+    #[serde(default)]
+    pub todo_user_dismissed: bool,
+
+    /// Working copy of the project task list. Source of truth is ProjectMeta on disk.
+    #[serde(default, skip)]
+    pub project_task_list: ProjectTaskList,
+
+    #[serde(default)]
+    pub show_project_tasks: bool,
+
+    /// When true, reasoning/thinking content is shown inline in the chat.
+    #[serde(default)]
+    pub show_reasoning_inline: bool,
+
+    /// Whether the settings window is open. Per-session, stored globally as working copy.
+    #[serde(default)]
+    pub settings_open: bool,
+
+    #[serde(default)]
+    pub sysinfo: crate::utils::sysinfo::SysInfo,
+
+    // -- Configurable timeouts ---------------------------------------------------
+    /// Seconds with no SSE delta before declaring the stream stalled.
+    #[serde(default = "crate::helpers::default_stream_idle_timeout")]
+    pub stream_idle_timeout_secs: u64,
+
+    /// Absolute max seconds for a single HTTPS API request.
+    #[serde(default = "crate::helpers::default_request_timeout")]
+    pub request_timeout_secs: u64,
+
+    /// Timeout for individual file/glob/todo tool operations (seconds).
+    #[serde(default = "crate::helpers::default_tool_timeout")]
+    pub tool_timeout_secs: u64,
+
+    /// Default shell-command timeout (seconds); the model can override per-call.
+    #[serde(default = "crate::helpers::default_shell_timeout")]
+    pub shell_timeout_secs: u64,
+
+    /// Maximum allowed shell-command timeout (seconds).
+    #[serde(default = "crate::helpers::default_shell_timeout_max")]
+    pub shell_timeout_max_secs: u64,
+
+    /// Maximum retries for transient API errors (429, 503, timeouts).
+    #[serde(default = "crate::helpers::default_max_retries")]
+    pub max_retries: u8,
+
+    /// Upper bound on total back-off wait time (seconds) across all retries.
+    #[serde(default = "crate::helpers::default_max_retry_wait")]
+    pub max_retry_wait_secs: u64,
+
+    /// How many messages to keep in RAM and display in the chat panel.
+    /// Full history is persisted to disk and reloaded for API requests.
+    #[serde(default = "crate::helpers::default_ui_display_window")]
+    pub ui_display_window: usize,
+
+    /// Minimum delay (ms) enforced between completion starts.
+    /// Paces rapid tool-call loops to reduce disk/RAM pressure.
+    #[serde(default = "crate::helpers::default_disk_read_delay_ms")]
+    pub disk_read_delay_ms: u64,
+
+    /// Minimum delay (ms) between web requests (web_search, fetch_url).
+    /// Prevents IP bans from aggressive requests.
+    #[serde(default = "crate::helpers::default_web_rate_limit_ms")]
+    pub web_rate_limit_ms: u64,
+
+    /// Minimum delay (ms) between disk writes (message persistence).
+    /// Rate-limits how often the JSONL message file is flushed to disk,
+    /// preventing fast API responses from hammering disk I/O.
+    #[serde(default = "crate::helpers::default_disk_write_rate_ms")]
+    pub disk_write_rate_ms: u64,
+
+    /// Pending disk writes for rate-limited message persistence.
+    /// Messages are queued here and flushed to JSONL at most once per
+    /// `disk_write_rate_ms` interval.
+    #[serde(skip)]
+    pub pending_writes: PendingWrites,
+
+    /// Set to true when the session's provider_label or model changes
+    /// in the UI so the main loop can persist the session meta to disk.
+    #[serde(skip)]
+    pub session_meta_dirty: bool,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        let mut provider_keys: Vec<&String> = manifest().providers.keys().collect();
+        provider_keys.sort();
+
+        let mut providers = HashMap::new();
+        for key in &provider_keys {
+            let kind = ProviderKind((*key).clone());
+            let p = ApiProvider::new(kind);
+            providers.insert(p.kind.label().to_string(), p);
+        }
+
+        let default_active = provider_keys
+            .first()
+            .map(|k| ProviderKind((*k).clone()).label().to_string())
+            .unwrap_or_default();
+
+        Self {
+            projects: Vec::new(),
+            active_project_id: None,
+            providers,
+            active_provider: default_active,
+            sessions: Vec::new(),
+            active_session_id: None,
+            system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
+            handoff_trigger_prompt: DEFAULT_HANDOFF_TRIGGER_PROMPT.to_string(),
+            handoff_continuation_prompt: DEFAULT_HANDOFF_CONTINUATION_PROMPT.to_string(),
+            connection_drop_prompt: DEFAULT_CONNECTION_DROP_PROMPT.to_string(),
+            handoff_enabled: true,
+            shell_tasks: Vec::new(),
+            show_explorer: true,
+            explorer_width: 240.0,
+            expanded_dirs: Vec::new(),
+            todo_list: TodoList::default(),
+            show_todo: false,
+            todo_user_dismissed: false,
+            project_task_list: ProjectTaskList::default(),
+            show_project_tasks: false,
+            show_reasoning_inline: false,
+            settings_open: false,
+            sysinfo: crate::utils::sysinfo::SysInfo::default(),
+            stream_idle_timeout_secs: crate::helpers::default_stream_idle_timeout(),
+            request_timeout_secs: crate::helpers::default_request_timeout(),
+            tool_timeout_secs: crate::helpers::default_tool_timeout(),
+            shell_timeout_secs: crate::helpers::default_shell_timeout(),
+            shell_timeout_max_secs: crate::helpers::default_shell_timeout_max(),
+            max_retries: crate::helpers::default_max_retries(),
+            max_retry_wait_secs: crate::helpers::default_max_retry_wait(),
+            ui_display_window: crate::helpers::default_ui_display_window(),
+            disk_read_delay_ms: crate::helpers::default_disk_read_delay_ms(),
+            web_rate_limit_ms: crate::helpers::default_web_rate_limit_ms(),
+            disk_write_rate_ms: crate::helpers::default_disk_write_rate_ms(),
+            pending_writes: PendingWrites::new(),
+            session_meta_dirty: false,
+        }
+    }
+}
+
+impl AppState {
+    pub fn load(storage: &impl crate::storage::StorageLoad) -> Self {
+        let mut state: Self = storage.get("app_state").unwrap_or_default();
+
+        // Discover projects and sessions from disk (source of truth).
+        let disk_projects = crate::storage::discover_projects_from_disk();
+        for dp in disk_projects {
+            if !state
+                .projects
+                .iter()
+                .any(|p| p.data_dir_name == dp.data_dir_name)
+            {
+                let pid = dp.id.clone();
+                state.projects.push(dp);
+                if let Some(proj) = state.projects.iter().find(|p| p.id == pid) {
+                    for ds in crate::storage::discover_sessions_from_disk(proj) {
+                        if !state.sessions.iter().any(|s| s.id == ds.id) {
+                            state.sessions.push(ds);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Load providers from disk (providers.json is the source of truth).
+        if let Some(disk_providers) = crate::storage::provider_file::load_providers_file() {
+            state.providers = disk_providers;
+        } else {
+            // First launch: seed providers from the baked-in manifest.
+            let mut manifest_keys: Vec<&String> = manifest().providers.keys().collect();
+            manifest_keys.sort();
+            for key in &manifest_keys {
+                let kind = ProviderKind((*key).clone());
+                let label = kind.label().to_string();
+                state
+                    .providers
+                    .entry(label)
+                    .or_insert_with(|| ApiProvider::new(kind));
+            }
+            // Also create the default openai-compatible provider.
+            let compat_key = "OpenAI-Compatible";
+            if !state.providers.contains_key(compat_key) {
+                let kind = ProviderKind::new("openai-compatible");
+                state
+                    .providers
+                    .insert(compat_key.to_string(), ApiProvider::new(kind));
+            }
+            // Write the initial providers to disk.
+            if let Err(e) = crate::storage::provider_file::save_providers_file(&state.providers) {
+                eprintln!("[state] Failed to save initial providers file: {}", e);
+            }
+        }
+
+        // Ensure active_provider is valid.
+        if !state.providers.contains_key(&state.active_provider) {
+            let mut fallback_keys: Vec<&String> = manifest().providers.keys().collect();
+            fallback_keys.sort();
+            let first = fallback_keys
+                .first()
+                .map(|k| ProviderKind((*k).clone()).label().to_string())
+                .unwrap_or_default();
+            state.active_provider = first;
+        }
+
+        // If the saved global per-session state is orphaned (no active
+        // session or the active session doesn't exist), clear it.
+        let active_ok = state
+            .active_session_id
+            .as_ref()
+            .is_some_and(|sid| state.sessions.iter().any(|s| s.id == *sid));
+        if !active_ok {
+            state.todo_list.clear();
+            state.show_todo = false;
+            state.todo_user_dismissed = false;
+            state.settings_open = false;
+        }
+
+        state
+    }
+
+    /// Remove projects/sessions whose disk data was deleted by the user.
+    /// Should be called before persisting app.ron so stale entries don't
+    /// get re-serialized.
+    pub fn prune_disk_state(&mut self) {
+        use std::collections::HashSet;
+
+        let proj_dir = crate::utils::fsutil::exe_dir()
+            .join("AutoCode_data")
+            .join("projects");
+
+        // 1. Remove projects whose directory is gone, along with their sessions.
+        self.projects.retain(|p| {
+            let dir = proj_dir.join(&p.data_dir_name);
+            if !dir.exists() {
+                self.sessions
+                    .retain(|s| s.project_id.as_ref() != Some(&p.id));
+                false
+            } else {
+                true
+            }
+        });
+
+        // 2. Remove sessions whose project no longer exists.
+        let valid_pids: HashSet<String> = self.projects.iter().map(|p| p.id.clone()).collect();
+        self.sessions.retain(|s| {
+            s.project_id
+                .as_ref()
+                .is_none_or(|pid| valid_pids.contains(pid))
+        });
+
+        // 3. Remove sessions whose files are gone from disk.
+        // Session data lives in `{sessions_dir}/{id}_{label}/session.json`.
+        let stale: Vec<String> = self
+            .sessions
+            .iter()
+            .filter(|s| {
+                s.project_id
+                    .as_ref()
+                    .and_then(|pid| {
+                        self.projects.iter().find(|p| &p.id == pid).map(|proj| {
+                            let dir = crate::storage::project_sessions_dir(proj);
+                            // Check if the session's subdirectory exists with metadata inside.
+                            let dirname = s.filename().replace(".json", "");
+                            let subdir = dir.join(&dirname);
+                            if subdir.join("session.json").exists() {
+                                return false;
+                            }
+                            // Fallback: scan for any subdirectory with this session's ID prefix.
+                            let prefix = format!("{}_", s.id);
+                            if let Ok(entries) = std::fs::read_dir(&dir) {
+                                !entries.flatten().any(|e| {
+                                    let name = e.file_name().to_string_lossy().to_string();
+                                    e.path().is_dir() && name.starts_with(&prefix)
+                                })
+                            } else {
+                                true
+                            }
+                        })
+                    })
+                    .unwrap_or(true)
+            })
+            .map(|s| s.id.clone())
+            .collect();
+        if !stale.is_empty() {
+            self.sessions.retain(|s| !stale.contains(&s.id));
+        }
+
+        // 4. Clean up orphaned session-level state.
+        if self.sessions.is_empty() {
+            self.active_session_id = None;
+            self.todo_list.clear();
+            self.show_todo = false;
+            self.todo_user_dismissed = false;
+            self.handoff_enabled = false;
+        } else if self.active_session_id.is_some()
+            && !self
+                .sessions
+                .iter()
+                .any(|s| Some(&s.id) == self.active_session_id.as_ref())
+        {
+            self.active_session_id = None;
+        }
+
+        // 6. Ensure project directories still exist.
+        for p in &self.projects {
+            if let Err(e) = crate::storage::ensure_project_dirs(p) {
+                eprintln!("[state] Failed to ensure project dirs for {}: {}", p.id, e);
+            }
+        }
+    }
+
+    pub fn save(&mut self, storage: &mut impl crate::storage::AppStorage) {
+        self.prune_disk_state();
+        // Persist providers to their own file (not app.ron).
+        if let Err(e) = crate::storage::provider_file::save_providers_file(&self.providers) {
+            eprintln!("[state] Failed to save providers file: {}", e);
+        }
+        storage.set("app_state", self);
+    }
+
+    pub fn active_session_mut(&mut self) -> Option<&mut Session> {
+        let id = self.active_session_id.clone()?;
+        self.sessions.iter_mut().find(|s| s.id == id)
+    }
+
+    pub fn active_session(&self) -> Option<&Session> {
+        let id = self.active_session_id.as_ref()?;
+        self.sessions.iter().find(|s| s.id == *id)
+    }
+
+    pub fn active_provider(&self) -> Option<&ApiProvider> {
+        self.providers.get(&self.active_provider)
+    }
+
+    pub fn active_project(&self) -> Option<&Project> {
+        let id = self.active_project_id.as_ref()?;
+        self.projects.iter().find(|p| p.id == *id)
+    }
+
+    pub fn active_project_mut(&mut self) -> Option<&mut Project> {
+        let id = self.active_project_id.clone()?;
+        self.projects.iter_mut().find(|p| p.id == id)
+    }
+
+    /// Maximum number of sessions kept in memory. Oldest sessions are pruned
+    /// first when this limit is exceeded (e.g. repeated handoffs).
+    const MAX_SESSIONS: usize = 50;
+
+    pub fn new_session_for_project(&mut self, project_id: Option<String>) {
+        // Prune oldest sessions when the limit is exceeded, keeping the newest.
+        while self.sessions.len() >= Self::MAX_SESSIONS {
+            self.sessions.remove(0);
+        }
+        let prov_label = self.active_provider.clone();
+        let model = self
+            .active_provider()
+            .map(|p| p.model.clone())
+            .unwrap_or_default();
+        let existing_ids: Vec<String> = self.sessions.iter().map(|s| s.id.clone()).collect();
+        let id = crate::helpers::generate_session_id(&existing_ids);
+        let mut sess = Session::new(project_id, prov_label, model);
+        sess.id = id.clone();
+        sess.label = format!("S{}", id);
+        // Persist metadata immediately so the session survives app restarts.
+        // The JSONL message file is created later by flush_pending_writes.
+        if let Some(ref pid) = sess.project_id
+            && let Some(proj) = self.projects.iter().find(|p| &p.id == pid)
+            && let Err(e) = crate::storage::save_session_meta(proj, &sess)
+        {
+            eprintln!("[state] Failed to save new session meta: {}", e);
+        }
+        self.active_session_id = Some(sess.id.clone());
+        self.sessions.push(sess);
+    }
+
+    /// Flush pending message writes to disk synchronously, respecting the rate limit.
+    /// When `force` is true, writes all pending messages regardless of the rate limit.
+    pub fn flush_pending_writes(&mut self, force: bool) {
+        use std::collections::HashMap;
+        if self.pending_writes.pending.is_empty() {
+            return;
+        }
+        let rate = self.disk_write_rate_ms;
+        if !force
+            && rate > 0
+            && (self.pending_writes.last_write.elapsed().as_millis() as u64) < rate
+        {
+            return;
+        }
+        let pending = std::mem::take(&mut self.pending_writes.pending);
+        let mut grouped: HashMap<String, Vec<ChatMessage>> = HashMap::new();
+        for (sid, msg) in pending {
+            grouped.entry(sid).or_default().push(msg);
+        }
+        for (sid, msgs) in &grouped {
+            let Some(sess) = self.sessions.iter().find(|s| s.id == *sid) else {
+                continue;
+            };
+            let Some(pid) = sess.project_id.as_ref() else {
+                continue;
+            };
+            let Some(proj) = self.projects.iter().find(|p| &p.id == pid) else {
+                continue;
+            };
+            if let Err(e) = crate::storage::append_messages_to_jsonl(proj, sess, msgs) {
+                eprintln!(
+                    "[state] Failed to append messages to JSONL for session {}: {}",
+                    sess.id, e
+                );
+            }
+        }
+        self.pending_writes.last_write = std::time::Instant::now();
+    }
+
+    /// Drain pending message writes and return them grouped by session for
+    /// offloading to a background persistence thread. Does NOT write to disk.
+    /// Returns `Vec<(resolved_dir_path, messages)>` where the path is computed
+    /// at send time so that subsequent directory renames (e.g. name_session)
+    /// don't orphan the messages.
+    /// Resets the rate-limit timer so the caller can re-enter without
+    /// re-yielding the same batch.
+    pub fn drain_pending_writes(&mut self) -> Vec<(std::path::PathBuf, Vec<ChatMessage>)> {
+        use std::collections::HashMap;
+        if self.pending_writes.pending.is_empty() {
+            return Vec::new();
+        }
+        let pending = std::mem::take(&mut self.pending_writes.pending);
+        let mut grouped: HashMap<String, Vec<ChatMessage>> = HashMap::new();
+        for (sid, msg) in pending {
+            grouped.entry(sid).or_default().push(msg);
+        }
+        // Strip reasoning content before persisting to disk —
+        // it belongs only in the in-RAM display, not in the JSONL files.
+        for msgs in grouped.values_mut() {
+            for msg in msgs.iter_mut() {
+                msg.reasoning_content = None;
+            }
+        }
+        let mut batches = Vec::new();
+        for (sid, msgs) in &grouped {
+            let Some(sess) = self.sessions.iter().find(|s| s.id == *sid) else {
+                continue;
+            };
+            let Some(pid) = sess.project_id.as_ref() else {
+                continue;
+            };
+            let Some(proj) = self.projects.iter().find(|p| &p.id == pid) else {
+                continue;
+            };
+            // Resolve the directory path NOW, before any label change.
+            let dir = crate::storage::session_messages_dir(proj, sess);
+            batches.push((dir, msgs.clone()));
+        }
+        self.pending_writes.last_write = std::time::Instant::now();
+        batches
+    }
+}

@@ -1,4 +1,4 @@
-// storage.rs -- Crate-agnostic persistence trait.
+// Crate-agnostic persistence trait.
 // Replaces direct eframe::Storage usage so core doesn't depend on eframe.
 
 /// Load-only persistence (used for deserialization).

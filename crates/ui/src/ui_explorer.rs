@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use crate::theme::{Palette, ROUND_SM};
-use autocode_core::{fsutil, state::AppState};
+use autocode_core::{utils::fsutil, state::AppState};
 use autocode_fs::git::GitFileStatus;
 
 /// Ephemeral (non-persisted) state for the explorer panel.

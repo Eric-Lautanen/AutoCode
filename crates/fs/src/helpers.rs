@@ -1,6 +1,6 @@
 // helpers.rs -- FS-crate helpers: file extraction from AI output, glob matching utilities.
 
-use autocode_core::fsutil;
+use autocode_core::utils::fsutil;
 use autocode_core::helpers as core_helpers;
 
 // -- File extraction from AI output --------------------------------------------

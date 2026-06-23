@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::git::GitFileStatus;
 use crate::helpers;
-use autocode_core::fsutil;
+use autocode_core::utils::fsutil;
 
 #[derive(Debug, Clone)]
 pub struct FsEntry {
@@ -333,8 +333,8 @@ pub fn glob_files(search_root: Option<&Path>, pattern: &str) -> Vec<String> {
     let root = find_project_root(&base).unwrap_or_else(|| base.clone());
     // Canonicalize the root so strip_prefix works against canonicalized entry paths
     // (fsutil::read_dir uses extended_path which canonicalizes on Windows).
-    let root = autocode_core::fsutil::extended_path(&root);
-    let search_root = autocode_core::fsutil::extended_path(&base);
+    let root = autocode_core::utils::fsutil::extended_path(&root);
+    let search_root = autocode_core::utils::fsutil::extended_path(&base);
     let mut results = Vec::new();
 
     let mut dirs: Vec<PathBuf> = vec![search_root.clone()];
@@ -376,8 +376,8 @@ pub fn grep_files(
     max_results: usize,
 ) -> String {
     let project_root = find_project_root(search_path).unwrap_or_else(|| search_path.to_path_buf());
-    let project_root = autocode_core::fsutil::extended_path(&project_root);
-    let search_path = &autocode_core::fsutil::extended_path(search_path);
+    let project_root = autocode_core::utils::fsutil::extended_path(&project_root);
+    let search_path = &autocode_core::utils::fsutil::extended_path(search_path);
 
     // If the search path is a single file, search it directly.
     if search_path.is_file() {
@@ -393,13 +393,13 @@ pub fn grep_files(
             format!(
                 "No matches for \"{}\" in {}",
                 pattern,
-                autocode_core::fsutil::display_path(search_path).display()
+                autocode_core::utils::fsutil::display_path(search_path).display()
             )
         } else {
             format!(
                 "Searched for \"{}\" in {}\n{} match(es):\n{}",
                 pattern,
-                autocode_core::fsutil::display_path(search_path).display(),
+                autocode_core::utils::fsutil::display_path(search_path).display(),
                 results.len(),
                 results.join("\n")
             )
@@ -430,13 +430,13 @@ pub fn grep_files(
             format!(
                 "No matches for \"{}\" in {}",
                 pattern,
-                autocode_core::fsutil::display_path(search_path).display()
+                autocode_core::utils::fsutil::display_path(search_path).display()
             )
         } else {
             format!(
                 "Searched for \"{}\" in {}\n{} match(es):\n{}",
                 pattern,
-                autocode_core::fsutil::display_path(search_path).display(),
+                autocode_core::utils::fsutil::display_path(search_path).display(),
                 results.len(),
                 results.join("\n")
             )

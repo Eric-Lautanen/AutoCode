@@ -23,9 +23,9 @@ pub fn run() -> eframe::Result {
         .install_default()
         .expect("Failed to install rustls crypto provider");
 
-    let exe_dir = autocode_core::fsutil::exe_dir();
+    let exe_dir = autocode_core::utils::fsutil::exe_dir();
     let data_dir = exe_dir.join("AutoCode_data");
-    if let Err(e) = autocode_core::fsutil::create_dir_all(&data_dir) {
+    if let Err(e) = autocode_core::utils::fsutil::create_dir_all(&data_dir) {
         eprintln!("[main] Failed to create data directory: {}", e);
     }
 
@@ -48,7 +48,7 @@ pub fn run() -> eframe::Result {
                 ))
                 .unwrap_or_default(),
             ),
-        renderer: if autocode_core::sysinfo::has_opengl() {
+        renderer: if autocode_core::utils::sysinfo::has_opengl() {
             eframe::Renderer::Glow
         } else {
             eframe::Renderer::Wgpu

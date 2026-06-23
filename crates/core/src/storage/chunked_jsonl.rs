@@ -1,4 +1,4 @@
-use crate::fsutil;
+use crate::utils::fsutil;
 use crate::state::ChatMessage;
 use std::path::{Path, PathBuf};
 

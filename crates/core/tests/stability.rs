@@ -2,9 +2,9 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU16, Ordering};
 
 use autocode_core::{
-    chunked_jsonl, fsutil,
-    session_storage::{self, SessionMeta},
+    storage::{self, chunked_jsonl, SessionMeta},
     state::{ChatMessage, Project, Role},
+    utils::fsutil,
 };
 
 static TEST_COUNTER: AtomicU16 = AtomicU16::new(0);
@@ -26,7 +26,7 @@ fn make_project(name: &str) -> Project {
         created_at: 0,
         data_dir_name: name.to_string(),
     };
-    session_storage::save_project_identity(&p).unwrap();
+    storage::save_project_identity(&p).unwrap();
     p
 }
 
@@ -56,7 +56,7 @@ fn make_session_dir(project: &Project, label: &str) -> (SessionMeta, PathBuf) {
         thinking_mode: false,
         reasoning_effort: String::new(),
     };
-    let sess_dir = session_storage::project_sessions_dir(project);
+    let sess_dir = storage::project_sessions_dir(project);
     // Create the session subdirectory with metadata inside.
     let msg_dir = sess_dir.join(format!("{}_{}", meta.id, meta.label));
     std::fs::create_dir_all(&msg_dir).unwrap();
@@ -109,19 +109,19 @@ fn test_long_running_simulation() {
     assert_eq!(total_messages, 7000, "should have 7000 total messages");
 
     // Verify we can discover and load everything back.
-    let projects = session_storage::discover_projects_from_disk();
+    let projects = storage::discover_projects_from_disk();
     assert!(!projects.is_empty(), "projects should be discoverable");
 
     let loaded_project = projects
         .iter()
         .find(|p| p.data_dir_name == "long_run_test")
         .unwrap();
-    let sessions = session_storage::discover_sessions_from_disk(loaded_project);
+    let sessions = storage::discover_sessions_from_disk(loaded_project);
     assert_eq!(sessions.len(), 70, "all 70 sessions must be discoverable");
 
     // Verify each session has exactly its own 100 messages (per-session isolation).
     for sess in &sessions {
-        let msg_dir = session_storage::session_messages_dir(loaded_project, sess);
+        let msg_dir = storage::session_messages_dir(loaded_project, sess);
         let msgs = chunked_jsonl::read_all_messages_chunked(&msg_dir);
         assert_eq!(
             msgs.len(),
@@ -132,7 +132,7 @@ fn test_long_running_simulation() {
     }
 
     // Verify app.ron-like state stays tiny.
-    let meta_path = session_storage::project_meta_path(loaded_project);
+    let meta_path = storage::project_meta_path(loaded_project);
     let meta_size = std::fs::metadata(&meta_path).map(|m| m.len()).unwrap_or(0);
     assert!(
         meta_size < 1024,
@@ -173,12 +173,12 @@ fn test_crash_recovery() {
     chunked_jsonl::append_messages_chunked(&msg_dir, &meta.id, &meta.label, &msgs).unwrap();
 
     // Phase 2: Simulate crash — re-discover from disk.
-    let projects = session_storage::discover_projects_from_disk();
+    let projects = storage::discover_projects_from_disk();
     let loaded_project = projects
         .iter()
         .find(|p| p.data_dir_name == "crash_recovery_test")
         .expect("project must survive crash");
-    let sessions = session_storage::discover_sessions_from_disk(loaded_project);
+    let sessions = storage::discover_sessions_from_disk(loaded_project);
     assert_eq!(sessions.len(), 1, "session must survive crash");
     assert_eq!(
         sessions[0].label, "main_session",
@@ -187,10 +187,10 @@ fn test_crash_recovery() {
 
     // Load session and verify messages.
     let mut sess = sessions.into_iter().next().unwrap();
-    let loaded = session_storage::load_session(loaded_project, &mut sess);
+    let loaded = storage::load_session(loaded_project, &mut sess);
     assert!(loaded, "session must load successfully after crash");
 
-    let msg_dir = session_storage::session_messages_dir(loaded_project, &sess);
+    let msg_dir = storage::session_messages_dir(loaded_project, &sess);
     let all_msgs = chunked_jsonl::read_all_messages_chunked(&msg_dir);
     assert_eq!(all_msgs.len(), 50, "all 50 messages must survive crash");
     assert_eq!(sess.messages[0].content, "Message 1");

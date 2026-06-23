@@ -508,7 +508,7 @@ pub enum ProviderEvent {
 // -- Tool definitions (sent to the API) ---------------------------------------
 
 pub fn tool_definitions(strict: bool) -> serde_json::Value {
-    let grep_note = autocode_core::sysinfo::grep_note();
+    let grep_note = autocode_core::utils::sysinfo::grep_note();
     let grep_desc = if grep_note.is_empty() {
         "Search code. Returns file:line matches. Literal by default; use ^prefix or suffix$ for regex. Glob filter, .gitignore respect.".to_string()
     } else {
@@ -518,7 +518,7 @@ pub fn tool_definitions(strict: bool) -> serde_json::Value {
         )
     };
 
-    let shell_note = autocode_core::sysinfo::shell_tools_note();
+    let shell_note = autocode_core::utils::sysinfo::shell_tools_note();
     let shell_desc = format!(
         "Run shell command. Use ONLY for: builds, tests, git, cargo/npm, listing dirs. NEVER for file I/O or code search. {}",
         shell_note

@@ -8,7 +8,8 @@ use autocode_ai::{
     provider, session,
 };
 use autocode_core::state::AppState;
-use autocode_core::{persistence::PersistenceThread, storage::AppStorage, storage::StorageLoad};
+use autocode_core::storage::PersistenceThread;
+use autocode_core::storage::{AppStorage, StorageLoad};
 
 use crate::ui_chat::{self, ChatPanelState};
 use crate::ui_explorer::{self, ExplorerPanelState};
@@ -49,7 +50,7 @@ pub struct AutocodeApp {
     pub settings: SettingsState,
     folder_picker: Option<std::sync::mpsc::Receiver<Option<String>>>,
     repaint_scheduled: bool,
-    sysinfo_rx: Option<std::sync::mpsc::Receiver<autocode_core::sysinfo::SysInfo>>,
+    sysinfo_rx: Option<std::sync::mpsc::Receiver<autocode_core::utils::sysinfo::SysInfo>>,
     prev_session_id: Option<String>,
     persistence: PersistenceThread,
 }
@@ -66,17 +67,17 @@ impl AutocodeApp {
         state.prune_disk_state();
         Self::restore_active_session(&mut state);
 
-        let sysinfo_rx = if autocode_core::sysinfo::seed_from_persisted(&state.sysinfo) {
+        let sysinfo_rx = if autocode_core::utils::sysinfo::seed_from_persisted(&state.sysinfo) {
             None
         } else {
-            Some(autocode_core::sysinfo::start_detect())
+            Some(autocode_core::utils::sysinfo::start_detect())
         };
 
         let persistence = PersistenceThread::new();
         let batches = state.drain_pending_writes();
         for (dir, msgs) in batches {
             persistence.send(
-                autocode_core::persistence::PersistenceCommand::AppendMessages {
+                autocode_core::storage::PersistenceCommand::AppendMessages {
                     dir,
                     messages: msgs,
                 },
@@ -101,7 +102,7 @@ impl AutocodeApp {
         let batches = self.state.drain_pending_writes();
         for (dir, msgs) in batches {
             self.persistence.send(
-                autocode_core::persistence::PersistenceCommand::AppendMessages {
+                autocode_core::storage::PersistenceCommand::AppendMessages {
                     dir,
                     messages: msgs,
                 },
@@ -118,7 +119,7 @@ impl AutocodeApp {
                 .find(|p| Some(&p.id) == sess.project_id.as_ref())
         {
             sess.closed = false;
-            autocode_core::session_storage::load_session(proj, sess);
+            autocode_core::storage::load_session(proj, sess);
             let prov_label = if sess.provider_label.is_empty() {
                 &state.active_provider
             } else {
@@ -143,7 +144,7 @@ impl AutocodeApp {
             state.handoff_enabled = sess.handoff_enabled;
             state.show_explorer = sess.show_explorer;
             state.settings_open = sess.settings_open;
-            if let Some(meta) = autocode_core::session_storage::load_project_meta(proj) {
+            if let Some(meta) = autocode_core::storage::load_project_meta(proj) {
                 state.project_task_list = meta.project_task_list;
             }
         }
@@ -195,8 +196,8 @@ impl AutocodeApp {
                 .projects
                 .iter()
                 .find(|p| Some(&p.id) == sess.project_id.as_ref())
-                && autocode_core::session_storage::session_exists(proj, sess)
-                && let Err(e) = autocode_core::session_storage::save_session_meta(proj, sess)
+                && autocode_core::storage::session_exists(proj, sess)
+                && let Err(e) = autocode_core::storage::save_session_meta(proj, sess)
             {
                 eprintln!("[app] Failed to save session meta for {}: {}", sess.id, e);
             }
@@ -234,7 +235,7 @@ impl AutocodeApp {
     }
 
     fn cleanup_temp_files() {
-        if let Some(lock) = autocode_core::fsutil::TEMP_FILES.get() {
+        if let Some(lock) = autocode_core::utils::fsutil::TEMP_FILES.get() {
             let mut temp_files = match lock.lock() {
                 Ok(guard) => guard,
                 Err(poisoned) => {
@@ -282,8 +283,8 @@ impl eframe::App for AutocodeApp {
             self.state.session_meta_dirty = false;
             if let Some(sess) = self.state.active_session()
                 && let Some(proj) = self.state.active_project()
-                && autocode_core::session_storage::session_exists(proj, sess)
-                && let Err(e) = autocode_core::session_storage::save_session_meta(proj, sess)
+                && autocode_core::storage::session_exists(proj, sess)
+                && let Err(e) = autocode_core::storage::save_session_meta(proj, sess)
             {
                 eprintln!("[app] Failed to save session meta: {}", e);
             }
@@ -295,7 +296,7 @@ impl eframe::App for AutocodeApp {
                     .unwrap_or(false)
             })
         {
-            self.sysinfo_rx = Some(autocode_core::sysinfo::start_detect());
+            self.sysinfo_rx = Some(autocode_core::utils::sysinfo::start_detect());
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
 
@@ -368,17 +369,17 @@ impl eframe::App for AutocodeApp {
                 };
                 let id = project.id.clone();
                 self.state.projects.push(project);
-                if let Err(e) = autocode_core::session_storage::ensure_project_dirs(
+                if let Err(e) = autocode_core::storage::ensure_project_dirs(
                     self.state.projects.last().unwrap(),
                 ) {
                     eprintln!("[app] Failed to create project directories: {}", e);
                 }
                 if let Some(proj) = self.state.projects.last()
-                    && let Err(e) = autocode_core::session_storage::save_project_identity(proj)
+                    && let Err(e) = autocode_core::storage::save_project_identity(proj)
                 {
                     eprintln!("[app] Failed to save project identity: {}", e);
                 }
-                autocode_core::session_storage::switch_to_project(&mut self.state, &id);
+                autocode_core::storage::switch_to_project(&mut self.state, &id);
                 self.state.show_explorer = true;
                 self.prev_session_id = self.state.active_session_id.clone();
             }
@@ -490,10 +491,10 @@ impl eframe::App for AutocodeApp {
         let ptl = self.state.project_task_list.clone();
         if let Some(proj) = self.state.active_project_mut() {
             let mut meta =
-                autocode_core::session_storage::load_project_meta(proj).unwrap_or_default();
+                autocode_core::storage::load_project_meta(proj).unwrap_or_default();
             meta.version = 1;
             meta.project_task_list = ptl;
-            if let Err(e) = autocode_core::session_storage::save_project_meta(proj, &meta) {
+            if let Err(e) = autocode_core::storage::save_project_meta(proj, &meta) {
                 eprintln!("[app] Failed to save project meta: {}", e);
             }
         }
@@ -527,10 +528,10 @@ impl eframe::App for AutocodeApp {
         let ptl = self.state.project_task_list.clone();
         if let Some(proj) = self.state.active_project_mut() {
             let mut meta =
-                autocode_core::session_storage::load_project_meta(proj).unwrap_or_default();
+                autocode_core::storage::load_project_meta(proj).unwrap_or_default();
             meta.version = 1;
             meta.project_task_list = ptl;
-            if let Err(e) = autocode_core::session_storage::save_project_meta(proj, &meta) {
+            if let Err(e) = autocode_core::storage::save_project_meta(proj, &meta) {
                 eprintln!("[app] Failed to save project meta on exit: {}", e);
             }
         }

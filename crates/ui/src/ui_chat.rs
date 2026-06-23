@@ -166,7 +166,7 @@ pub fn show(
         if panel_state.wants_older_messages {
             panel_state.wants_older_messages = false;
             if let (Some(proj), Some(sess)) = (state.active_project(), state.active_session()) {
-                let mut all = autocode_core::session_storage::load_all_messages(proj, sess);
+                let mut all = autocode_core::storage::load_all_messages(proj, sess);
                 all.retain(|m| m.role != Role::Error);
                 // Deduplicate by ID — the persistence thread may have appended
                 // stale messages after a replay truncation rewrote the files.
@@ -456,7 +456,7 @@ fn save_old_session(
         {
             // Only save metadata — the append-only JSONL is the source of truth
             // and must never be rewritten from RAM.
-            let _ = autocode_core::session_storage::save_session_meta(old_proj, old_sess);
+            let _ = autocode_core::storage::save_session_meta(old_proj, old_sess);
         }
         if !runtimes.contains_key(old_id) {
             old_sess.messages.clear();
@@ -475,7 +475,7 @@ fn load_new_session(state: &mut AppState, panel_state: &mut ChatPanelState) -> O
                 .find(|p| Some(&p.id) == new_sess.project_id.as_ref())
         {
             if new_sess.next_message_id > 1 && new_sess.messages.is_empty() {
-                let found = autocode_core::session_storage::load_session(new_proj, new_sess);
+                let found = autocode_core::storage::load_session(new_proj, new_sess);
                 if !found {
                     purge_on_missing = Some(new_id.clone());
                 } else {
@@ -497,10 +497,10 @@ fn load_new_session(state: &mut AppState, panel_state: &mut ChatPanelState) -> O
                 // Find the oldest non-Error message ID on disk for the
                 // "Load full history" button check.
                 let sess_dir =
-                    autocode_core::session_storage::session_messages_dir(new_proj, new_sess);
-                if autocode_core::chunked_jsonl::has_chunked_files(&sess_dir) {
+                    autocode_core::storage::session_messages_dir(new_proj, new_sess);
+                if autocode_core::storage::chunked_jsonl::has_chunked_files(&sess_dir) {
                     let on_disk =
-                        autocode_core::session_storage::load_all_messages(new_proj, new_sess);
+                        autocode_core::storage::load_all_messages(new_proj, new_sess);
                     panel_state.oldest_disk_id = on_disk
                         .iter()
                         .filter(|m| m.role != Role::Error && m.role != Role::System)
@@ -735,7 +735,7 @@ fn show_session_tabs(
                                                     if let Some(pid) = sess.project_id.as_ref()
                                                         && let Some(proj) = state.projects.iter().find(|p| &p.id == pid)
                                                     {
-                                                        let _ = autocode_core::session_storage::save_session_meta(proj, sess);
+                                                        let _ = autocode_core::storage::save_session_meta(proj, sess);
                                                     }
                                                     sess.messages.clear();
                                                 }
@@ -1898,16 +1898,24 @@ fn show_input_row(
                     let input_w = (ui.available_width() - 256.0).max(0.0);
                     let send_enabled = !panel_state.input.trim().is_empty() && !busy;
 
-                    let resp = ui.add_sized(
-                        egui::vec2(input_w, 60.0),
-                        TextEdit::multiline(&mut panel_state.input)
-                            .id(egui::Id::new(format!("chat_input_{}", sid)))
-                            .hint_text("Describe a task... Shift+Enter for newline")
-                            .desired_width(f32::INFINITY)
-                            .desired_rows(3)
-                            .font(egui::TextStyle::Body)
-                            .text_color(theme().text_primary),
-                    );
+                    let resp = ScrollArea::vertical()
+                        .id_salt(format!("input_scroll_{}", sid))
+                        .max_height(60.0)
+                        .min_scrolled_height(60.0)
+                        .auto_shrink([false, false])
+                        .max_width(input_w)
+                        .show(ui, |ui| {
+                            ui.add(
+                                TextEdit::multiline(&mut panel_state.input)
+                                    .id(egui::Id::new(format!("chat_input_{}", sid)))
+                                    .hint_text("Describe a task... Shift+Enter for newline")
+                                    .desired_width(input_w)
+                                    .desired_rows(3)
+                                    .font(egui::TextStyle::Body)
+                                    .text_color(theme().text_primary),
+                            )
+                        })
+                        .inner;
 
                     // Enter sends, Shift+Enter inserts a newline.
                     // Ctrl+Enter is a no-op (not a send shortcut).

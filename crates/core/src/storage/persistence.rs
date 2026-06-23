@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
 
-use crate::chunked_jsonl;
+use crate::storage::chunked_jsonl;
 use crate::state::ChatMessage;
 
 /// Commands sent to the background persistence thread.

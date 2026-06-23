@@ -1,4 +1,4 @@
-use autocode_core::{session_storage, state::AppState};
+use autocode_core::{storage, state::AppState};
 
 use crate::ui_todo_window::{TodoWindowConfig, show_todo_window};
 
@@ -30,7 +30,7 @@ pub fn show_window(ctx: &egui::Context, state: &mut AppState) {
         if let Some(sess) = state.active_session_mut() {
             sess.todo_list.clear();
             if let Some(proj) = proj.as_ref() {
-                let _ = session_storage::save_session_meta(proj, sess);
+                let _ = storage::save_session_meta(proj, sess);
             }
         }
     }

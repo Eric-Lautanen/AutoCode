@@ -5,7 +5,7 @@ use crate::helpers;
 use crate::theme::{Palette, ROUND_MD, ROUND_SM};
 use autocode_ai::provider;
 use autocode_core::{
-    provider_file,
+    storage::provider_file,
     state::{AppState, Project, Session, ThinkingApi},
 };
 use egui::{
@@ -616,7 +616,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                                             } else if ui.small_button("+ Add").clicked() {
                                                                 saved.push(m.clone());
                                                                 let defs = autocode_core::helpers::model_or_safe(&p.kind, m);
-                                                                 let entry = autocode_core::provider_file::ModelEntry {
+                                                                 let entry = autocode_core::storage::provider_file::ModelEntry {
                                                                      id: m.clone(),
                                                                      context_window: defs.context_window,
                                                                      max_output_tokens: defs.max_output_tokens,
@@ -682,7 +682,7 @@ fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Settin
                                         .and_then(|m| m.get(&name)).cloned()
                                         .unwrap_or_else(|| {
                                             let defs = autocode_core::helpers::model_or_safe(&p.kind, &name);
-                                             autocode_core::provider_file::ModelEntry {
+                                             autocode_core::storage::provider_file::ModelEntry {
                                                  id: name.clone(),
                                                  context_window: defs.context_window,
                                                  max_output_tokens: defs.max_output_tokens,
@@ -1080,7 +1080,7 @@ fn show_projects(ui: &mut egui::Ui, state: &mut AppState) {
                                 to_remove = Some(p.id.clone());
                             }
                             if !is_active && ui.button("Set Active").clicked() {
-                                autocode_core::session_storage::switch_to_project(state, &p.id);
+                                autocode_core::storage::switch_to_project(state, &p.id);
                             }
                             if is_active {
                                 ui.label(
@@ -1096,7 +1096,7 @@ fn show_projects(ui: &mut egui::Ui, state: &mut AppState) {
                         .iter()
                         .filter(|s| {
                             s.project_id.as_deref() == Some(&p.id)
-                                && autocode_core::session_storage::session_exists(p, s)
+                                && autocode_core::storage::session_exists(p, s)
                         })
                         .collect();
                     if !proj_sessions.is_empty() {
@@ -1145,7 +1145,7 @@ fn show_projects(ui: &mut egui::Ui, state: &mut AppState) {
                 .iter()
                 .find(|p| Some(&p.id) == s.project_id.as_ref())
             {
-                let _ = autocode_core::session_storage::save_session_meta(proj, s);
+                let _ = autocode_core::storage::save_session_meta(proj, s);
             }
         }
     }
@@ -1174,12 +1174,12 @@ fn show_projects(ui: &mut egui::Ui, state: &mut AppState) {
             .projects
             .iter()
             .find(|p| p.id == id)
-            .map(autocode_core::session_storage::project_sessions_dir);
+            .map(autocode_core::storage::project_sessions_dir);
         for sid in sess_ids {
             autocode_ai::session::delete_session(state, &sid);
         }
         if let Some(dir) = proj_dir {
-            let _ = autocode_core::fsutil::remove_dir(&dir);
+            let _ = autocode_core::utils::fsutil::remove_dir(&dir);
         }
         state.projects.retain(|p| p.id != id);
         if state.active_project_id.as_deref() == Some(&id) {
@@ -1656,7 +1656,7 @@ fn show_about(ui: &mut egui::Ui, state: &mut AppState) {
     ui.add_space(8.0);
 
     if ui.button("Refresh System Info").clicked() {
-        let rx = autocode_core::sysinfo::start_detect();
+        let rx = autocode_core::utils::sysinfo::start_detect();
         let ctx = ui.ctx().clone();
         std::thread::spawn(move || {
             if let Ok(info) = rx.recv() {
@@ -1684,7 +1684,7 @@ fn show_about(ui: &mut egui::Ui, state: &mut AppState) {
     // OpenGL / Renderer info.
     helpers::section_heading(ui, "Renderer");
     ui.add_space(4.0);
-    if autocode_core::sysinfo::has_opengl() {
+    if autocode_core::utils::sysinfo::has_opengl() {
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new("OpenGL")

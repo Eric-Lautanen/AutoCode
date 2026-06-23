@@ -10,7 +10,7 @@ use crate::{
     session,
 };
 use autocode_core::{
-    fsutil, helpers as core_helpers,
+    utils::fsutil, helpers as core_helpers,
     state::{AppState, ChatMessage, Role, ShellStatus, TodoItem, TodoStatus, ToolMeta},
 };
 use autocode_fs::shell::{self, ShellEvent};
@@ -181,7 +181,7 @@ pub fn replay_to_message(
             Some(msg) => msg.content.clone(),
             None => {
                 let proj = &state.projects[proj_idx];
-                let all = autocode_core::session_storage::load_all_messages(proj, sess);
+                let all = autocode_core::storage::load_all_messages(proj, sess);
                 all.iter().find(|m| m.id == message_id)?.content.clone()
             }
         }
@@ -196,7 +196,7 @@ pub fn replay_to_message(
             && let Some(pid) = sess.project_id.as_ref()
             && let Some(proj) = state.projects.iter().find(|p| p.id == *pid)
         {
-            let _ = autocode_core::session_storage::append_messages_to_jsonl(proj, sess, &msgs);
+            let _ = autocode_core::storage::append_messages_to_jsonl(proj, sess, &msgs);
         }
     }
 
@@ -220,13 +220,13 @@ pub fn replay_to_message(
         sess.recompute_full_tokens(&tools_json, model_owned.as_deref());
 
         let proj = &state.projects[proj_idx];
-        autocode_core::session_storage::truncate_messages_after(
+        autocode_core::storage::truncate_messages_after(
             proj,
             sess,
             message_id.saturating_sub(1),
         )
         .ok()?;
-        autocode_core::session_storage::save_session_meta(proj, sess).ok()?;
+        autocode_core::storage::save_session_meta(proj, sess).ok()?;
     }
 
     // Discard any pending disk writes for this session (anything queued
@@ -328,10 +328,10 @@ fn push_tool_results_to_state(state: &mut AppState, runtime: &ChatRuntime, resul
             let ptl = state.project_task_list.clone();
             if let Some(proj) = state.active_project_mut() {
                 let mut meta =
-                    autocode_core::session_storage::load_project_meta(proj).unwrap_or_default();
+                    autocode_core::storage::load_project_meta(proj).unwrap_or_default();
                 meta.version = 1;
                 meta.project_task_list = ptl;
-                if let Err(e) = autocode_core::session_storage::save_project_meta(proj, &meta) {
+                if let Err(e) = autocode_core::storage::save_project_meta(proj, &meta) {
                     eprintln!("[chat] Failed to save project meta: {}", e);
                 }
             }
@@ -1705,7 +1705,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     if let Some(pid) = meta_pid
                         && let Some(proj) = state.projects.iter().find(|p| p.id == pid)
                         && let Some(s) = state.sessions.iter().find(|s| s.id == meta_sid)
-                        && let Err(e) = autocode_core::session_storage::save_session_meta(proj, s)
+                        && let Err(e) = autocode_core::storage::save_session_meta(proj, s)
                     {
                         eprintln!("[chat] Failed to save session meta: {}", e);
                     }
@@ -2327,7 +2327,7 @@ fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     if let Some(sess) = state.active_session()
         && let Some(pid) = sess.project_id.as_ref()
         && let Some(proj) = state.projects.iter().find(|p| &p.id == pid)
-        && let Err(e) = autocode_core::session_storage::save_session_meta(proj, sess)
+        && let Err(e) = autocode_core::storage::save_session_meta(proj, sess)
     {
         eprintln!("[chat] Failed to save session meta before handoff: {}", e);
     }
@@ -2345,7 +2345,7 @@ fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
 
     // Seed the new session with system prompt + host environment + project context.
     let mut sys_prompt = state.system_prompt.clone();
-    if autocode_core::sysinfo::is_ready() {
+    if autocode_core::utils::sysinfo::is_ready() {
         if !sys_prompt.ends_with('\n') {
             sys_prompt.push('\n');
         }
@@ -2357,6 +2357,80 @@ fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     sys_prompt.push('\n');
     let sys = ChatMessage::new(Role::System, sys_prompt);
     push_runtime(state, runtime, sys);
+
+    // Inject synthetic bootstrap messages so the model sees the project task list
+    // via the `project_task_list` tool rather than as static text in the system
+    // prompt. This prevents the model from deleting/corrupting the list when it
+    // tries to update it, because it now connects the tool result to the tool.
+    let ptl_from_disk = state.active_project().and_then(|proj| {
+        let meta = autocode_core::storage::load_project_meta(proj)
+            .unwrap_or_default();
+        let ptl = meta.project_task_list;
+        if ptl.is_empty() { None } else { Some(ptl) }
+    });
+    if let Some(ptl) = ptl_from_disk {
+        let tool_call_id = crate::helpers::gen_tool_call_id();
+
+        // 1. Synthetic user message
+        let user_msg = ChatMessage::new(Role::User, "Read the project task list.");
+        push_runtime(state, runtime, user_msg);
+
+        // 2. Synthetic assistant message with tool_calls
+        let tool_calls_json = serde_json::json!([{
+            "id": tool_call_id,
+            "type": "function",
+            "function": {
+                "name": "project_task_list",
+                "arguments": format!(
+                    "{{\"title\":\"{}\",\"task_items\":{}}}",
+                    ptl.title,
+                    serde_json::Value::Array(
+                        ptl.items.iter().map(|item| {
+                            serde_json::json!({
+                                "id": item.id,
+                                "content": item.content,
+                                "status": match item.status {
+                                    TodoStatus::Completed => "completed",
+                                    TodoStatus::InProgress => "in_progress",
+                                    TodoStatus::Cancelled => "cancelled",
+                                    TodoStatus::Pending => "pending",
+                                },
+                                "priority": item.priority,
+                            })
+                        }).collect::<Vec<_>>()
+                    )
+                )
+            }
+        }]);
+        let mut assistant_msg = ChatMessage::new(Role::Assistant, "");
+        assistant_msg.tool_calls = Some(tool_calls_json);
+        push_runtime(state, runtime, assistant_msg);
+
+        // 3. Synthetic tool result matching the format from execute_tool_with_cache
+        let done = ptl.items.iter().filter(|i| i.status == TodoStatus::Completed).count();
+        let total = ptl.items.len();
+        let (ctx_used, ctx_max, _, max_output) = context_usage_info_for_session(
+            state,
+            runtime.active_session_id.as_deref().unwrap_or(""),
+        );
+        let tool_result_content = format!(
+            "Project tasks updated: \"{}\" -- {}/{} complete | Context: {}/{} tokens ({}%) | Max output: {}",
+            ptl.title,
+            done,
+            total,
+            ctx_used,
+            ctx_max,
+            (ctx_used * 100 / ctx_max.max(1)).min(100),
+            max_output,
+        );
+        let mut tool_msg = ChatMessage::new(Role::Tool, tool_result_content);
+        tool_msg.tool_call_id = Some(tool_call_id);
+        tool_msg.tool_meta = Some(ToolMeta {
+            tool_name: "project_task_list".to_string(),
+            ..Default::default()
+        });
+        push_runtime(state, runtime, tool_msg);
+    }
 
     // Use the AI-generated next_prompt as the first user message in the fresh session.
     // Falls back to a continuation prompt when no AI prompt is available.
@@ -2645,7 +2719,7 @@ fn fix_provider_params(state: &mut AppState, err_msg: &str) -> bool {
                 .cloned()
                 .unwrap_or_else(|| {
                     let defs = autocode_core::helpers::model_or_safe(&prov.kind, &model_id);
-                    autocode_core::provider_file::ModelEntry {
+                    autocode_core::storage::provider_file::ModelEntry {
                         id: model_id.clone(),
                         context_window: defs.context_window,
                         max_output_tokens: defs.max_output_tokens,
@@ -3600,7 +3674,7 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
             let num_results = args["num_results"].as_u64().unwrap_or(5).min(10) as usize;
 
             let cache_key = format!("ddg:{}:{}", query, num_results);
-            if let Some(cached) = autocode_core::extract::search_cache_get(&cache_key) {
+            if let Some(cached) = autocode_core::utils::extract::search_cache_get(&cache_key) {
                 return cached;
             }
 
@@ -3618,11 +3692,11 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                 Err(e) => format!("Web search error: {}", e),
                 Ok(data) => {
                     let html = String::from_utf8_lossy(&data);
-                    let results = autocode_core::extract::extract_ddg_results(&html, num_results);
+                    let results = autocode_core::utils::extract::extract_ddg_results(&html, num_results);
                     if results.is_empty() {
                         format!("No web results for \"{}\"", query)
                     } else {
-                        autocode_core::extract::search_cache_set(&cache_key, &results);
+                        autocode_core::utils::extract::search_cache_set(&cache_key, &results);
                         results
                     }
                 }
@@ -3653,7 +3727,7 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                         || body.trim_start().starts_with("<html")
                         || body.contains("<html");
                     let text = if is_html {
-                        autocode_core::extract::extract_html_content(&body, url)
+                        autocode_core::utils::extract::extract_html_content(&body, url)
                     } else {
                         body.to_string()
                     };

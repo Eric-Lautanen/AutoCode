@@ -43,7 +43,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                             ui.push_id(("proj_sel", &p.id), |ui| {
                                 let selected = state.active_project_id.as_deref() == Some(&p.id);
                                 if ui.selectable_label(selected, &p.name).clicked() {
-                                    autocode_core::session_storage::switch_to_project(state, &p.id);
+                                    autocode_core::storage::switch_to_project(state, &p.id);
                                     session::ensure_session(state);
                                 }
                             });
@@ -75,7 +75,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                                     .iter()
                                     .find(|p| &p.id == pid)
                                     .map(|proj| {
-                                        autocode_core::session_storage::session_exists(proj, s)
+                                        autocode_core::storage::session_exists(proj, s)
                                     })
                                     .unwrap_or(true)
                         })

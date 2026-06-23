@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::fsutil;
 use crate::helpers::{model_or_safe, provider_manifest};
 use crate::state::{ApiProvider, ProviderKind, SecretString, ThinkingApi};
 
@@ -81,7 +80,7 @@ fn default_strict_tools_entry() -> Option<bool> {
 // ── Path ───────────────────────────────────────────────────────────────
 
 fn providers_file_path() -> PathBuf {
-    fsutil::exe_dir()
+    crate::utils::fsutil::exe_dir()
         .join("AutoCode_data")
         .join("providers.json")
 }
@@ -95,7 +94,7 @@ pub fn load_providers_file() -> Option<HashMap<String, ApiProvider>> {
     if !path.exists() {
         return None;
     }
-    let json = fsutil::read_to_string(&path).ok()?;
+    let json = crate::utils::fsutil::read_to_string(&path).ok()?;
     let file: ProviderFile = serde_json::from_str(&json).ok()?;
     Some(convert_to_providers(&file))
 }
@@ -107,9 +106,9 @@ pub fn save_providers_file(providers: &HashMap<String, ApiProvider>) -> std::io:
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     let path = providers_file_path();
     if let Some(parent) = path.parent() {
-        fsutil::create_dir_all(parent)?;
+        crate::utils::fsutil::create_dir_all(parent)?;
     }
-    fsutil::write(&path, json)
+    crate::utils::fsutil::write(&path, json)
 }
 
 // ── Conversion ─────────────────────────────────────────────────────────

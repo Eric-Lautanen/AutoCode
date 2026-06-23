@@ -8,15 +8,8 @@
 //! persistence (atomic JSON + JSONL), a dark-theme color palette, and
 //! debug logging.
 
-pub mod chunked_jsonl;
-pub mod extract;
-pub mod fsutil;
 pub mod helpers;
-pub mod persistence;
-pub mod provider_file;
-pub mod session_storage;
-pub mod shell_task_storage;
 pub mod state;
 pub mod storage;
-pub mod sysinfo;
+pub mod utils;
 pub mod tokenizer;
