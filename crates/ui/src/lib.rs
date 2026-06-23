@@ -7,6 +7,7 @@
 //! and various UI helpers.
 
 pub mod helpers;
+pub mod theme;
 pub mod ui_chat;
 pub mod ui_explorer;
 pub mod ui_project_tasks;

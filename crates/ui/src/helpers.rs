@@ -4,7 +4,7 @@
 use egui::{Color32, FontId, RichText, TextFormat};
 
 use autocode_core::state::{ChatMessage, TodoItem, TodoStatus};
-use autocode_core::theme::Palette;
+use crate::theme::Palette;
 
 // -- Time formatting -----------------------------------------------------------
 
@@ -455,21 +455,12 @@ pub fn todo_scroll_area(
                 render_empty(ui);
             } else {
                 let item_w = full_w - 16.0;
-                let mut target_top = None;
                 for (i, item) in items.iter().enumerate() {
-                    let before_y = ui.cursor().min.y;
-                    render_item(ui, item, item_w);
                     if Some(i) == scroll_target_idx {
-                        target_top = Some(before_y);
+                        ui.scroll_to_cursor(Some(egui::Align::TOP));
                     }
+                    render_item(ui, item, item_w);
                     ui.add_space(3.0);
-                }
-                if let Some(top_y) = target_top {
-                    let rect = egui::Rect::from_min_max(
-                        egui::pos2(0.0, top_y),
-                        egui::pos2(full_w, top_y + 1.0),
-                    );
-                    ui.scroll_to_rect(rect, Some(egui::Align::TOP));
                 }
             }
         });

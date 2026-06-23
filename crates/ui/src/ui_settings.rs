@@ -2,11 +2,11 @@
 // Tabs: Providers * Projects * Prompt * Timeouts * About
 
 use crate::helpers;
+use crate::theme::{Palette, ROUND_MD, ROUND_SM};
 use autocode_ai::provider;
 use autocode_core::{
     provider_file,
     state::{AppState, Project, Session, ThinkingApi},
-    theme::{Palette, ROUND_MD, ROUND_SM},
 };
 use egui::{
     CollapsingHeader, Color32, CornerRadius, Frame, Grid, Margin, RichText, ScrollArea, Stroke,

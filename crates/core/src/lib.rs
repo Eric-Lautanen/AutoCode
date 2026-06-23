@@ -17,6 +17,6 @@ pub mod provider_file;
 pub mod session_storage;
 pub mod shell_task_storage;
 pub mod state;
+pub mod storage;
 pub mod sysinfo;
-pub mod theme;
 pub mod tokenizer;

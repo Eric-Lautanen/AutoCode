@@ -11,12 +11,12 @@ use egui::{
 };
 
 use crate::helpers;
+use crate::theme::{Palette, ROUND_MD, ROUND_SM, project_accent};
 use autocode_ai::chat::{self, ChatRuntime};
 use autocode_ai::provider;
 use autocode_core::{
     helpers::sanitize_display_text,
     state::{AppState, ChatMessage, Role, ToolMeta},
-    theme::{Palette, ROUND_MD, ROUND_SM, project_accent},
 };
 
 pub struct ThemeColors {
@@ -349,31 +349,26 @@ pub fn show(
 
         panel_state.scroll_area_id = Some(scroll_resp.id);
 
-        if let Some(sa_id) = panel_state.scroll_area_id {
-            let max_y = (scroll_resp.content_size.y - scroll_resp.inner_rect.height()).max(0.0);
-            let mut sa_state: egui::scroll_area::State = ui
-                .ctx()
-                .data_mut(|d| d.get_persisted(sa_id).unwrap_or_default());
-            panel_state.user_scrolled_up = sa_state.offset.y < max_y - 20.0;
-            // Force scroll to bottom when within 20px threshold so new content
-            // (user, assistant, or tool) appears right away.
-            if !panel_state.user_scrolled_up && sa_state.offset.y < max_y {
-                sa_state.offset.y = max_y;
-                ui.ctx().data_mut(|d| d.insert_persisted(sa_id, sa_state));
-            }
-            // Evict loaded history when back near bottom.
-            if !panel_state.user_scrolled_up {
-                let window = state.ui_display_window;
-                let overshoot = panel_state.display_buffer.len().saturating_sub(window);
-                if overshoot > 0 {
-                    let tail = panel_state.display_buffer.split_off(overshoot);
-                    panel_state.display_buffer = tail;
-                }
+        // Use scroll_resp.state directly instead of manual persistence round-trips.
+        let max_y = (scroll_resp.content_size.y - scroll_resp.inner_rect.height()).max(0.0);
+        panel_state.user_scrolled_up = scroll_resp.state.offset.y < max_y - 20.0;
+        // Force scroll to bottom when within 20px threshold so new content
+        // (user, assistant, or tool) appears right away.
+        if !panel_state.user_scrolled_up && scroll_resp.state.offset.y < max_y {
+            // scroll_to_bottom will be handled by stick_to_bottom on next frame
+            panel_state.scroll_to_bottom = true;
+        }
+        // Evict loaded history when back near bottom.
+        if !panel_state.user_scrolled_up {
+            let window = state.ui_display_window;
+            let overshoot = panel_state.display_buffer.len().saturating_sub(window);
+            if overshoot > 0 {
+                let tail = panel_state.display_buffer.split_off(overshoot);
+                panel_state.display_buffer = tail;
             }
         }
 
-        let scroll_id = scroll_resp.id;
-        if !ui.ctx().text_edit_focused() && !ui.ctx().memory(|mem| mem.has_focus(scroll_id)) {
+        if !ui.ctx().text_edit_focused() && !ui.ctx().memory(|mem| mem.has_focus(scroll_resp.id)) {
             let delta = ui.ctx().input(|i| {
                 if i.key_pressed(Key::ArrowDown) {
                     100.0f32
@@ -392,17 +387,13 @@ pub fn show(
                 if delta < 0.0 {
                     panel_state.user_scrolled_up = true;
                 }
-                let mut state: egui::scroll_area::State = ui
-                    .ctx()
-                    .data_mut(|d| d.get_persisted(scroll_id).unwrap_or_default());
-                state.offset.y = (state.offset.y + delta).max(0.0);
+                ui.scroll_with_delta(egui::vec2(0.0, delta));
+                // Re-check if we hit bottom after scrolling
                 let max_offset =
                     (scroll_resp.content_size.y - scroll_resp.inner_rect.height()).max(0.0);
-                state.offset.y = state.offset.y.min(max_offset);
-                if state.offset.y >= max_offset - 1.0 {
+                if scroll_resp.state.offset.y >= max_offset - 1.0 {
                     panel_state.user_scrolled_up = false;
                 }
-                ui.ctx().data_mut(|d| d.insert_persisted(scroll_id, state));
             }
         }
     } // end scoped block — runtime borrow is released here

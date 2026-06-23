@@ -10,7 +10,7 @@ use autocode_ai::{
     chat::{self, ChatRuntime},
     provider, session,
 };
-use autocode_core::{persistence::PersistenceThread, state::AppState, theme};
+use autocode_core::{persistence::PersistenceThread, state::AppState, storage::AppStorage, storage::StorageLoad};
 use autocode_ui::{
     ui_chat::{self, ChatPanelState},
     ui_explorer::{self, ExplorerPanelState},
@@ -18,6 +18,30 @@ use autocode_ui::{
     ui_settings::{self, SettingsState},
     ui_todo, ui_toolbar,
 };
+
+/// Adapter: wraps an immutable `&dyn eframe::Storage` for loading state.
+struct EframeStorage<'a>(&'a dyn eframe::Storage);
+
+impl StorageLoad for EframeStorage<'_> {
+    fn get<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<T> {
+        eframe::get_value(self.0, key)
+    }
+}
+
+/// Adapter: wraps a mutable `&mut dyn eframe::Storage` for saving state.
+struct EframeStorageMut<'a>(&'a mut dyn eframe::Storage);
+
+impl StorageLoad for EframeStorageMut<'_> {
+    fn get<T: serde::de::DeserializeOwned>(&self, key: &str) -> Option<T> {
+        eframe::get_value(self.0, key)
+    }
+}
+
+impl AppStorage for EframeStorageMut<'_> {
+    fn set<T: serde::Serialize>(&mut self, key: &str, value: &T) {
+        eframe::set_value(&mut *self.0, key, value);
+    }
+}
 
 pub struct AutocodeApp {
     pub state: AppState,
@@ -35,11 +59,11 @@ pub struct AutocodeApp {
 impl AutocodeApp {
     pub fn new(cc: &CreationContext) -> Self {
         let mut state = if let Some(storage) = cc.storage {
-            AppState::load(storage)
+            AppState::load(&EframeStorage(storage))
         } else {
             AppState::default()
         };
-        theme::apply(&cc.egui_ctx);
+        autocode_ui::theme::apply(&cc.egui_ctx);
 
         state.prune_disk_state();
         Self::restore_active_session(&mut state);
@@ -373,7 +397,7 @@ impl eframe::App for AutocodeApp {
 
         // Toolbar -- top.
         Panel::top("toolbar")
-            .frame(Frame::new().fill(autocode_core::theme::Palette::BG_BASE))
+            .frame(Frame::new().fill(autocode_ui::theme::Palette::BG_BASE))
             .show_inside(ui, |ui| {
                 ui_toolbar::show(ui, &mut self.state, &mut self.runtimes);
             });
@@ -385,7 +409,7 @@ impl eframe::App for AutocodeApp {
                 .default_size(self.state.explorer_width)
                 .min_size(160.0)
                 .max_size(480.0)
-                .frame(Frame::NONE.fill(autocode_core::theme::Palette::BG_PANEL))
+                .frame(Frame::NONE.fill(autocode_ui::theme::Palette::BG_PANEL))
                 .show_inside(ui, |ui| {
                     self.state.explorer_width = ui.available_width();
                     ui_explorer::show(ui, &mut self.state, &mut self.explorer_panel);
@@ -394,7 +418,7 @@ impl eframe::App for AutocodeApp {
 
         // Main chat panel.
         CentralPanel::default()
-            .frame(Frame::NONE.fill(autocode_core::theme::Palette::BG_PANEL))
+            .frame(Frame::NONE.fill(autocode_ui::theme::Palette::BG_PANEL))
             .show_inside(ui, |ui| {
                 ui_chat::show(
                     ui,
@@ -475,7 +499,7 @@ impl eframe::App for AutocodeApp {
             }
         }
         self.save_sessions();
-        self.state.save(storage);
+        self.state.save(&mut EframeStorageMut(storage));
     }
 
     fn auto_save_interval(&self) -> std::time::Duration {

@@ -8,11 +8,8 @@ use egui::{
 use std::collections::HashSet;
 use std::path::Path;
 
-use autocode_core::{
-    fsutil,
-    state::AppState,
-    theme::{Palette, ROUND_SM},
-};
+use crate::theme::{Palette, ROUND_SM};
+use autocode_core::{fsutil, state::AppState};
 use autocode_fs::git::GitFileStatus;
 
 /// Ephemeral (non-persisted) state for the explorer panel.
@@ -267,7 +264,7 @@ fn show_tree(ui: &mut egui::Ui, dir: &std::path::Path, state: &mut TreeState<'_>
                             let name_color = entry
                                 .git_status
                                 .map(git_status_color)
-                                .unwrap_or(autocode_core::theme::Palette::TEXT_SECONDARY);
+                                .unwrap_or(Palette::TEXT_SECONDARY);
                             ui.label(
                                 egui::RichText::new(&entry.name)
                                     .size(12.0)
@@ -304,7 +301,7 @@ fn show_tree(ui: &mut egui::Ui, dir: &std::path::Path, state: &mut TreeState<'_>
                         if ui
                             .button(
                                 egui::RichText::new("Delete folder")
-                                    .color(autocode_core::theme::Palette::ERROR),
+                                        .color(Palette::ERROR),
                             )
                             .clicked()
                         {
@@ -451,7 +448,7 @@ fn show_tree(ui: &mut egui::Ui, dir: &std::path::Path, state: &mut TreeState<'_>
                             if ui
                                 .button(
                                     egui::RichText::new("Delete file")
-                                        .color(autocode_core::theme::Palette::ERROR),
+                                    .color(Palette::ERROR),
                                 )
                                 .clicked()
                             {
@@ -489,6 +486,11 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
 
     let mut open = panel.show_file_viewer;
 
+    // Save original global style values so we can restore them after the window.
+    let (orig_radius, orig_shadow, orig_margin) = {
+        let s = ctx.global_style();
+        (s.visuals.window_corner_radius, s.visuals.window_shadow, s.spacing.window_margin)
+    };
     // Force zero rounding on this window — CornerRadius::ZERO on the Frame
     // only controls fill/stroke; the shadow and clip shape still use
     // visuals.window_rounding, so we override that too.
@@ -931,6 +933,13 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
                     });
             });
     }
+
+    // Restore original global style values so other windows are not affected.
+    ctx.global_style_mut(|s| {
+        s.visuals.window_corner_radius = orig_radius;
+        s.visuals.window_shadow = orig_shadow;
+        s.spacing.window_margin = orig_margin;
+    });
 
     if !open {
         panel.show_file_viewer = false;

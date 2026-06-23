@@ -7,7 +7,7 @@ use egui::{Color32, CornerRadius, Frame, Margin, RichText, Stroke, Vec2};
 
 use crate::helpers;
 use autocode_core::state::{TodoItem, TodoList, TodoStatus};
-use autocode_core::theme::Palette;
+use crate::theme::Palette;
 
 /// Configuration that distinguishes a session-scoped todo window
 /// from a project-scoped task window.

@@ -7,11 +7,11 @@ use egui::{Align, Frame, Layout, Margin, RichText, Sense, Stroke, StrokeKind, Ve
 use std::collections::HashMap;
 
 use crate::helpers;
+use crate::theme::Palette;
 use autocode_ai::{chat::ChatRuntime, session};
 use autocode_core::{
     helpers as core_helpers,
     state::{AppState, Project},
-    theme::Palette,
 };
 
 pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<String, ChatRuntime>) {
@@ -262,7 +262,7 @@ fn show_token_meter(ui: &mut egui::Ui, state: &AppState, frac: f32) {
     let painter = ui.painter();
 
     // Track.
-    painter.rect_filled(rect, 3.0, Palette::BG_SURFACE);
+    painter.rect_filled(rect, egui::CornerRadius::same(3), Palette::BG_SURFACE);
 
     // Fill.
     let fill_color = if frac > 0.85 {
@@ -274,12 +274,12 @@ fn show_token_meter(ui: &mut egui::Ui, state: &AppState, frac: f32) {
     };
     let fill_rect =
         egui::Rect::from_min_size(rect.min, Vec2::new(rect.width() * frac, rect.height()));
-    painter.rect_filled(fill_rect, 3.0, fill_color);
+    painter.rect_filled(fill_rect, egui::CornerRadius::same(3), fill_color);
 
     // Outline.
     painter.rect_stroke(
         rect,
-        3.0,
+        egui::CornerRadius::same(3),
         Stroke::new(1.0, Palette::BORDER),
         StrokeKind::Outside,
     );
@@ -295,14 +295,22 @@ fn show_token_meter(ui: &mut egui::Ui, state: &AppState, frac: f32) {
 }
 
 fn show_network_status(ui: &mut egui::Ui, net: &mut autocode_ai::chat::NetworkStatus) {
-    let (dot, dot_color) = net.blink_dot();
+    let (dot, dot_kind) = net.blink_dot();
     let byte_str = net.format_bytes();
 
     let show = net.active || !byte_str.is_empty();
 
     helpers::toolbar_separator(ui);
 
-    let dot_color = if show { dot_color } else { Palette::BG_BASE };
+    let dot_color: egui::Color32 = if show {
+        match dot_kind {
+            autocode_ai::chat::BlinkKind::Inactive => Palette::TEXT_MUTED.into(),
+            autocode_ai::chat::BlinkKind::Active => Palette::SUCCESS.into(),
+            autocode_ai::chat::BlinkKind::Stalled => Palette::ERROR.into(),
+        }
+    } else {
+        Palette::BG_BASE.into()
+    };
     let dot_text = RichText::new(dot.to_string())
         .size(10.0)
         .color(dot_color)

@@ -149,6 +149,7 @@ dependencies = [
  "image",
  "rfd",
  "rustls",
+ "serde",
  "webpki-roots",
 ]
 
@@ -158,7 +159,6 @@ version = "0.2.3"
 dependencies = [
  "autocode-core",
  "autocode-fs",
- "egui",
  "rustls",
  "serde",
  "serde_json",
@@ -169,8 +169,6 @@ dependencies = [
 name = "autocode-core"
 version = "0.2.3"
 dependencies = [
- "eframe",
- "egui",
  "scraper",
  "serde",
  "serde_json",
