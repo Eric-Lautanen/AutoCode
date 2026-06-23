@@ -130,14 +130,8 @@ fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: Chat
     {
         msg.id = sess.next_message_id;
         sess.next_message_id += 1;
-        // Error messages are display-only - never persist to disk.
-        if msg.role != Role::Error {
-            state
-                .pending_writes
-                .pending
-                .push((sid.to_string(), msg.clone()));
-        }
-        // Compute and cache the per-message JSON token estimate before push.
+        // Compute and cache the per-message JSON token estimate before any
+        // clone so the persisted copy (pending_writes) also has the estimate.
         let model = if sess.model.is_empty() {
             None
         } else {
@@ -145,6 +139,13 @@ fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: Chat
         };
         msg.full_token_estimate =
             autocode_core::helpers::estimate_single_message_json_tokens(&msg, model);
+        // Error messages are display-only - never persist to disk.
+        if msg.role != Role::Error {
+            state
+                .pending_writes
+                .pending
+                .push((sid.to_string(), msg.clone()));
+        }
         sess.messages.push(msg);
         // Incrementally update both the messages-only and full token estimates (O(1)).
         // estimated_full_tokens = messages + tools_overhead, and tools_overhead is
