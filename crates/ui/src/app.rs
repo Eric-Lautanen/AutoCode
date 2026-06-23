@@ -195,12 +195,10 @@ impl AutocodeApp {
                 .projects
                 .iter()
                 .find(|p| Some(&p.id) == sess.project_id.as_ref())
+                && autocode_core::session_storage::session_exists(proj, sess)
+                && let Err(e) = autocode_core::session_storage::save_session_meta(proj, sess)
             {
-                if autocode_core::session_storage::session_exists(proj, sess)
-                    && let Err(e) = autocode_core::session_storage::save_session_meta(proj, sess)
-                {
-                    eprintln!("[app] Failed to save session meta for {}: {}", sess.id, e);
-                }
+                eprintln!("[app] Failed to save session meta for {}: {}", sess.id, e);
             }
         }
     }

@@ -3,8 +3,8 @@
 
 use egui::{Color32, FontId, RichText, TextFormat};
 
-use autocode_core::state::{ChatMessage, TodoItem, TodoStatus};
 use crate::theme::Palette;
+use autocode_core::state::{ChatMessage, TodoItem, TodoStatus};
 
 // -- Time formatting -----------------------------------------------------------
 

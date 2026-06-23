@@ -153,12 +153,8 @@ fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: Chat
         if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
             let last = sess.messages.last().unwrap();
             let delta = last.full_token_estimate;
-            sess.estimated_messages_tokens = sess
-                .estimated_messages_tokens
-                .saturating_add(delta);
-            sess.estimated_full_tokens = sess
-                .estimated_full_tokens
-                .saturating_add(delta);
+            sess.estimated_messages_tokens = sess.estimated_messages_tokens.saturating_add(delta);
+            sess.estimated_full_tokens = sess.estimated_full_tokens.saturating_add(delta);
         }
     }
 }

@@ -299,10 +299,7 @@ fn show_tree(ui: &mut egui::Ui, dir: &std::path::Path, state: &mut TreeState<'_>
                         }
                         ui.separator();
                         if ui
-                            .button(
-                                egui::RichText::new("Delete folder")
-                                        .color(Palette::ERROR),
-                            )
+                            .button(egui::RichText::new("Delete folder").color(Palette::ERROR))
                             .clicked()
                         {
                             let _ = fsutil::remove_dir(&entry.path);
@@ -446,10 +443,7 @@ fn show_tree(ui: &mut egui::Ui, dir: &std::path::Path, state: &mut TreeState<'_>
                             }
                             ui.separator();
                             if ui
-                                .button(
-                                    egui::RichText::new("Delete file")
-                                    .color(Palette::ERROR),
-                                )
+                                .button(egui::RichText::new("Delete file").color(Palette::ERROR))
                                 .clicked()
                             {
                                 let _ = fsutil::remove_file(&entry.path);
@@ -489,7 +483,11 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
     // Save original global style values so we can restore them after the window.
     let (orig_radius, orig_shadow, orig_margin) = {
         let s = ctx.global_style();
-        (s.visuals.window_corner_radius, s.visuals.window_shadow, s.spacing.window_margin)
+        (
+            s.visuals.window_corner_radius,
+            s.visuals.window_shadow,
+            s.spacing.window_margin,
+        )
     };
     // Force zero rounding on this window — CornerRadius::ZERO on the Frame
     // only controls fill/stroke; the shadow and clip shape still use

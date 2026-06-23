@@ -302,14 +302,14 @@ fn show_network_status(ui: &mut egui::Ui, net: &mut autocode_ai::chat::NetworkSt
 
     helpers::toolbar_separator(ui);
 
-    let dot_color: egui::Color32 = if show {
+    let dot_color = if show {
         match dot_kind {
-            autocode_ai::chat::BlinkKind::Inactive => Palette::TEXT_MUTED.into(),
-            autocode_ai::chat::BlinkKind::Active => Palette::SUCCESS.into(),
-            autocode_ai::chat::BlinkKind::Stalled => Palette::ERROR.into(),
+            autocode_ai::chat::BlinkKind::Inactive => Palette::TEXT_MUTED,
+            autocode_ai::chat::BlinkKind::Active => Palette::SUCCESS,
+            autocode_ai::chat::BlinkKind::Stalled => Palette::ERROR,
         }
     } else {
-        Palette::BG_BASE.into()
+        Palette::BG_BASE
     };
     let dot_text = RichText::new(dot.to_string())
         .size(10.0)
