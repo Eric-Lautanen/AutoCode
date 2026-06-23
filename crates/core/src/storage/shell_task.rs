@@ -1,5 +1,5 @@
-use crate::utils::fsutil;
 use crate::state::ShellTask;
+use crate::utils::fsutil;
 use std::path::PathBuf;
 
 fn tasks_dir(data_dir_name: &str) -> PathBuf {

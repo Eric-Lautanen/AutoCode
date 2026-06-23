@@ -1,5 +1,5 @@
-use crate::utils::fsutil;
 use crate::state::ChatMessage;
+use crate::utils::fsutil;
 use std::path::{Path, PathBuf};
 
 pub const MESSAGES_PER_CHUNK: usize = 1000;

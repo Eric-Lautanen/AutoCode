@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU16, Ordering};
 
 use autocode_core::{
-    storage::{self, chunked_jsonl, SessionMeta},
     state::{ChatMessage, Project, Role},
+    storage::{self, SessionMeta, chunked_jsonl},
     utils::fsutil,
 };
 

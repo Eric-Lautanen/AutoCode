@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-use crate::helpers::{model_or_safe, parse_thinking_api, provider_manifest};
 use crate::helpers::utils::manifest;
+use crate::helpers::{model_or_safe, parse_thinking_api, provider_manifest};
 
 use super::secret::SecretString;
 
@@ -235,7 +235,8 @@ pub struct ApiProvider {
     /// Per-model configuration overrides (context window, max tokens, etc.).
     /// Keyed by model ID. When absent, values from the baked-in manifest are used.
     #[serde(default)]
-    pub models_config: Option<std::collections::HashMap<String, crate::storage::provider_file::ModelEntry>>,
+    pub models_config:
+        Option<std::collections::HashMap<String, crate::storage::provider_file::ModelEntry>>,
 }
 
 impl ApiProvider {

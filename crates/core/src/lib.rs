@@ -11,5 +11,5 @@
 pub mod helpers;
 pub mod state;
 pub mod storage;
-pub mod utils;
 pub mod tokenizer;
+pub mod utils;

@@ -255,7 +255,9 @@ pub fn resolve_path_write(raw: &str, project_root: &str, allow_escape: bool) -> 
     if joined.exists() {
         std::fs::canonicalize(&joined)
             .map(|p| crate::utils::fsutil::display_path(&p))
-            .unwrap_or_else(|_| crate::utils::fsutil::display_path(&crate::utils::fsutil::extended_path(&joined)))
+            .unwrap_or_else(|_| {
+                crate::utils::fsutil::display_path(&crate::utils::fsutil::extended_path(&joined))
+            })
     } else {
         let parent = joined.parent();
         let filename = joined.file_name();
@@ -265,7 +267,9 @@ pub fn resolve_path_write(raw: &str, project_root: &str, allow_escape: bool) -> 
                     std::fs::canonicalize(dir)
                         .map(|p| crate::utils::fsutil::display_path(&p))
                         .unwrap_or_else(|_| {
-                            crate::utils::fsutil::display_path(&crate::utils::fsutil::extended_path(dir))
+                            crate::utils::fsutil::display_path(
+                                &crate::utils::fsutil::extended_path(dir),
+                            )
                         })
                 } else {
                     crate::utils::fsutil::display_path(&crate::utils::fsutil::extended_path(dir))

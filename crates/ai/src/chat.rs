@@ -10,8 +10,9 @@ use crate::{
     session,
 };
 use autocode_core::{
-    utils::fsutil, helpers as core_helpers,
+    helpers as core_helpers,
     state::{AppState, ChatMessage, Role, ShellStatus, TodoItem, TodoStatus, ToolMeta},
+    utils::fsutil,
 };
 use autocode_fs::shell::{self, ShellEvent};
 
@@ -220,12 +221,8 @@ pub fn replay_to_message(
         sess.recompute_full_tokens(&tools_json, model_owned.as_deref());
 
         let proj = &state.projects[proj_idx];
-        autocode_core::storage::truncate_messages_after(
-            proj,
-            sess,
-            message_id.saturating_sub(1),
-        )
-        .ok()?;
+        autocode_core::storage::truncate_messages_after(proj, sess, message_id.saturating_sub(1))
+            .ok()?;
         autocode_core::storage::save_session_meta(proj, sess).ok()?;
     }
 
@@ -327,8 +324,7 @@ fn push_tool_results_to_state(state: &mut AppState, runtime: &ChatRuntime, resul
             // Persist to disk immediately.
             let ptl = state.project_task_list.clone();
             if let Some(proj) = state.active_project_mut() {
-                let mut meta =
-                    autocode_core::storage::load_project_meta(proj).unwrap_or_default();
+                let mut meta = autocode_core::storage::load_project_meta(proj).unwrap_or_default();
                 meta.version = 1;
                 meta.project_task_list = ptl;
                 if let Err(e) = autocode_core::storage::save_project_meta(proj, &meta) {
@@ -2363,8 +2359,7 @@ fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     // prompt. This prevents the model from deleting/corrupting the list when it
     // tries to update it, because it now connects the tool result to the tool.
     let ptl_from_disk = state.active_project().and_then(|proj| {
-        let meta = autocode_core::storage::load_project_meta(proj)
-            .unwrap_or_default();
+        let meta = autocode_core::storage::load_project_meta(proj).unwrap_or_default();
         let ptl = meta.project_task_list;
         if ptl.is_empty() { None } else { Some(ptl) }
     });
@@ -2407,7 +2402,11 @@ fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
         push_runtime(state, runtime, assistant_msg);
 
         // 3. Synthetic tool result matching the format from execute_tool_with_cache
-        let done = ptl.items.iter().filter(|i| i.status == TodoStatus::Completed).count();
+        let done = ptl
+            .items
+            .iter()
+            .filter(|i| i.status == TodoStatus::Completed)
+            .count();
         let total = ptl.items.len();
         let (ctx_used, ctx_max, _, max_output) = context_usage_info_for_session(
             state,
@@ -3692,7 +3691,8 @@ fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                 Err(e) => format!("Web search error: {}", e),
                 Ok(data) => {
                     let html = String::from_utf8_lossy(&data);
-                    let results = autocode_core::utils::extract::extract_ddg_results(&html, num_results);
+                    let results =
+                        autocode_core::utils::extract::extract_ddg_results(&html, num_results);
                     if results.is_empty() {
                         format!("No web results for \"{}\"", query)
                     } else {

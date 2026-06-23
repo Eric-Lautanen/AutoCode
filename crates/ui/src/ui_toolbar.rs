@@ -74,9 +74,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                                     .projects
                                     .iter()
                                     .find(|p| &p.id == pid)
-                                    .map(|proj| {
-                                        autocode_core::storage::session_exists(proj, s)
-                                    })
+                                    .map(|proj| autocode_core::storage::session_exists(proj, s))
                                     .unwrap_or(true)
                         })
                         .map(|s| (s.id.clone(), s.label.clone()))

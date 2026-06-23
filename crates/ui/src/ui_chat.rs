@@ -496,11 +496,9 @@ fn load_new_session(state: &mut AppState, panel_state: &mut ChatPanelState) -> O
                 }
                 // Find the oldest non-Error message ID on disk for the
                 // "Load full history" button check.
-                let sess_dir =
-                    autocode_core::storage::session_messages_dir(new_proj, new_sess);
+                let sess_dir = autocode_core::storage::session_messages_dir(new_proj, new_sess);
                 if autocode_core::storage::chunked_jsonl::has_chunked_files(&sess_dir) {
-                    let on_disk =
-                        autocode_core::storage::load_all_messages(new_proj, new_sess);
+                    let on_disk = autocode_core::storage::load_all_messages(new_proj, new_sess);
                     panel_state.oldest_disk_id = on_disk
                         .iter()
                         .filter(|m| m.role != Role::Error && m.role != Role::System)
@@ -676,7 +674,11 @@ fn show_session_tabs(
                                     ui.spacing_mut().item_spacing.x = 2.0;
                                     // Activity indicator before the label
                                     if has_activity {
-                                        let ind_color = if active { tab_accent } else { theme().text_muted };
+                                        let ind_color = if active {
+                                            tab_accent
+                                        } else {
+                                            theme().text_muted
+                                        };
                                         ui.label(
                                             RichText::new(activity_char.to_string())
                                                 .size(11.5)
@@ -690,18 +692,21 @@ fn show_session_tabs(
                                         .map(|p| p.name.as_str())
                                         .unwrap_or("No project");
                                     let truncated: String = label.chars().take(25).collect();
-                                    let tab_resp = ui.add(
-                                        egui::Button::new(RichText::new(truncated).size(11.5).color(
-                                            if active {
-                                                tab_accent
-                                            } else {
-                                                theme().text_muted
-                                            },
-                                        ))
-                                        .fill(Color32::TRANSPARENT)
-                                        .stroke(egui::Stroke::NONE),
-                                    )
-                                    .on_hover_text(format!("{} — {}", &label, project_name));
+                                    let tab_resp = ui
+                                        .add(
+                                            egui::Button::new(
+                                                RichText::new(truncated).size(11.5).color(
+                                                    if active {
+                                                        tab_accent
+                                                    } else {
+                                                        theme().text_muted
+                                                    },
+                                                ),
+                                            )
+                                            .fill(Color32::TRANSPARENT)
+                                            .stroke(egui::Stroke::NONE),
+                                        )
+                                        .on_hover_text(format!("{} — {}", &label, project_name));
                                     if tab_resp.clicked() {
                                         state.active_session_id = Some(id.clone());
                                     }
@@ -712,45 +717,57 @@ fn show_session_tabs(
                                         Vec2::new(20.0, 18.0),
                                         egui::Sense::click(),
                                     );
-                                    let show_close = active || tab_resp.hovered() || close_resp.hovered();
+                                    let show_close =
+                                        active || tab_resp.hovered() || close_resp.hovered();
                                     if show_close {
                                         ui.painter().text(
                                             close_rect.center(),
                                             egui::Align2::CENTER_CENTER,
                                             "x",
                                             egui::FontId::proportional(11.0),
-                                            if active { tab_accent } else { theme().text_muted },
+                                            if active {
+                                                tab_accent
+                                            } else {
+                                                theme().text_muted
+                                            },
                                         );
                                     }
                                     if close_resp.on_hover_text("Close session").clicked() {
-                                            autocode_ai::chat::abort_for_session(runtimes, &id);
-                                            panel_state.scroll_offsets.remove(&id);
-                                            let was_used = state.sessions.iter()
-                                                .find(|s| s.id == id)
-                                                .is_some_and(|s| s.messages.iter().any(|m| m.role == Role::User));
-                                            if was_used {
-                                                // Session was used — mark closed so it can be reopened.
-                                                if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == id) {
-                                                    sess.closed = true;
-                                                    if let Some(pid) = sess.project_id.as_ref()
-                                                        && let Some(proj) = state.projects.iter().find(|p| &p.id == pid)
-                                                    {
-                                                        let _ = autocode_core::storage::save_session_meta(proj, sess);
-                                                    }
-                                                    sess.messages.clear();
+                                        autocode_ai::chat::abort_for_session(runtimes, &id);
+                                        panel_state.scroll_offsets.remove(&id);
+                                        let was_used =
+                                            state.sessions.iter().find(|s| s.id == id).is_some_and(
+                                                |s| s.messages.iter().any(|m| m.role == Role::User),
+                                            );
+                                        if was_used {
+                                            // Session was used — mark closed so it can be reopened.
+                                            if let Some(sess) =
+                                                state.sessions.iter_mut().find(|s| s.id == id)
+                                            {
+                                                sess.closed = true;
+                                                if let Some(pid) = sess.project_id.as_ref()
+                                                    && let Some(proj) =
+                                                        state.projects.iter().find(|p| &p.id == pid)
+                                                {
+                                                    let _ =
+                                                        autocode_core::storage::save_session_meta(
+                                                            proj, sess,
+                                                        );
                                                 }
-                                            } else {
-                                                // Never used — delete entirely.
-                                                autocode_ai::session::delete_session(state, &id);
+                                                sess.messages.clear();
                                             }
-                                            // Show welcome screen — never auto-switch to another tab.
-                                            if state.active_session_id.as_deref() == Some(&id) {
-                                                state.active_session_id = None;
-                                            }
-                                            runtimes.remove(&id);
+                                        } else {
+                                            // Never used — delete entirely.
+                                            autocode_ai::session::delete_session(state, &id);
                                         }
-                });
-            }); // end push_id("chat_content", ...)
+                                        // Show welcome screen — never auto-switch to another tab.
+                                        if state.active_session_id.as_deref() == Some(&id) {
+                                            state.active_session_id = None;
+                                        }
+                                        runtimes.remove(&id);
+                                    }
+                                });
+                            }); // end push_id("chat_content", ...)
                     });
                 }
             });

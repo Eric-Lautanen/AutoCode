@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use crate::utils::fsutil;
 use crate::state::{AppState, Project, Session};
+use crate::utils::fsutil;
 
 use super::session_io::{atomic_write_json, project_sessions_dir};
 use super::session_meta::SessionMeta;

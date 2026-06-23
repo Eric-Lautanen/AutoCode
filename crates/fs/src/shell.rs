@@ -8,9 +8,9 @@ use std::{
     sync::mpsc::{self, Receiver},
 };
 
-use autocode_core::utils::fsutil;
 use autocode_core::helpers;
 use autocode_core::state::{ShellStatus, ShellTask};
+use autocode_core::utils::fsutil;
 
 #[derive(Debug)]
 pub enum ShellEvent {

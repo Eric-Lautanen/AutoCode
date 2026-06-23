@@ -30,9 +30,8 @@ impl SecretString {
     }
 
     pub fn into_inner(self) -> String {
-        let s = self.data.clone();
-        // self drops here, zeroizing the original
-        s
+        // Clone first, then self drops (zeroizing the original).
+        self.data.clone()
     }
 }
 

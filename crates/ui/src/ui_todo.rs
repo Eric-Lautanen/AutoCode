@@ -1,4 +1,4 @@
-use autocode_core::{storage, state::AppState};
+use autocode_core::{state::AppState, storage};
 
 use crate::ui_todo_window::{TodoWindowConfig, show_todo_window};
 

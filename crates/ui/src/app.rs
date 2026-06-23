@@ -76,12 +76,10 @@ impl AutocodeApp {
         let persistence = PersistenceThread::new();
         let batches = state.drain_pending_writes();
         for (dir, msgs) in batches {
-            persistence.send(
-                autocode_core::storage::PersistenceCommand::AppendMessages {
-                    dir,
-                    messages: msgs,
-                },
-            );
+            persistence.send(autocode_core::storage::PersistenceCommand::AppendMessages {
+                dir,
+                messages: msgs,
+            });
         }
 
         Self {
@@ -101,12 +99,11 @@ impl AutocodeApp {
     fn flush_pending_writes(&mut self) {
         let batches = self.state.drain_pending_writes();
         for (dir, msgs) in batches {
-            self.persistence.send(
-                autocode_core::storage::PersistenceCommand::AppendMessages {
+            self.persistence
+                .send(autocode_core::storage::PersistenceCommand::AppendMessages {
                     dir,
                     messages: msgs,
-                },
-            );
+                });
         }
     }
 
@@ -369,9 +366,9 @@ impl eframe::App for AutocodeApp {
                 };
                 let id = project.id.clone();
                 self.state.projects.push(project);
-                if let Err(e) = autocode_core::storage::ensure_project_dirs(
-                    self.state.projects.last().unwrap(),
-                ) {
+                if let Err(e) =
+                    autocode_core::storage::ensure_project_dirs(self.state.projects.last().unwrap())
+                {
                     eprintln!("[app] Failed to create project directories: {}", e);
                 }
                 if let Some(proj) = self.state.projects.last()
@@ -490,8 +487,7 @@ impl eframe::App for AutocodeApp {
         }
         let ptl = self.state.project_task_list.clone();
         if let Some(proj) = self.state.active_project_mut() {
-            let mut meta =
-                autocode_core::storage::load_project_meta(proj).unwrap_or_default();
+            let mut meta = autocode_core::storage::load_project_meta(proj).unwrap_or_default();
             meta.version = 1;
             meta.project_task_list = ptl;
             if let Err(e) = autocode_core::storage::save_project_meta(proj, &meta) {
@@ -527,8 +523,7 @@ impl eframe::App for AutocodeApp {
         }
         let ptl = self.state.project_task_list.clone();
         if let Some(proj) = self.state.active_project_mut() {
-            let mut meta =
-                autocode_core::storage::load_project_meta(proj).unwrap_or_default();
+            let mut meta = autocode_core::storage::load_project_meta(proj).unwrap_or_default();
             meta.version = 1;
             meta.project_task_list = ptl;
             if let Err(e) = autocode_core::storage::save_project_meta(proj, &meta) {

@@ -5,8 +5,8 @@ use crate::helpers;
 use crate::theme::{Palette, ROUND_MD, ROUND_SM};
 use autocode_ai::provider;
 use autocode_core::{
-    storage::provider_file,
     state::{AppState, Project, Session, ThinkingApi},
+    storage::provider_file,
 };
 use egui::{
     CollapsingHeader, Color32, CornerRadius, Frame, Grid, Margin, RichText, ScrollArea, Stroke,
