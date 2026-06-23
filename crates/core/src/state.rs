@@ -1101,12 +1101,6 @@ pub struct AppState {
     #[serde(default)]
     pub sysinfo: crate::sysinfo::SysInfo,
 
-    /// When true, the UI framework paints widget IDs and debug info on hover (F12 to toggle).
-    #[serde(default)]
-    pub debug_mode: bool,
-    #[serde(default)]
-    pub inspection_open: bool,
-
     // -- Configurable timeouts ---------------------------------------------------
     /// Seconds with no SSE delta before declaring the stream stalled.
     #[serde(default = "crate::helpers::default_stream_idle_timeout")]
@@ -1211,8 +1205,6 @@ impl Default for AppState {
             show_reasoning_inline: false,
             settings_open: false,
             sysinfo: crate::sysinfo::SysInfo::default(),
-            debug_mode: false,
-            inspection_open: false,
             stream_idle_timeout_secs: crate::helpers::default_stream_idle_timeout(),
             request_timeout_secs: crate::helpers::default_request_timeout(),
             tool_timeout_secs: crate::helpers::default_tool_timeout(),

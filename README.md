@@ -87,7 +87,7 @@ Settings are persisted across restarts. Most settings in `app.ron`; **provider c
 | **Prompts** | System prompt, handoff trigger, handoff continuation, connection drop prompts |
 | **Session** | Display window size, completion delay, web rate limit, disk write rate |
 | **Timeouts** | Stream idle, request max, tool timeout, shell timeout (default + max), retries |
-| **About** | Version, renderer, system info, debug/inspection mode, OpenGL check |
+| **About** | Version, renderer, system info, OpenGL check |
 
 ### Persistence Layout
 

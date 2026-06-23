@@ -256,13 +256,6 @@ impl eframe::App for AutocodeApp {
         let title = self.window_title();
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
 
-        ctx.options_mut(|o| {
-            o.warn_on_id_clash = self.state.debug_mode;
-        });
-        #[cfg(debug_assertions)]
-        if self.state.debug_mode {
-            ctx.set_debug_on_hover(true);
-        }
         if let Some(rx) = &self.sysinfo_rx {
             if let Ok(info) = rx.try_recv() {
                 self.state.sysinfo = info;
@@ -447,16 +440,6 @@ impl eframe::App for AutocodeApp {
                     &mut self.chat_panel,
                 );
             });
-
-        if self.state.inspection_open {
-            egui::Window::new("Debug — Inspection")
-                .id(egui::Id::new("debug_inspect"))
-                .vscroll(true)
-                .default_size(egui::vec2(360.0, 400.0))
-                .show(&ctx, |ui| {
-                    ctx.inspection_ui(ui);
-                });
-        }
     }
 
     fn save(&mut self, storage: &mut dyn eframe::Storage) {

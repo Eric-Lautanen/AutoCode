@@ -1629,15 +1629,6 @@ fn show_about(ui: &mut egui::Ui, state: &mut AppState) {
     helpers::section_heading(ui, "System Information");
     ui.add_space(4.0);
 
-    ui.checkbox(
-        &mut state.debug_mode,
-        "Debug hover (show widget IDs on hover)",
-    )
-    .on_hover_text("Shows widget ID, rect, and state info when you hover over UI elements.");
-    ui.add_space(4.0);
-    ui.checkbox(&mut state.inspection_open, "Inspection overlay (show all widget bounds)")
-        .on_hover_text("Paints red bounding boxes around every widget and opens the inspection panel. The fancy one.");
-
     let sysinfo = &state.sysinfo;
     if sysinfo.report.is_empty() {
         ui.label(
