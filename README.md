@@ -44,7 +44,7 @@ cargo build --release
 3. Pick a project folder from the toolbar
 4. Type a task and press Enter — watch it work in real time
 
-**Prerequisites:** Rust 1.95+, Vulkan/Metal/DX12 or OpenGL.
+**Prerequisites:** Rust 1.96+, Vulkan/Metal/DX12 or OpenGL.
 
 | Platform | Build for static linking |
 |----------|------------------------|

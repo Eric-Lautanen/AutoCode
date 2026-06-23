@@ -11,7 +11,7 @@ members = [
 [workspace.package]
 version = "0.2.3"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.96"
 
 [profile.release]
 opt-level = 3
