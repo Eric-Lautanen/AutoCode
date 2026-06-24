@@ -127,7 +127,7 @@ impl AutocodeApp {
                 .get(prov_label)
                 .map(|p| p.supports_strict_tools())
                 .unwrap_or(true);
-            autocode_core::helpers::update_full_estimate(sess, &provider::tool_definitions(strict));
+            autocode_core::helpers::update_full_estimate(sess, &provider::tool_definitions(strict, sess.handoff_enabled));
             let window = state.ui_display_window;
             let total = sess.messages.len();
             if total > window * 2 {
