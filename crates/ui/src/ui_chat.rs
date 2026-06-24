@@ -1041,7 +1041,7 @@ fn render_structured_tool_result(
                 if let Some(start) = meta.edit_line {
                     let end = start + meta.line_count.unwrap_or(0).saturating_sub(1);
                     // Reuse Copy button logic: build summary text for clipboard
-                    let summary = format!("Patched lines {} - {}", start, end);
+                    let summary = format!("Patched lines {} - {} — {}", start, end, path);
                     ui.add_space(4.0);
                     ui.scope(|ui| {
                         ui.set_max_height(f32::INFINITY);
