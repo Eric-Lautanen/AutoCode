@@ -26,15 +26,14 @@ pub use paths::{
 pub use regex::matches_pattern;
 
 pub use serde_defaults::{
-    default_connection_drop_prompt_string, default_context_tokens, default_disk_read_delay_ms,
-    default_disk_write_rate_ms, default_handoff_continuation_prompt_string,
-    default_handoff_enabled, default_handoff_percent, default_handoff_trigger_prompt_string,
-    default_max_output_tokens, default_max_output_tokens_thinking, default_max_retries,
-    default_max_retry_wait, default_reasoning_effort, default_request_timeout,
-    default_shell_timeout, default_shell_timeout_max, default_stream_idle_timeout,
-    default_supports_strict_tools, default_temperature, default_thinking_mode,
-    default_tool_timeout, default_top_p, default_ui_display_window, default_web_rate_limit_ms,
-    deserialize_secret, serialize_secret,
+    default_context_tokens, default_disk_read_delay_ms, default_disk_write_rate_ms,
+    default_handoff_continuation_prompt_string, default_handoff_enabled, default_handoff_percent,
+    default_handoff_trigger_prompt_string, default_max_output_tokens,
+    default_max_output_tokens_thinking, default_max_retries, default_max_retry_wait,
+    default_reasoning_effort, default_request_timeout, default_shell_timeout,
+    default_shell_timeout_max, default_stream_idle_timeout, default_supports_strict_tools,
+    default_temperature, default_thinking_mode, default_tool_timeout, default_top_p,
+    default_ui_display_window, default_web_rate_limit_ms, deserialize_secret, serialize_secret,
 };
 
 pub use utils::{

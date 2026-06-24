@@ -8,8 +8,8 @@ pub mod session;
 pub mod todo;
 
 pub use app_state::{
-    AppState, DEFAULT_CONNECTION_DROP_PROMPT, DEFAULT_HANDOFF_CONTINUATION_PROMPT,
-    DEFAULT_HANDOFF_TRIGGER_PROMPT, DEFAULT_SYSTEM_PROMPT,
+    AppState, DEFAULT_HANDOFF_CONTINUATION_PROMPT, DEFAULT_HANDOFF_TRIGGER_PROMPT,
+    DEFAULT_SYSTEM_PROMPT,
 };
 pub use chat::{ChatMessage, Role, ToolMeta};
 pub use manifest::{ModelManifest, ProviderManifest};
