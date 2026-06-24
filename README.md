@@ -149,59 +149,15 @@ AutoCode ships with built-in configs for popular providers. You can also add any
 
 ## Project Structure
 
-<details>
-<summary><code>~20,500 lines of Rust across 37 source files (5 crates)</code></summary>
+**20,754 lines of Rust across 58 source files (5 crates).** See [`structure.md`](structure.md) for the full breakdown.
 
-```
-Cargo.toml                               # workspace root, resolver = "2"
-├── .cargo/config.toml                    # +crt-static for MSVC + musl targets
-├── assets/
-│   ├── providers.json                    # built-in provider configs (edit or add your own)
-│   ├── icon.icns / icon.ico              # macOS / Windows icons
-│   └── linux/                           # Linux icons (16–512px)
-├── skills/               — skill .md files indexed by YAML `description` (scanned at runtime, 74 shipped)
-├── crates/
-│   ├── autocode/        — binary (~583 lines)
-│   │   ├── main.rs       (51)    # entry, rustls init, eframe::run_native
-│   │   ├── app.rs       (527)   # AutocodeApp, frame loop, state wiring
-│   │   ├── build.rs       (4)    # embed Windows icon
-│   │   └── helpers.rs     (1)    # reserved
-│   ├── core/             — types, utilities (~5,626 lines)
-│   │   ├── state.rs    (1500)  # AppState, Session, ChatMessage, ApiProvider, SecretString
-│   │   ├── helpers.rs  (1439)  # ID gen, token estimation, path traversal guard, regex engine
-│   │   ├── fsutil.rs    (148)  # exe_dir, \\?\ paths, atomic read/write
-│   │   ├── theme.rs     (140)  # dark Visuals+Style, 20-color Palette
-│   │   ├── extract.rs   (298)  # HTML scraping, DuckDuckGo, domain blacklist
-│   │   ├── sysinfo.rs   (689)  # OS/CPU/GPU/RAM/shell/tool detection
-│   │   ├── session_storage.rs (629) # JSON/JSONL persistence, orphan scavenge
-│   │   ├── chunked_jsonl.rs (215) # Chunked JSONL (1000 msg/chunk)
-│   │   ├── persistence.rs (152) # Background persistence thread
-│   │   ├── provider_file.rs (225) # providers.json read/write
-│   │   ├── shell_task_storage.rs (82) # Shell task save/load/delete
-│   │   └── tokenizer/
-│   │       └── mod.rs    (88) # TiktokenTokenizer, HeuristicTokenizer
-│   ├── ai/               — AI client + orchestration (~6,460 lines)
-│   │   ├── chat.rs     (4035) # send_message, SSE polling, 21 tool handlers, retry/backoff
-│   │   ├── provider.rs (1712) # raw TCP+rustls HTTP, SSE parsing, tool definitions
-│   │   ├── session.rs   (168) # system prompt seeding, message prep
-│   │   ├── helpers.rs   (895) # fuzzy patching (7 strategies), similarity metrics
-│   │   └── thread_pool.rs (125) # Background pool with panic isolation
-│   ├── fs/               — filesystem tools (~1,180 lines)
-│   │   ├── shell.rs     (199) # background shell via channels (cmd/sh)
-│   │   ├── explorer.rs  (599) # gitignore-aware list_dir/glob/grep/project_tree, git status merge
-│   │   ├── git.rs       (201) # git status caching, parsing, dir aggregation
-│   │   ├── skills.rs    (167) # runtime skills directory scanning + YAML description extraction
-│   │   └── helpers.rs   (206) # code fence extraction, glob matching
-│   └── ui/               — egui panels (~6,100 lines)
-│       ├── ui_chat.rs  (2363) # chat bubbles, markdown, diff, streaming, tool cards
-│       ├── ui_settings.rs (1535) # 6-tab settings (Providers/Projects/Prompt/Session/Timeouts/About)
-│       ├── ui_explorer.rs (990) # file tree with git status coloring, preview, rename/delete
-│       ├── ui_toolbar.rs (340) # project/session/provider pickers, budget meter
-│       ├── ui_todo.rs   (312) # floating session task list
-│       ├── ui_project_tasks.rs (318) # floating project task list
-│       └── helpers.rs   (526) # time formatting, LayoutJob, screen pixel sampling, todo scroll helper
-```
-</details>
+| Crate | Lines | Role |
+|-------|-------|------|
+| `autocode` (bin) | 11 | Entry point, icon embedding |
+| `autocode-core` (lib) | 5,638 | State types, storage, helpers, token estimation, sysinfo, HTML extraction |
+| `autocode-ai` (lib) | 6,701 | Chat loop, HTTP/SSE client, tool dispatch, retry/backoff |
+| `autocode-fs` (lib) | 1,605 | Shell executor, file explorer, git status, skill loader |
+| `autocode-ui` (lib) | 6,799 | egui panels — chat, settings, explorer, toolbar, todo windows |
 
 ---
 
