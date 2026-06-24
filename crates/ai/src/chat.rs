@@ -4,8 +4,8 @@ use std::sync::mpsc::Receiver;
 use crate::{
     helpers,
     provider::{
-        ApiMessage, CompletionRequest, ProviderClient, ProviderEvent, ToolCall, ToolChoice,
-        count_input_tokens, tool_definitions,
+        CompletionRequest, ProviderClient, ProviderEvent, ToolCall, ToolChoice, count_input_tokens,
+        tool_definitions,
     },
     session,
 };
@@ -148,15 +148,13 @@ fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: Chat
                 .push((sid.to_string(), msg.clone()));
         }
         sess.messages.push(msg);
-        // Incrementally update both the messages-only and full token estimates (O(1)).
-        // estimated_full_tokens = messages + tools_overhead, and tools_overhead is
-        // constant (sent once per request), so adding the delta keeps it in sync
-        // in real-time — no need to wait for the next API request.
+        // Increment estimated_messages_tokens for the auto-handoff fallback.
+        // estimated_full_tokens is NOT updated here — only authoritative sources
+        // (pre-flight tiktoken check at line ~940, update_full_estimate on tab switch)
+        // set it, so the toolbar meter and pre-flight check never disagree.
         if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
             let last = sess.messages.last().unwrap();
-            let delta = last.full_token_estimate;
-            sess.estimated_messages_tokens = sess.estimated_messages_tokens.saturating_add(delta);
-            sess.estimated_full_tokens = sess.estimated_full_tokens.saturating_add(delta);
+            sess.estimated_messages_tokens = sess.estimated_messages_tokens.saturating_add(last.full_token_estimate);
         }
     }
 }
@@ -217,7 +215,7 @@ pub fn replay_to_message(
         sess.recompute_messages_tokens(model_owned.as_deref());
         // Re-add the constant tools overhead so estimated_full_tokens stays
         // in sync (messages + tools), not just messages.
-        let tools_json = crate::provider::tool_definitions(true);
+        let tools_json = crate::provider::tool_definitions(true, sess.handoff_enabled);
         sess.recompute_full_tokens(&tools_json, model_owned.as_deref());
 
         let proj = &state.projects[proj_idx];
@@ -428,12 +426,7 @@ pub struct ChatRuntime {
     pending_tool_results: Vec<ToolResult>,
     pending_tool_remaining: Vec<ToolCall>,
     pub net_status: NetworkStatus,
-    /// Accumulated partial response from previous attempt(s) when a stream
-    /// drops mid-output. Used to resume generation instead of starting over.
-    pub partial_response_backup: String,
-    /// Tracks how many times we've retried due to stream drops, to apply
-    /// exponential backoff on the idle timeout.
-    pub stream_drop_retries: u8,
+    /// Guard to prevent the model from chain-continuing indefinitely.
     pub continuation_chain: u8,
     /// Retry phase: non-blocking backoff before the first retry.
     /// None = not waiting for a retry.
@@ -480,8 +473,6 @@ impl Default for ChatRuntime {
             pending_tool_results: Vec::new(),
             pending_tool_remaining: Vec::new(),
             net_status: NetworkStatus::default(),
-            partial_response_backup: String::new(),
-            stream_drop_retries: 0,
             continuation_chain: 0,
             retry_after: None,
             next_completion_allowed: None,
@@ -529,8 +520,6 @@ impl ChatRuntime {
         self.pending_tool_results.clear();
         self.pending_tool_remaining.clear();
         self.net_status.reset();
-        self.partial_response_backup.clear();
-        self.stream_drop_retries = 0;
         self.continuation_chain = 0;
         self.handoff_in_progress = false;
         self.handoff_trigger_sent = false;
@@ -544,8 +533,7 @@ impl ChatRuntime {
         self.pending_response.shrink_to(0);
         self.reasoning_buf.clear();
         self.reasoning_buf.shrink_to(0);
-        self.partial_response_backup.clear();
-        self.partial_response_backup.shrink_to(0);
+
         self.live_shell_buf.clear();
         self.live_shell_buf.shrink_to(0);
     }
@@ -685,8 +673,6 @@ pub fn send_message(
     }
     push_to_session(state, Some(&sid), ChatMessage::new(Role::User, text));
     // Clear any stale partial response backup from a previous failed attempt.
-    runtime.partial_response_backup.clear();
-    runtime.stream_drop_retries = 0;
     runtime.continuation_chain = 0;
     runtime.orphaned_retry_count = 0;
     runtime.retry_after = None;
@@ -718,9 +704,6 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
                 return;
             }
         }
-        runtime.next_completion_allowed = Some(
-            std::time::Instant::now() + std::time::Duration::from_millis(state.disk_read_delay_ms),
-        );
     }
     let session_id = match runtime.active_session_id.as_deref() {
         Some(id) => id,
@@ -802,25 +785,19 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
     }
     crate::provider::api_rate_limit_record(&provider, &prov_label);
 
-    let mut messages = session::prepare_request_messages_for_session(state, session_id);
+    // Gate: advance the completion-delay timer now that we're committed
+    // to sending a request. Doing this after the API rate-limit check
+    // prevents advancing the timer on aborted attempts.
+    if state.disk_read_delay_ms > 0 {
+        runtime.next_completion_allowed = Some(
+            std::time::Instant::now() + std::time::Duration::from_millis(state.disk_read_delay_ms),
+        );
+    }
+
+    let messages = session::prepare_request_messages_for_session(state, session_id);
 
     // Trim RAM now that the full history is safely checkpointed to disk.
     trim_session_ram(state, session_id);
-
-    // If we have a partial response from a previous dropped stream,
-    // prepend it as context so the model can continue rather than
-    // starting over. This prevents the infinite retry loop where
-    // the same long response gets dropped repeatedly.
-    if !runtime.partial_response_backup.is_empty() {
-        let backup = std::mem::take(&mut runtime.partial_response_backup);
-        let continuation_prompt = format!(
-            "[Previous response was interrupted after {} characters. \
-             Continue from where you left off.\n\n--- INTERRUPTED OUTPUT ---\n{}\n--- END ---]",
-            backup.len(),
-            &backup[..backup.len().min(5000)]
-        );
-        messages.push(ApiMessage::user(continuation_prompt));
-    }
 
     // Read thinking/reasoning from the session so each session remembers
     // its own settings. Falls back to provider defaults for legacy sessions.
@@ -830,6 +807,12 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
         .find(|s| s.id == session_id)
         .map(|s| s.thinking_mode)
         .unwrap_or(false);
+    let session_handoff = state
+        .sessions
+        .iter()
+        .find(|s| s.id == session_id)
+        .map(|s| s.handoff_enabled)
+        .unwrap_or(true);
     let session_reasoning_effort: std::borrow::Cow<'_, str> = state
         .sessions
         .iter()
@@ -877,7 +860,7 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
     // Pre-flight context check: estimate if this request fits within the
     // model's context window before sending. Prevents opaque API errors.
     let _estimated = {
-        let tools_json = tool_definitions(provider.supports_strict_tools());
+        let tools_json = tool_definitions(provider.supports_strict_tools(), session_handoff);
         let msgs: Vec<serde_json::Value> = messages
             .iter()
             .map(|m| {
@@ -1010,6 +993,7 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
         top_p,
         frequency_penalty: provider.frequency_penalty.clamp(-2.0, 2.0),
         presence_penalty: provider.presence_penalty.clamp(-2.0, 2.0),
+        handoff_enabled: session_handoff,
     };
 
     runtime.pending_response.clear();
@@ -1242,21 +1226,17 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
     }
 
     if !done {
-        // Apply exponential backoff to the idle timeout based on how many
-        // times the stream has dropped. This gives the provider more time
-        // on each retry, preventing tight retry loops on slow connections.
+        // Apply a fixed idle timeout to detect stalled streams.
         if let Some(last) = runtime.last_delta_time {
-            let backoff_multiplier = 1u64 + runtime.stream_drop_retries as u64;
-            let effective_timeout = stream_idle_timeout_secs
-                .saturating_mul(backoff_multiplier)
-                .min(300);
-            if last.elapsed().as_secs() >= effective_timeout {
+            if last.elapsed().as_secs() >= stream_idle_timeout_secs {
                 runtime.provider_error = Some(format!(
                     "Stream stalled -- no data for {}s",
-                    effective_timeout
+                    stream_idle_timeout_secs
                 ));
-                runtime.status =
-                    format!("Stream stalled ({}s idle) -- aborting", effective_timeout);
+                runtime.status = format!(
+                    "Stream stalled ({}s idle) -- aborting",
+                    stream_idle_timeout_secs
+                );
                 done = true;
             }
         } else if let Some(start) = runtime.request_start {
@@ -1303,73 +1283,13 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
         }
 
         if let Some(err_msg) = runtime.provider_error.take() {
-            // Check if this is a stream drop (connection lost / stalled) with
-            // partial content. Save the partial response so we can resume.
-            let is_stream_drop = err_msg.contains("Stream stalled")
-                || err_msg.contains("Connection lost")
-                || err_msg.contains("timed out");
-            let has_partial = !runtime.pending_response.is_empty();
-
-            if is_stream_drop {
-                // Check for incomplete tasks BEFORE saving partial response.
-                // If there are tasks to continue, send a continue message
-                // instead of retrying silently. This nudge resumes the same
-                // session, so it doesn't depend on the handoff toggle.
-                if state.todo_list.has_incomplete() || state.project_task_list.has_incomplete() {
-                    runtime.pending_response.clear();
-                    runtime.pending_tool_calls.clear();
-                    runtime.assistant_tool_calls_json = None;
-                    runtime.stream_drop_retries = 0;
-                    runtime.partial_response_backup.clear();
-                    runtime.retry_count = 0;
-                    runtime.provider_error = None;
-                    auto_continue_impl(state, runtime, "", true, false);
-                    return true;
-                }
-                if has_partial {
-                    // Save partial response for continuation on retry.
-                    // Append to any existing backup in case of multiple drops.
-                    const MAX_BACKUP_SIZE: usize = 128 * 1024; // 128KB total cap
-                    let new_partial = std::mem::take(&mut runtime.pending_response);
-                    if !runtime.partial_response_backup.is_empty() {
-                        let current_len = runtime.partial_response_backup.len();
-                        let new_len = new_partial.len();
-                        if current_len + new_len <= MAX_BACKUP_SIZE {
-                            runtime.partial_response_backup.push_str(&new_partial);
-                        } else {
-                            // Make room by truncating existing backup if needed
-                            if current_len > MAX_BACKUP_SIZE / 2 {
-                                runtime
-                                    .partial_response_backup
-                                    .truncate(MAX_BACKUP_SIZE / 2);
-                                runtime
-                                    .partial_response_backup
-                                    .push_str("\n[...truncated...]");
-                            }
-                            let available = MAX_BACKUP_SIZE
-                                .saturating_sub(runtime.partial_response_backup.len());
-                            if available > 0 {
-                                runtime
-                                    .partial_response_backup
-                                    .push_str(&new_partial[..available.min(new_partial.len())]);
-                            }
-                        }
-                    } else {
-                        let available = MAX_BACKUP_SIZE.min(new_partial.len());
-                        runtime
-                            .partial_response_backup
-                            .push_str(&new_partial[..available]);
-                    }
-                    runtime.stream_drop_retries += 1;
-                }
-                runtime.pending_response.clear();
-                runtime.pending_tool_calls.clear();
-                runtime.assistant_tool_calls_json = None;
-            } else {
-                runtime.pending_response.clear();
-                runtime.pending_tool_calls.clear();
-                runtime.assistant_tool_calls_json = None;
-            }
+            // Stream drops are transient errors — clear state and let the
+            // retry logic below re-send the full context without a continue
+            // message. The task/todo list state is already in the conversation
+            // from prior create/update tool calls.
+            runtime.pending_response.clear();
+            runtime.pending_tool_calls.clear();
+            runtime.assistant_tool_calls_json = None;
 
             // Only retry transient errors (network issues, rate limits, etc).
             // Permanent errors (auth, content filter, invalid model) are not
@@ -1465,8 +1385,6 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 // sanitized on the first retry; further retries won't help.
                 if err_msg.contains("unterminated string") && runtime.retry_count >= 1 {
                     runtime.retry_count = 0;
-                    runtime.partial_response_backup.clear();
-                    runtime.stream_drop_retries = 0;
                     push_error(
                         state,
                         runtime,
@@ -1475,22 +1393,6 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                             err_msg,
                         ),
                     );
-                    return true;
-                }
-                // If there are incomplete tasks, send a continue message
-                // instead of retrying silently — the model needs to know
-                // the connection dropped and pick up where it left off.
-                // This resumes the same session, so it doesn't depend on
-                // the handoff toggle.
-                if state.todo_list.has_incomplete() || state.project_task_list.has_incomplete() {
-                    runtime.pending_response.clear();
-                    runtime.pending_tool_calls.clear();
-                    runtime.assistant_tool_calls_json = None;
-                    runtime.stream_drop_retries = 0;
-                    runtime.partial_response_backup.clear();
-                    runtime.retry_count = 0;
-                    runtime.provider_error = None;
-                    auto_continue_impl(state, runtime, "", true, false);
                     return true;
                 }
                 // Forever retry: exponential backoff 5s → 180s cap, never gives up.
@@ -1507,8 +1409,6 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
             } else {
                 // Permanent error — show and stop. User can fix and retry manually.
                 runtime.retry_count = 0;
-                runtime.partial_response_backup.clear();
-                runtime.stream_drop_retries = 0;
                 push_error(state, runtime, format!("Provider error: {}", err_msg));
             }
             return true;
@@ -1627,8 +1527,6 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
             }
             push_runtime(state, runtime, assistant_msg);
             runtime.pending_response.clear();
-            runtime.partial_response_backup.clear();
-            runtime.stream_drop_retries = 0;
             let session_id = runtime.active_session_id.as_deref().unwrap_or("");
             let root = project_root_for_session(state, session_id);
 
@@ -1849,21 +1747,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
             let response = std::mem::take(&mut runtime.pending_response);
             let reasoning = std::mem::take(&mut runtime.reasoning_buf);
             if response.trim().is_empty() {
-                // Done received with no content and no tool calls.
-                // If there are incomplete tasks, send a continue message
-                // instead of retrying — the model needs to know to pick up.
-                // This resumes the same session, so it doesn't depend on
-                // the handoff toggle.
-                if state.todo_list.has_incomplete() || state.project_task_list.has_incomplete() {
-                    runtime.pending_response.clear();
-                    runtime.pending_tool_calls.clear();
-                    runtime.assistant_tool_calls_json = None;
-                    runtime.stream_drop_retries = 0;
-                    runtime.partial_response_backup.clear();
-                    runtime.retry_count = 0;
-                    auto_continue_impl(state, runtime, "", true, false);
-                    return true;
-                }
+                // Empty response — retry with backoff.
                 let max_retries = state.max_retries;
                 if runtime.retry_count < max_retries {
                     runtime.retry_count += 1;
@@ -1874,8 +1758,6 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     start_completion(state, runtime);
                 } else {
                     runtime.retry_count = 0;
-                    runtime.partial_response_backup.clear();
-                    runtime.stream_drop_retries = 0;
                     push_error(
                         state,
                         runtime,
@@ -1888,24 +1770,13 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 return true;
             }
 
-            // If we have a partial response backup from a previous drop,
-            // prepend it to the current response so the full output is preserved.
-            let full_response = if !runtime.partial_response_backup.is_empty() {
-                let backup = std::mem::take(&mut runtime.partial_response_backup);
-                let combined = format!("{}{}", backup, response);
-                runtime.stream_drop_retries = 0;
-                combined
-            } else {
-                response
-            };
-
-            let mut msg = ChatMessage::new(Role::Assistant, full_response.clone());
+            let mut msg = ChatMessage::new(Role::Assistant, response.clone());
             if !reasoning.is_empty() {
                 msg.reasoning_content = Some(reasoning);
             }
             push_runtime(state, runtime, msg);
 
-            auto_execute(state, runtime, &full_response);
+            auto_execute(state, runtime, &response);
 
             // A "length" finish_reason means the provider cut the model off
             // before it chose to stop — treat that as incomplete even if the
@@ -1914,7 +1785,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
             if truncated {
                 runtime.status = "Response truncated by output limit -- continuing...".into();
             }
-            auto_continue(state, runtime, &full_response, truncated);
+            auto_continue(state, runtime, &response, truncated);
         }
     }
 
@@ -1980,7 +1851,7 @@ fn poll_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                         };
                         let model = model_owned.as_deref();
                         sess.recompute_messages_tokens(model);
-                        let tools_json = tool_definitions(true);
+                        let tools_json = tool_definitions(true, sess.handoff_enabled);
                         sess.recompute_full_tokens(&tools_json, model);
                     }
                     // Only start next completion if shell calls are also done.
@@ -2277,7 +2148,7 @@ fn commit_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) {
             };
             let model = model_owned.as_deref();
             sess.recompute_messages_tokens(model);
-            let tools_json = tool_definitions(true);
+            let tools_json = tool_definitions(true, sess.handoff_enabled);
             sess.recompute_full_tokens(&tools_json, model);
         }
 
@@ -2505,7 +2376,7 @@ fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
             } else {
                 Some(s.model.as_str())
             };
-            let tools_json = tool_definitions(true);
+            let tools_json = tool_definitions(true, s.handoff_enabled);
             let estimated = s.estimated_messages_tokens.saturating_add(
                 autocode_core::helpers::estimate_tools_tokens(&tools_json, model),
             );
@@ -2544,13 +2415,12 @@ fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
 }
 
 fn auto_continue(state: &mut AppState, runtime: &mut ChatRuntime, response: &str, truncated: bool) {
-    auto_continue_impl(state, runtime, response, false, truncated)
+    auto_continue_impl(state, runtime, response, truncated)
 }
 
 /// Send a "continue" message when there are incomplete tasks, the response
 /// was cut off by the output token limit, or the text itself signals the
-/// model meant to keep going. If `connection_dropped` is true the message
-/// mentions the dropped connection. This resumes work in the *same* session
+/// model meant to keep going. This resumes work in the *same* session
 /// and is intentionally independent of the handoff toggle — handoff only
 /// controls whether a *new* session gets spun up, not whether an unfinished
 /// turn gets nudged to continue.
@@ -2558,7 +2428,6 @@ fn auto_continue_impl(
     state: &mut AppState,
     runtime: &mut ChatRuntime,
     response: &str,
-    connection_dropped: bool,
     truncated: bool,
 ) {
     if runtime.handoff_in_progress {
@@ -2580,29 +2449,23 @@ fn auto_continue_impl(
     }
     runtime.continuation_chain += 1;
 
-    let prefix = if connection_dropped {
-        &state.connection_drop_prompt
-    } else {
-        ""
-    };
-    let sep = if prefix.is_empty() { "" } else { " " };
     let msg = if has_todo_incomplete {
         let (done, total) = state.todo_list.progress();
         format!(
-            "{prefix}{sep}You have unfinished tasks ({done}/{total} complete). Update the todo list and continue working.",
+            "You have unfinished tasks ({done}/{total} complete). Update the todo list and continue working.",
         )
     } else if has_project_tasks_incomplete {
         let (done, total) = state.project_task_list.progress();
         format!(
-            "{prefix}{sep}Project tasks remain ({done}/{total} complete). Update the task list and continue working.",
+            "Project tasks remain ({done}/{total} complete). Update the task list and continue working.",
         )
     } else if truncated {
         format!(
-            "{prefix}{sep}Your last response was cut off by the output token limit. Continue exactly where you left off.",
+            "Your last response was cut off by the output token limit. Continue exactly where you left off.",
         )
     } else {
         format!(
-            "{prefix}{sep}If you were working on something, continue now. Otherwise update or clear the task list.",
+            "If you were working on something, continue now. Otherwise update or clear the task list.",
         )
     };
 
@@ -2621,7 +2484,7 @@ fn auto_continue_impl(
         };
         let model = model_owned.as_deref();
         sess.recompute_messages_tokens(model);
-        let tools_json = tool_definitions(true);
+        let tools_json = tool_definitions(true, sess.handoff_enabled);
         sess.recompute_full_tokens(&tools_json, model);
     }
     start_completion(state, runtime);

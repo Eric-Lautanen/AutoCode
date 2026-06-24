@@ -481,7 +481,7 @@ fn load_new_session(state: &mut AppState, panel_state: &mut ChatPanelState) -> O
                 } else {
                     autocode_core::helpers::update_full_estimate(
                         new_sess,
-                        &provider::tool_definitions(true),
+                        &provider::tool_definitions(true, new_sess.handoff_enabled),
                     );
                 }
             }
@@ -1145,6 +1145,18 @@ fn render_structured_tool_result(
                 ui.push_id(format!("grep_{}_{}", msg.id, idx), |ui| {
                     render_code_block(ui, "grep", &body);
                 });
+            } else {
+                // Show "Did you mean" suggestions if present in the tool result.
+                let body = helpers::get_tool_body(msg);
+                if let Some(suggestions) = body.strip_prefix("No matches for")
+                    && let Some(pos) = suggestions.find("Did you mean:")
+                {
+                    ui.label(
+                        RichText::new(suggestions[pos..].trim())
+                            .size(12.0)
+                            .color(theme().system_badge),
+                    );
+                }
             }
         }
         "web_search" | "fetch_url" => {
