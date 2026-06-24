@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::git::GitFileStatus;
 use crate::helpers;
+use crate::helpers::levenshtein;
 use autocode_core::utils::fsutil;
 
 #[derive(Debug, Clone)]
@@ -368,6 +369,284 @@ pub fn glob_files(search_root: Option<&Path>, pattern: &str) -> Vec<String> {
     results
 }
 
+/// Returns true if the pattern contains regex metacharacters, meaning fuzzy
+/// suggestions would not be meaningful.
+fn is_regex_pattern(pattern: &str) -> bool {
+    pattern.contains(|c: char| {
+        matches!(
+            c,
+            '^' | '$' | '.' | '*' | '+' | '?' | '[' | ']' | '(' | ')' | '|' | '\\'
+        )
+    })
+}
+
+/// Maximum Levenshtein distance to consider a word a "close" match.
+const MAX_FUZZY_DISTANCE: usize = 3;
+/// Maximum number of fuzzy suggestions to return.
+const MAX_FUZZY_SUGGESTIONS: usize = 5;
+/// Maximum number of files to scan for fuzzy suggestions.
+const MAX_FUZZY_FILES: usize = 200;
+
+/// Score a candidate word against the search pattern. Returns None if not
+/// relevant, or Some((score, word)) where lower score = better match.
+///
+/// Scoring (lower is better):
+///   1 = exact substring of the candidate (e.g. "pattern" in "pattern_id")
+///   2 = candidate is a substring of the pattern (e.g. "id" in "pattern_id")
+///   3+ = Levenshtein distance (only if ≤ MAX_FUZZY_DISTANCE)
+fn score_candidate(
+    pattern_cmp: &str,
+    word_cmp: &str,
+    word_original: &str,
+) -> Option<(usize, String)> {
+    // Exact match is not a suggestion.
+    if pattern_cmp == word_cmp {
+        return None;
+    }
+
+    // Substring match: pattern is contained in the candidate word.
+    // e.g. searching "pattern" finds "pattern_id", "match_pattern", etc.
+    if word_cmp.contains(pattern_cmp) {
+        // Prefer shorter words (closer to the pattern) as tiebreaker.
+        let len_diff = word_cmp.len().saturating_sub(pattern_cmp.len());
+        return Some((100 + len_diff, word_original.to_string()));
+    }
+
+    // Substring match: candidate is contained in the pattern.
+    // e.g. searching "pattern_id" finds "pattern" and "id".
+    if pattern_cmp.contains(word_cmp) && word_cmp.len() >= 3 {
+        let len_diff = pattern_cmp.len().saturating_sub(word_cmp.len());
+        return Some((200 + len_diff, word_original.to_string()));
+    }
+
+    // Prefix match: pattern starts with the candidate or vice versa.
+    // e.g. "explrer" starts with "expl" → finds "explorer" via prefix.
+    if word_cmp.starts_with(pattern_cmp) || pattern_cmp.starts_with(word_cmp) {
+        let len_diff = word_cmp.len().abs_diff(pattern_cmp.len());
+        if len_diff <= MAX_FUZZY_DISTANCE + 1 {
+            return Some((200 + len_diff, word_original.to_string()));
+        }
+    }
+
+    // Levenshtein distance for close misspellings.
+    // Allow length difference up to MAX_FUZZY_DISTANCE + 1 to catch
+    // transpositions and single-char errors that shift the rest.
+    if word_cmp.len() > pattern_cmp.len() + MAX_FUZZY_DISTANCE + 1
+        || pattern_cmp.len() > word_cmp.len() + MAX_FUZZY_DISTANCE + 1
+    {
+        return None;
+    }
+    let dist = levenshtein(pattern_cmp, word_cmp);
+    if dist > 0 && dist <= MAX_FUZZY_DISTANCE {
+        Some((300 + dist, word_original.to_string()))
+    } else {
+        None
+    }
+}
+
+/// Walk the same files that `grep_walk` would search, extract unique words from
+/// their contents, and return up to `MAX_FUZZY_SUGGESTIONS` words that are
+/// close to `pattern`.
+///
+/// If `case_sensitive` is false, comparison is done in lowercase.
+fn fuzzy_suggest(
+    search_path: &Path,
+    project_root: &Path,
+    pattern: &str,
+    file_glob: &str,
+    case_sensitive: bool,
+    gitignore: Option<&Gitignore>,
+) -> Vec<String> {
+    let pattern_cmp = if case_sensitive {
+        pattern.to_string()
+    } else {
+        pattern.to_lowercase()
+    };
+
+    // Skip very short patterns — fuzzy suggestions are not useful.
+    if pattern_cmp.len() < 2 {
+        return Vec::new();
+    }
+
+    let mut candidates: HashSet<String> = HashSet::new();
+    let mut files_scanned: usize = 0;
+
+    fuzzy_walk(
+        search_path,
+        search_path,
+        project_root,
+        file_glob,
+        gitignore,
+        &mut candidates,
+        &mut files_scanned,
+    );
+
+    // Score each candidate and collect the best ones.
+    let mut scored: Vec<(usize, String)> = candidates
+        .into_iter()
+        .filter_map(|word| {
+            let word_cmp = if case_sensitive {
+                word.clone()
+            } else {
+                word.to_lowercase()
+            };
+            score_candidate(&pattern_cmp, &word_cmp, &word)
+        })
+        .collect();
+
+    scored.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    scored.truncate(MAX_FUZZY_SUGGESTIONS);
+    scored.into_iter().map(|(_, w)| w).collect()
+}
+
+fn fuzzy_walk(
+    dir: &Path,
+    search_root: &Path,
+    project_root: &Path,
+    file_glob: &str,
+    gitignore: Option<&Gitignore>,
+    candidates: &mut HashSet<String>,
+    files_scanned: &mut usize,
+) {
+    if *files_scanned >= MAX_FUZZY_FILES {
+        return;
+    }
+
+    let Ok(entries) = fsutil::read_dir(dir) else {
+        return;
+    };
+
+    for entry in entries {
+        if *files_scanned >= MAX_FUZZY_FILES {
+            return;
+        }
+
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let path = entry.path();
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+        if name == ".git" || name.starts_with('.') {
+            continue;
+        }
+
+        let is_dir = fsutil::is_dir(&path);
+
+        if let Some(gi) = gitignore {
+            let rel = path
+                .strip_prefix(project_root)
+                .ok()
+                .and_then(|p| p.to_str())
+                .unwrap_or(name)
+                .replace('\\', "/");
+            if gi.is_ignored(name, &rel, is_dir) {
+                continue;
+            }
+        }
+
+        if is_dir {
+            fuzzy_walk(
+                &path,
+                search_root,
+                project_root,
+                file_glob,
+                gitignore,
+                candidates,
+                files_scanned,
+            );
+        } else {
+            let rel_raw = path
+                .strip_prefix(search_root)
+                .ok()
+                .and_then(|p| p.to_str())
+                .unwrap_or(name);
+            let rel_for_glob = rel_raw.replace('\\', "/");
+            if !helpers::glob_match(file_glob, &rel_for_glob) {
+                continue;
+            }
+
+            if let Ok(meta) = fsutil::metadata(&path)
+                && meta.len() > 1024 * 1024
+            {
+                continue;
+            }
+
+            let content = match fsutil::read_to_string(&path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            if content.contains('\0') {
+                continue;
+            }
+
+            *files_scanned += 1;
+
+            // Extract unique words from the file content.
+            for token in content.split(|c: char| !c.is_alphanumeric() && c != '_') {
+                let trimmed = token.trim_matches('_');
+                if trimmed.len() >= 2 && trimmed.len() <= 64 {
+                    candidates.insert(trimmed.to_string());
+                }
+            }
+        }
+    }
+}
+
+/// Extract fuzzy suggestions from a single file's content.
+fn fuzzy_suggest_single_file(path: &Path, pattern: &str, case_sensitive: bool) -> Vec<String> {
+    let pattern_cmp = if case_sensitive {
+        pattern.to_string()
+    } else {
+        pattern.to_lowercase()
+    };
+
+    if pattern_cmp.len() < 2 {
+        return Vec::new();
+    }
+
+    if let Ok(meta) = fsutil::metadata(path)
+        && meta.len() > 1024 * 1024
+    {
+        return Vec::new();
+    }
+
+    let content = match fsutil::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+
+    if content.contains('\0') {
+        return Vec::new();
+    }
+
+    let mut candidates: HashSet<String> = HashSet::new();
+    for token in content.split(|c: char| !c.is_alphanumeric() && c != '_') {
+        let trimmed = token.trim_matches('_');
+        if trimmed.len() >= 2 && trimmed.len() <= 64 {
+            candidates.insert(trimmed.to_string());
+        }
+    }
+
+    let mut scored: Vec<(usize, String)> = candidates
+        .into_iter()
+        .filter_map(|word| {
+            let word_cmp = if case_sensitive {
+                word.clone()
+            } else {
+                word.to_lowercase()
+            };
+            score_candidate(&pattern_cmp, &word_cmp, &word)
+        })
+        .collect();
+
+    scored.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    scored.truncate(MAX_FUZZY_SUGGESTIONS);
+    scored.into_iter().map(|(_, w)| w).collect()
+}
+
 pub fn grep_files(
     search_path: &Path,
     pattern: &str,
@@ -390,11 +669,18 @@ pub fn grep_files(
             &mut results,
         );
         if results.is_empty() {
-            format!(
+            let mut msg = format!(
                 "No matches for \"{}\" in {}",
                 pattern,
                 autocode_core::utils::fsutil::display_path(search_path).display()
-            )
+            );
+            if !is_regex_pattern(pattern) {
+                let suggestions = fuzzy_suggest_single_file(search_path, pattern, case_sensitive);
+                if !suggestions.is_empty() {
+                    msg.push_str(&format!(". Did you mean: {}", suggestions.join(", ")));
+                }
+            }
+            msg
         } else {
             format!(
                 "Searched for \"{}\" in {}\n{} match(es):\n{}",
@@ -427,11 +713,25 @@ pub fn grep_files(
         );
 
         if results.is_empty() {
-            format!(
+            let mut msg = format!(
                 "No matches for \"{}\" in {}",
                 pattern,
                 autocode_core::utils::fsutil::display_path(search_path).display()
-            )
+            );
+            if !is_regex_pattern(pattern) {
+                let suggestions = fuzzy_suggest(
+                    search_path,
+                    &project_root,
+                    pattern,
+                    file_glob,
+                    case_sensitive,
+                    gitignore.as_ref(),
+                );
+                if !suggestions.is_empty() {
+                    msg.push_str(&format!(". Did you mean: {}", suggestions.join(", ")));
+                }
+            }
+            msg
         } else {
             format!(
                 "Searched for \"{}\" in {}\n{} match(es):\n{}",
