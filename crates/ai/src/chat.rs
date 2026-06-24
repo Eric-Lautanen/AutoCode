@@ -33,6 +33,7 @@ fn is_transient_error(msg: &str) -> bool {
         "credit",  // catches "credit limit", "credit balance"
         "payment", // catches "payment required", "payment_required"
         "402",     // HTTP 402 Payment Required
+        "degraded",// Stale/degraded function ID — won't recover on retry
         "model_not_found",
         "context_length",
         "max_context",
@@ -1574,6 +1575,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     msg.tool_call_id = Some(tc.id.clone());
                     msg.tool_meta = Some(ToolMeta {
                         tool_name: "name_session".into(),
+                        file_path: Some(label.clone()),
                         ..Default::default()
                     });
                     push_to_session(state, runtime.active_session_id.as_deref(), msg);
@@ -1592,6 +1594,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     msg.tool_call_id = Some(tc.id.clone());
                     msg.tool_meta = Some(ToolMeta {
                         tool_name: "name_session".into(),
+                        file_path: Some(safe.clone()),
                         ..Default::default()
                     });
                     push_to_session(state, runtime.active_session_id.as_deref(), msg);

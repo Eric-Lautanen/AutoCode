@@ -23,7 +23,7 @@ pub use paths::{
     resolve_path_write, resolve_path_write_cached,
 };
 
-pub use regex::matches_pattern;
+pub use regex::{has_regex_meta, matches_pattern};
 
 pub use serde_defaults::{
     default_context_tokens, default_disk_read_delay_ms, default_disk_write_rate_ms,

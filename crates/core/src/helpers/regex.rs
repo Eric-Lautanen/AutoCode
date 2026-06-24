@@ -34,7 +34,7 @@ pub fn matches_pattern(pattern: &str, text: &str, anchored: bool) -> bool {
 }
 
 /// Returns true if a pattern string contains regex metacharacters.
-fn has_regex_meta(s: &str) -> bool {
+pub fn has_regex_meta(s: &str) -> bool {
     s.contains(|c: char| {
         matches!(
             c,

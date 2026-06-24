@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::git::GitFileStatus;
 use crate::helpers;
 use crate::helpers::levenshtein;
+use autocode_core::helpers::has_regex_meta;
 use autocode_core::utils::fsutil;
 
 #[derive(Debug, Clone)]
@@ -369,16 +370,7 @@ pub fn glob_files(search_root: Option<&Path>, pattern: &str) -> Vec<String> {
     results
 }
 
-/// Returns true if the pattern contains regex metacharacters, meaning fuzzy
-/// suggestions would not be meaningful.
-fn is_regex_pattern(pattern: &str) -> bool {
-    pattern.contains(|c: char| {
-        matches!(
-            c,
-            '^' | '$' | '.' | '*' | '+' | '?' | '[' | ']' | '(' | ')' | '|' | '\\'
-        )
-    })
-}
+
 
 /// Maximum Levenshtein distance to consider a word a "close" match.
 const MAX_FUZZY_DISTANCE: usize = 3;
@@ -390,13 +382,11 @@ const MAX_FUZZY_FILES: usize = 200;
 /// Score a candidate word against the search pattern. Returns None if not
 /// relevant, or Some((score, word)) where lower score = better match.
 ///
-/// Score a candidate word against the search pattern. Returns None if not
-/// relevant, or Some((score, word)) where lower score = better match.
-///
 /// Scoring (lower is better):
 ///   1xx = exact substring of the candidate (e.g. "pattern" in "pattern_id")
 ///   2xx = candidate is a substring of the pattern, or prefix match
 ///   3xx = Levenshtein distance (only if ≤ MAX_FUZZY_DISTANCE)
+///   4xx = line-level phrase similarity (for multi-word patterns)
 fn score_candidate(
     pattern_cmp: &str,
     word_cmp: &str,
@@ -458,6 +448,40 @@ fn score_candidate(
     }
 }
 
+/// Compute a simple similarity ratio between two strings (0.0–1.0).
+/// Uses Levenshtein distance normalized by the maximum length.
+fn similarity_ratio(a: &str, b: &str) -> f64 {
+    if a.is_empty() && b.is_empty() {
+        return 1.0;
+    }
+    if a.is_empty() || b.is_empty() {
+        return 0.0;
+    }
+    let dist = levenshtein(a, b);
+    let max_len = a.len().max(b.len());
+    1.0 - (dist as f64 / max_len as f64)
+}
+
+/// Score a candidate line against a multi-word pattern using phrase-level
+/// similarity.  Returns None if the pattern is a single word or the line
+/// is not similar enough.
+fn score_line_phrase(pattern_cmp: &str, line: &str) -> Option<(usize, String)> {
+    // Only apply phrase matching for multi-word patterns.
+    if !pattern_cmp.contains(' ') {
+        return None;
+    }
+    let line_cmp = line.to_lowercase();
+    let ratio = similarity_ratio(pattern_cmp, &line_cmp);
+    // Threshold tuned to catch "connect to server" ↔ "connecting to the server"
+    if ratio >= 0.35 {
+        // Lower score = better match; 400 base for phrase matches.
+        let score = 400 + ((1.0 - ratio) * 100.0) as usize;
+        Some((score, line.to_string()))
+    } else {
+        None
+    }
+}
+
 /// Walk the same files that `grep_walk` would search, extract unique words from
 /// their contents, and return up to `MAX_FUZZY_SUGGESTIONS` words that are
 /// close to `pattern`.
@@ -483,6 +507,7 @@ fn fuzzy_suggest(
     }
 
     let mut candidates: HashSet<String> = HashSet::new();
+    let mut phrase_lines: Vec<String> = Vec::new();
     let mut files_scanned: usize = 0;
 
     fuzzy_walk(
@@ -492,6 +517,7 @@ fn fuzzy_suggest(
         file_glob,
         gitignore,
         &mut candidates,
+        &mut phrase_lines,
         &mut files_scanned,
     );
 
@@ -508,33 +534,40 @@ fn fuzzy_suggest(
         })
         .collect();
 
+    // For multi-word patterns, also score lines as phrase candidates.
+    if pattern_cmp.contains(' ') {
+        for line in phrase_lines {
+            if let Some((score, phrase)) = score_line_phrase(&pattern_cmp, &line) {
+                scored.push((score, phrase));
+            }
+        }
+    }
+
     scored.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
     scored.truncate(MAX_FUZZY_SUGGESTIONS);
     scored.into_iter().map(|(_, w)| w).collect()
 }
 
-fn fuzzy_walk(
+/// Callback invoked for each file that passes filtering during a directory walk.
+/// Receives the file path, its relative path from the search root, and its content.
+type FileVisitor<'a> = &'a mut dyn FnMut(&Path, &str, &str);
+
+/// Walk files under `dir` that match `file_glob`, invoking `visitor` for each
+/// file that passes gitignore, size, and binary checks.  The traversal logic
+/// is shared between grep and fuzzy-suggestion walks.
+fn walk_files(
     dir: &Path,
     search_root: &Path,
     project_root: &Path,
     file_glob: &str,
     gitignore: Option<&Gitignore>,
-    candidates: &mut HashSet<String>,
-    files_scanned: &mut usize,
+    visitor: FileVisitor,
 ) {
-    if *files_scanned >= MAX_FUZZY_FILES {
-        return;
-    }
-
     let Ok(entries) = fsutil::read_dir(dir) else {
         return;
     };
 
     for entry in entries {
-        if *files_scanned >= MAX_FUZZY_FILES {
-            return;
-        }
-
         let entry = match entry {
             Ok(e) => e,
             Err(_) => continue,
@@ -561,15 +594,7 @@ fn fuzzy_walk(
         }
 
         if is_dir {
-            fuzzy_walk(
-                &path,
-                search_root,
-                project_root,
-                file_glob,
-                gitignore,
-                candidates,
-                files_scanned,
-            );
+            walk_files(&path, search_root, project_root, file_glob, gitignore, visitor);
         } else {
             let rel_raw = path
                 .strip_prefix(search_root)
@@ -581,6 +606,7 @@ fn fuzzy_walk(
                 continue;
             }
 
+            // Skip files larger than 1 MB to avoid OOM and slow searches.
             if let Ok(meta) = fsutil::metadata(&path)
                 && meta.len() > 1024 * 1024
             {
@@ -592,8 +618,39 @@ fn fuzzy_walk(
                 Err(_) => continue,
             };
 
+            // Skip files that look binary (contain null bytes).
             if content.contains('\0') {
                 continue;
+            }
+
+            visitor(&path, rel_raw, &content);
+        }
+    }
+}
+
+fn fuzzy_walk(
+    dir: &Path,
+    search_root: &Path,
+    project_root: &Path,
+    file_glob: &str,
+    gitignore: Option<&Gitignore>,
+    candidates: &mut HashSet<String>,
+    phrase_lines: &mut Vec<String>,
+    files_scanned: &mut usize,
+) {
+    if *files_scanned >= MAX_FUZZY_FILES {
+        return;
+    }
+
+    walk_files(
+        dir,
+        search_root,
+        project_root,
+        file_glob,
+        gitignore,
+        &mut |_path: &Path, _rel: &str, content: &str| {
+            if *files_scanned >= MAX_FUZZY_FILES {
+                return;
             }
 
             *files_scanned += 1;
@@ -605,12 +662,20 @@ fn fuzzy_walk(
                     candidates.insert(trimmed.to_string());
                 }
             }
-        }
-    }
+
+            // Collect lines for potential phrase-level matching.
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if trimmed.len() >= 10 && trimmed.len() <= 200 {
+                    phrase_lines.push(trimmed.to_string());
+                }
+            }
+        },
+    );
 }
 
 /// Extract fuzzy suggestions from a single file's content.
-fn fuzzy_suggest_single_file(path: &Path, pattern: &str, case_sensitive: bool) -> Vec<String> {
+fn fuzzy_suggest_single_file(content: &str, pattern: &str, case_sensitive: bool) -> Vec<String> {
     let pattern_cmp = if case_sensitive {
         pattern.to_string()
     } else {
@@ -621,26 +686,21 @@ fn fuzzy_suggest_single_file(path: &Path, pattern: &str, case_sensitive: bool) -
         return Vec::new();
     }
 
-    if let Ok(meta) = fsutil::metadata(path)
-        && meta.len() > 1024 * 1024
-    {
-        return Vec::new();
-    }
-
-    let content = match fsutil::read_to_string(path) {
-        Ok(c) => c,
-        Err(_) => return Vec::new(),
-    };
-
-    if content.contains('\0') {
-        return Vec::new();
-    }
-
     let mut candidates: HashSet<String> = HashSet::new();
+    let mut phrase_lines: Vec<String> = Vec::new();
+
     for token in content.split(|c: char| !c.is_alphanumeric() && c != '_') {
         let trimmed = token.trim_matches('_');
         if trimmed.len() >= 2 && trimmed.len() <= 64 {
             candidates.insert(trimmed.to_string());
+        }
+    }
+
+    // Collect lines for potential phrase-level matching.
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.len() >= 10 && trimmed.len() <= 200 {
+            phrase_lines.push(trimmed.to_string());
         }
     }
 
@@ -656,11 +716,19 @@ fn fuzzy_suggest_single_file(path: &Path, pattern: &str, case_sensitive: bool) -
         })
         .collect();
 
+    // For multi-word patterns, also score lines as phrase candidates.
+    if pattern_cmp.contains(' ') {
+        for line in phrase_lines {
+            if let Some((score, phrase)) = score_line_phrase(&pattern_cmp, &line) {
+                scored.push((score, phrase));
+            }
+        }
+    }
+
     scored.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
     scored.truncate(MAX_FUZZY_SUGGESTIONS);
     scored.into_iter().map(|(_, w)| w).collect()
 }
-
 pub fn grep_files(
     search_path: &Path,
     pattern: &str,
@@ -672,10 +740,9 @@ pub fn grep_files(
     let project_root = autocode_core::utils::fsutil::extended_path(&project_root);
     let search_path = &autocode_core::utils::fsutil::extended_path(search_path);
 
-    // If the search path is a single file, search it directly.
     if search_path.is_file() {
         let mut results: Vec<String> = Vec::new();
-        search_file_for_pattern(
+        let content = search_file_for_pattern(
             search_path,
             pattern,
             case_sensitive,
@@ -688,10 +755,17 @@ pub fn grep_files(
                 pattern,
                 autocode_core::utils::fsutil::display_path(search_path).display()
             );
-            if !is_regex_pattern(pattern) {
-                let suggestions = fuzzy_suggest_single_file(search_path, pattern, case_sensitive);
+            if !has_regex_meta(pattern) && let Some(content) = content {
+                let suggestions = fuzzy_suggest_single_file(&content, pattern, case_sensitive);
                 if !suggestions.is_empty() {
-                    msg.push_str(&format!(". Did you mean: {}", suggestions.join(", ")));
+                    msg.push_str(&format!(
+                        ". Try grep again with one of: {}",
+                        suggestions
+                            .iter()
+                            .map(|s| format!("\"{}\"", s))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
                 }
             }
             msg
@@ -732,7 +806,7 @@ pub fn grep_files(
                 pattern,
                 autocode_core::utils::fsutil::display_path(search_path).display()
             );
-            if !is_regex_pattern(pattern) {
+            if !has_regex_meta(pattern) {
                 let suggestions = fuzzy_suggest(
                     search_path,
                     &project_root,
@@ -742,7 +816,14 @@ pub fn grep_files(
                     gitignore.as_ref(),
                 );
                 if !suggestions.is_empty() {
-                    msg.push_str(&format!(". Did you mean: {}", suggestions.join(", ")));
+                    msg.push_str(&format!(
+                        ". Try grep again with one of: {}",
+                        suggestions
+                            .iter()
+                            .map(|s| format!("\"{}\"", s))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
                 }
             }
             msg
@@ -766,28 +847,29 @@ struct GrepParams<'a> {
 }
 
 /// Search a single file for a pattern and add results to the vector.
+/// Returns the file content so callers can reuse it for fuzzy suggestions.
 fn search_file_for_pattern(
     path: &Path,
     pattern: &str,
     case_sensitive: bool,
     max_results: usize,
     results: &mut Vec<String>,
-) {
+) -> Option<String> {
     // Skip files larger than 1 MB.
     if let Ok(meta) = fsutil::metadata(path)
         && meta.len() > 1024 * 1024
     {
-        return;
+        return None;
     }
 
     let content = match fsutil::read_to_string(path) {
         Ok(c) => c,
-        Err(_) => return,
+        Err(_) => return None,
     };
 
     // Skip files that look binary.
     if content.contains('\0') {
-        return;
+        return Some(content);
     }
 
     let pattern_lower = if !case_sensitive {
@@ -811,6 +893,8 @@ fn search_file_for_pattern(
             results.push(format!("{}:{}: {}", file_name, i + 1, line));
         }
     }
+
+    Some(content)
 }
 
 fn grep_walk(
@@ -821,72 +905,15 @@ fn grep_walk(
     results: &mut Vec<String>,
     gitignore: Option<&Gitignore>,
 ) {
-    if results.len() >= params.max_results {
-        return;
-    }
-
-    let Ok(entries) = fsutil::read_dir(dir) else {
-        return;
-    };
-
-    for entry in entries {
-        if results.len() >= params.max_results {
-            return;
-        }
-
-        let entry = match entry {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        let path = entry.path();
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-
-        if name == ".git" || name.starts_with('.') {
-            continue;
-        }
-
-        let is_dir = fsutil::is_dir(&path);
-
-        if let Some(gi) = gitignore {
-            let rel = path
-                .strip_prefix(project_root)
-                .ok()
-                .and_then(|p| p.to_str())
-                .unwrap_or(name)
-                .replace('\\', "/");
-            if gi.is_ignored(name, &rel, is_dir) {
-                continue;
-            }
-        }
-
-        if is_dir {
-            grep_walk(&path, search_root, project_root, params, results, gitignore);
-        } else {
-            let rel_raw = path
-                .strip_prefix(search_root)
-                .ok()
-                .and_then(|p| p.to_str())
-                .unwrap_or(name);
-            let rel_for_glob = rel_raw.replace('\\', "/");
-            if !helpers::glob_match(params.file_glob, &rel_for_glob) {
-                continue;
-            }
-
-            // Skip files larger than 1 MB to avoid OOM and slow searches.
-            if let Ok(meta) = fsutil::metadata(&path)
-                && meta.len() > 1024 * 1024
-            {
-                continue;
-            }
-
-            let content = match fsutil::read_to_string(&path) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-
-            // Skip files that look binary (contain null bytes).
-            if content.contains('\0') {
-                continue;
+    walk_files(
+        dir,
+        search_root,
+        project_root,
+        params.file_glob,
+        gitignore,
+        &mut |_path: &Path, rel_raw: &str, content: &str| {
+            if results.len() >= params.max_results {
+                return;
             }
 
             let pattern_lower = if !params.case_sensitive {
@@ -908,6 +935,6 @@ fn grep_walk(
                     results.push(format!("{}:{}: {}", rel_raw, i + 1, line));
                 }
             }
-        }
-    }
+        },
+    );
 }
