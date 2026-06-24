@@ -2731,9 +2731,13 @@ fn build_tool_meta(tc: &ToolCall, result: &str, duration_ms: u64) -> ToolMeta {
         }
         "patch_lines" => {
             let path = args["path"].as_str().unwrap_or("").to_string();
+            let start_line = args["start_line"].as_u64().unwrap_or(0) as usize;
+            let end_line = args["end_line"].as_u64().unwrap_or(0) as usize;
             ToolMeta {
                 tool_name: "patch_lines".into(),
                 file_path: Some(path),
+                edit_line: Some(start_line),
+                line_count: Some(end_line.saturating_sub(start_line).saturating_add(1)),
                 is_error,
                 duration_ms: Some(duration_ms),
                 ..Default::default()

@@ -994,7 +994,7 @@ fn render_structured_tool_result(
                 ui.label(RichText::new(body).size(11.0).color(theme().error));
             }
         }
-        "patch_file" | "patch_lines" => {
+        "patch_file" => {
             let path = meta.file_path.as_deref().unwrap_or("file");
             if meta.is_error {
                 ui.label(
@@ -1014,11 +1014,82 @@ fn render_structured_tool_result(
                 );
                 let old_text = meta.old_text.as_deref().unwrap_or("");
                 let new_text = meta.new_text.as_deref().unwrap_or("");
-                // edit_line is 1-based in ToolMeta; convert to 0-based offset
                 let line_offset = meta.edit_line.map(|l| l.saturating_sub(1)).unwrap_or(0);
                 ui.push_id(format!("patch_{}_{}", msg.id, idx), |ui| {
                     render_unified_diff(ui, old_text, new_text, sid, line_offset);
                 });
+            }
+        }
+        "patch_lines" => {
+            let path = meta.file_path.as_deref().unwrap_or("file");
+            if meta.is_error {
+                ui.label(
+                    RichText::new(format!("[FAIL] Patch failed: {}", path))
+                        .size(12.0)
+                        .color(theme().error)
+                        .italics(),
+                );
+                let body = helpers::get_tool_body(msg);
+                ui.label(RichText::new(body).size(11.0).color(theme().error));
+            } else {
+                ui.label(
+                    RichText::new(format!("[File] Patched {}", path))
+                        .size(12.0)
+                        .color(theme().tool_badge)
+                        .strong(),
+                );
+                if let Some(start) = meta.edit_line {
+                    let end = start + meta.line_count.unwrap_or(0).saturating_sub(1);
+                    // Reuse Copy button logic: build summary text for clipboard
+                    let summary = format!("Patched lines {} - {}", start, end);
+                    ui.add_space(4.0);
+                    ui.scope(|ui| {
+                        ui.set_max_height(f32::INFINITY);
+                        egui::Frame::NONE
+                            .fill(Color32::from_rgb(40, 33, 20))
+                            .corner_radius(4.0)
+                            .stroke(egui::Stroke::new(1.0, Color32::from_rgb(80, 66, 40)))
+                            .inner_margin(egui::Margin {
+                                left: 10,
+                                right: 10,
+                                top: 6,
+                                bottom: 6,
+                            })
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        RichText::new("patch")
+                                            .size(9.5)
+                                            .color(theme().tool_badge)
+                                            .monospace(),
+                                    );
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if ui
+                                                .small_button(
+                                                    RichText::new("Copy")
+                                                        .size(9.0)
+                                                        .color(theme().text_muted),
+                                                )
+                                                .on_hover_text("Copy patch summary to clipboard")
+                                                .clicked()
+                                            {
+                                                ui.ctx().copy_text(summary.clone());
+                                            }
+                                        },
+                                    );
+                                });
+                                ui.label(
+                                    RichText::new(&summary)
+                                        .size(12.0)
+                                        .color(theme().tool_badge)
+                                        .monospace()
+                                        .strong(),
+                                );
+                            });
+                    });
+                }
             }
         }
         "run_shell" => {
