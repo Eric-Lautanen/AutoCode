@@ -921,7 +921,7 @@ fn render_structured_tool_result(
             ui.label(
                 RichText::new(header)
                     .size(12.0)
-                    .color(theme().system_badge)
+                    .color(Color32::from_rgb(161, 120, 219))
                     .strong(),
             );
             ui.push_id(format!("code_{}_{}", msg.id, idx), |ui| {
@@ -944,7 +944,7 @@ fn render_structured_tool_result(
             ui.label(
                 RichText::new(header)
                     .size(12.0)
-                    .color(theme().system_badge)
+                    .color(Color32::from_rgb(161, 120, 219))
                     .strong(),
             );
             ui.push_id(format!("code_{}_{}", msg.id, idx), |ui| {
@@ -960,8 +960,6 @@ fn render_structured_tool_result(
             let body = helpers::get_tool_body(msg);
             let file_list = meta.file_path.as_deref().unwrap_or("");
             let file_count = if file_list.is_empty() {
-                // Parse file paths from body for backwards compatibility
-                // (older messages predate build_tool_meta storing file_path).
                 body.lines().filter(|l| l.starts_with("path:")).count()
             } else {
                 file_list.split(", ").filter(|s| !s.is_empty()).count()
@@ -975,7 +973,7 @@ fn render_structured_tool_result(
             ui.label(
                 RichText::new(header)
                     .size(12.0)
-                    .color(theme().system_badge)
+                    .color(Color32::from_rgb(161, 120, 219))
                     .strong(),
             );
             ui.push_id(format!("code_{}_{}", msg.id, idx), |ui| {
@@ -996,7 +994,7 @@ fn render_structured_tool_result(
                 ui.label(RichText::new(body).size(11.0).color(theme().error));
             }
         }
-        "patch_file" => {
+        "patch_file" | "patch_lines" => {
             let path = meta.file_path.as_deref().unwrap_or("file");
             if meta.is_error {
                 ui.label(
@@ -1011,7 +1009,7 @@ fn render_structured_tool_result(
                 ui.label(
                     RichText::new(format!("[File] Patched {}", path))
                         .size(12.0)
-                        .color(theme().accent)
+                        .color(theme().tool_badge)
                         .strong(),
                 );
                 let old_text = meta.old_text.as_deref().unwrap_or("");
@@ -1052,7 +1050,7 @@ fn render_structured_tool_result(
             ui.label(
                 RichText::new(format!("[File] List directory — {} entries", count))
                     .size(12.0)
-                    .color(theme().accent)
+                    .color(theme().accent_dim)
                     .strong(),
             );
             let body = helpers::get_tool_body(msg);
@@ -1075,7 +1073,7 @@ fn render_structured_tool_result(
                 ui.label(
                     RichText::new(format!("[File] Deleted: {}", path))
                         .size(12.0)
-                        .color(theme().accent)
+                        .color(theme().error)
                         .strong(),
                 );
             }
@@ -1096,7 +1094,7 @@ fn render_structured_tool_result(
                 ui.label(
                     RichText::new(format!("[File] Renamed {} -> {}", from, to))
                         .size(12.0)
-                        .color(theme().accent)
+                        .color(Color32::from_rgb(196, 168, 106))
                         .strong(),
                 );
             }
@@ -1116,7 +1114,7 @@ fn render_structured_tool_result(
                 ui.label(
                     RichText::new(format!("[File] Created directory: {}", path))
                         .size(12.0)
-                        .color(theme().accent)
+                        .color(Color32::from_rgb(74, 156, 133))
                         .strong(),
                 );
             }
@@ -1134,7 +1132,7 @@ fn render_structured_tool_result(
                 RichText::new(header)
                     .size(12.0)
                     .color(if matches > 0 {
-                        theme().accent
+                        Color32::from_rgb(212, 122, 92)
                     } else {
                         theme().system_badge
                     })
@@ -1189,7 +1187,7 @@ fn render_structured_tool_result(
                     done, total
                 ))
                 .size(12.0)
-                .color(theme().accent)
+                .color(theme().tool_badge)
                 .italics(),
             );
         }
@@ -1198,7 +1196,7 @@ fn render_structured_tool_result(
             ui.label(
                 RichText::new(format!("[handoff] {}", reason))
                     .size(12.0)
-                    .color(theme().system_badge)
+                    .color(Color32::from_rgb(212, 135, 176))
                     .strong(),
             );
         }
@@ -1218,7 +1216,7 @@ fn render_structured_tool_result(
                 RichText::new(header)
                     .size(12.0)
                     .color(if matches > 0 {
-                        theme().accent
+                        theme().accent_dim
                     } else {
                         theme().system_badge
                     })
@@ -1238,7 +1236,7 @@ fn render_structured_tool_result(
             ui.label(
                 RichText::new(header)
                     .size(12.0)
-                    .color(theme().accent)
+                    .color(theme().system_badge)
                     .strong(),
             );
             if count > 0 {
@@ -1262,7 +1260,7 @@ fn render_structured_tool_result(
                     .color(if meta.is_error {
                         theme().system_badge
                     } else {
-                        theme().accent
+                        Color32::from_rgb(128, 181, 214)
                     })
                     .strong(),
             );
@@ -1272,6 +1270,28 @@ fn render_structured_tool_result(
                     render_code_block(ui, "markdown", &body);
                 });
             }
+        }
+        "project_task_list" => {
+            let total = meta.line_count.unwrap_or(0);
+            let done = meta.byte_count.unwrap_or(0);
+            ui.label(
+                RichText::new(format!(
+                    "[project] Task list updated -- {}/{} complete",
+                    done, total
+                ))
+                .size(12.0)
+                .color(Color32::from_rgb(196, 168, 106))
+                .italics(),
+            );
+        }
+        "name_session" => {
+            let name = meta.file_path.as_deref().unwrap_or("unnamed");
+            ui.label(
+                RichText::new(format!("[session] Named: {}", name))
+                    .size(12.0)
+                    .color(Color32::from_rgb(128, 181, 214))
+                    .strong(),
+            );
         }
         _ => {
             render_markdown(ui, &sanitize_display_text(&msg.content), false, false);
