@@ -2237,8 +2237,9 @@ fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     if let Some(ptl) = ptl_from_disk {
         let tool_call_id = crate::helpers::gen_tool_call_id();
 
-        // 1. Synthetic user message
-        let user_msg = ChatMessage::new(Role::User, "Read the project task list.");
+        // 1. Synthetic user message — uses the continuation prompt from settings
+        //    so users can customize what the model sees before the tool call.
+        let user_msg = ChatMessage::new(Role::User, state.handoff_continuation_prompt.clone());
         push_runtime(state, runtime, user_msg);
 
         // 2. Synthetic assistant message with tool_calls
@@ -2303,10 +2304,11 @@ fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     }
 
     // Use the AI-generated next_prompt as the first user message in the fresh session.
-    // Falls back to a continuation prompt when no AI prompt is available.
+    // Falls back to a simple continue message since the synthetic bootstrap already
+    // loaded the project task list via the continuation prompt.
     let handoff_msg = runtime.handoff_next_prompt.take().unwrap_or_else(|| {
         if state.project_task_list.has_incomplete() {
-            state.handoff_continuation_prompt.clone()
+            "Project tasks remain. Continue working and create a todo list to track progress.".to_string()
         } else {
             "Continue the previous work from where you left off.".to_string()
         }

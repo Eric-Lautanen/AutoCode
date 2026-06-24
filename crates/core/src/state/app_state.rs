@@ -131,12 +131,11 @@ This conversation must end now. Immediately:
 
 Do NOT continue working or write any more code. Use the handoff tool now.";
 
-/// Default prompt injected as the first user message when a forced handoff
-/// occurs (no AI-generated next_prompt available) and project-level tasks
-/// are active. Tells the model to pick up the project tasks.
-pub const DEFAULT_HANDOFF_CONTINUATION_PROMPT: &str = "\
-Project tasks remain. Review the project task list and create a \
-session-level todo list to accomplish them. Continue working.";
+/// Default synthetic bootstrap message injected as a user message before the
+/// project_task_list tool call in a fresh handoff session. Shows the model that
+/// project tasks exist and triggers the tool to load them. Users can customize
+/// this in settings.
+pub const DEFAULT_HANDOFF_CONTINUATION_PROMPT: &str = "Read the project task list.";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AppState {

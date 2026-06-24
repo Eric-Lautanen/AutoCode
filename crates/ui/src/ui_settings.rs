@@ -1353,9 +1353,10 @@ fn show_prompt(ui: &mut egui::Ui, state: &mut AppState) {
     ui.add_space(4.0);
     ui.label(
         RichText::new(
-            "Used as the first message in a new session when a forced handoff \
-             occurs (e.g. context exhausted) and there are active project-level \
-             tasks. Instructs the model to pick up where things left off.",
+            "Injected as a synthetic user message before the project_task_list \
+             tool call in a fresh handoff session. Tells the model to load and \
+             review project tasks. The tool result + tasks are already visible \
+             in the conversation by the time the model generates its response.",
         )
         .size(11.0)
         .color(Palette::TEXT_MUTED),
