@@ -154,7 +154,9 @@ fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: Chat
         // set it, so the toolbar meter and pre-flight check never disagree.
         if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
             let last = sess.messages.last().unwrap();
-            sess.estimated_messages_tokens = sess.estimated_messages_tokens.saturating_add(last.full_token_estimate);
+            sess.estimated_messages_tokens = sess
+                .estimated_messages_tokens
+                .saturating_add(last.full_token_estimate);
         }
     }
 }
@@ -696,14 +698,12 @@ fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
     // Rate limit: enforce minimum delay between completion starts.
     // If we're called before the delay has elapsed, use the non-blocking
     // retry_after timer so the UI doesn't freeze.
-    if state.disk_read_delay_ms > 0 {
-        if let Some(allowed) = runtime.next_completion_allowed {
-            let now = std::time::Instant::now();
-            if now < allowed {
-                runtime.retry_after = Some(allowed);
-                return;
-            }
-        }
+    if state.disk_read_delay_ms > 0
+        && let Some(allowed) = runtime.next_completion_allowed
+        && std::time::Instant::now() < allowed
+    {
+        runtime.retry_after = Some(allowed);
+        return;
     }
     let session_id = match runtime.active_session_id.as_deref() {
         Some(id) => id,
@@ -2308,7 +2308,8 @@ fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     // loaded the project task list via the continuation prompt.
     let handoff_msg = runtime.handoff_next_prompt.take().unwrap_or_else(|| {
         if state.project_task_list.has_incomplete() {
-            "Project tasks remain. Continue working and create a todo list to track progress.".to_string()
+            "Project tasks remain. Continue working and create a todo list to track progress."
+                .to_string()
         } else {
             "Continue the previous work from where you left off.".to_string()
         }
@@ -2462,13 +2463,10 @@ fn auto_continue_impl(
             "Project tasks remain ({done}/{total} complete). Update the task list and continue working.",
         )
     } else if truncated {
-        format!(
-            "Your last response was cut off by the output token limit. Continue exactly where you left off.",
-        )
+        "Your last response was cut off by the output token limit. Continue exactly where you left off.".to_string()
     } else {
-        format!(
-            "If you were working on something, continue now. Otherwise update or clear the task list.",
-        )
+        "If you were working on something, continue now. Otherwise update or clear the task list."
+            .to_string()
     };
 
     push_runtime(state, runtime, ChatMessage::new(Role::User, msg));

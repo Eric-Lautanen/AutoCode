@@ -159,28 +159,32 @@ pub fn update_full_estimate(session: &mut crate::state::Session, tools_json: &se
 
     // Try tiktoken first so the toolbar matches the pre-flight check.
     if let Some(model_str) = model_ref {
-        let msgs: Vec<serde_json::Value> = session.messages.iter().map(|m| {
-            let mut obj = serde_json::json!({
-                "role": m.role,
-                "content": m.content,
-            });
-            if let Some(id) = &m.tool_call_id {
-                obj["tool_call_id"] = serde_json::json!(id);
-            }
-            if let Some(tc) = &m.tool_calls {
-                obj["tool_calls"] = tc.clone();
-            }
-            if let Some(rc) = &m.reasoning_content {
-                obj["reasoning_content"] = serde_json::json!(rc);
-            }
-            obj
-        }).collect::<Vec<_>>();
+        let msgs: Vec<serde_json::Value> = session
+            .messages
+            .iter()
+            .map(|m| {
+                let mut obj = serde_json::json!({
+                    "role": m.role,
+                    "content": m.content,
+                });
+                if let Some(id) = &m.tool_call_id {
+                    obj["tool_call_id"] = serde_json::json!(id);
+                }
+                if let Some(tc) = &m.tool_calls {
+                    obj["tool_calls"] = tc.clone();
+                }
+                if let Some(rc) = &m.reasoning_content {
+                    obj["reasoning_content"] = serde_json::json!(rc);
+                }
+                obj
+            })
+            .collect::<Vec<_>>();
         let body = serde_json::json!({"messages": msgs, "tools": tools_json});
-        if let Ok(json_str) = serde_json::to_string(&body) {
-            if let Some(count) = crate::tokenizer::offline_token_count(model_str, &json_str) {
-                session.estimated_full_tokens = count;
-                return;
-            }
+        if let Ok(json_str) = serde_json::to_string(&body)
+            && let Some(count) = crate::tokenizer::offline_token_count(model_str, &json_str)
+        {
+            session.estimated_full_tokens = count;
+            return;
         }
     }
 
