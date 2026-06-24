@@ -147,18 +147,44 @@ pub fn unique_data_dir_name(projects: &[Project], desired: &str) -> String {
 /// Recompute estimated_full_tokens on a session using the actual tool
 /// definitions JSON. Must be called after loading messages from disk so
 /// the toolbar meter and pre-flight check agree from the start.
-/// Uses incremental counting: sums cached per-message estimates and
-/// adds tool definitions overhead.
+/// Uses tiktoken (matching pre-flight check) with heuristic fallback.
 pub fn update_full_estimate(session: &mut crate::state::Session, tools_json: &serde_json::Value) {
     let model = if session.model.is_empty() {
         None
     } else {
         Some(session.model.as_str())
     };
-    // Clone the model string to avoid borrow conflict: session is mutably
-    // borrowed by recompute_* but immutably borrowed by model.as_str().
     let model_owned = model.map(|s| s.to_string());
     let model_ref = model_owned.as_deref();
+
+    // Try tiktoken first so the toolbar matches the pre-flight check.
+    if let Some(model_str) = model_ref {
+        let msgs: Vec<serde_json::Value> = session.messages.iter().map(|m| {
+            let mut obj = serde_json::json!({
+                "role": m.role,
+                "content": m.content,
+            });
+            if let Some(id) = &m.tool_call_id {
+                obj["tool_call_id"] = serde_json::json!(id);
+            }
+            if let Some(tc) = &m.tool_calls {
+                obj["tool_calls"] = tc.clone();
+            }
+            if let Some(rc) = &m.reasoning_content {
+                obj["reasoning_content"] = serde_json::json!(rc);
+            }
+            obj
+        }).collect::<Vec<_>>();
+        let body = serde_json::json!({"messages": msgs, "tools": tools_json});
+        if let Ok(json_str) = serde_json::to_string(&body) {
+            if let Some(count) = crate::tokenizer::offline_token_count(model_str, &json_str) {
+                session.estimated_full_tokens = count;
+                return;
+            }
+        }
+    }
+
+    // Fall back to heuristic if tiktoken not available.
     session.recompute_messages_tokens(model_ref);
     session.recompute_full_tokens(tools_json, model_ref);
 }

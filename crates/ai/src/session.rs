@@ -1,7 +1,7 @@
 // session.rs -- Session management.
 
 use crate::helpers;
-use crate::provider::{ApiMessage, tool_definitions};
+use crate::provider::ApiMessage;
 use autocode_core::state::{AppState, ChatMessage, Role};
 
 /// Seed the system prompt into the active session if its messages are empty.
@@ -44,7 +44,7 @@ pub fn prepare_request_messages_for_session(
     session_id: &str,
 ) -> Vec<ApiMessage> {
     state.flush_pending_writes(true);
-    let (supports_cache, supports_strict) = {
+    let supports_cache = {
         let sess = state.sessions.iter().find(|s| s.id == session_id);
         let prov_label = sess
             .map(|s| {
@@ -56,13 +56,10 @@ pub fn prepare_request_messages_for_session(
             })
             .unwrap_or_else(|| state.active_provider.clone());
         let p = state.providers.get(&prov_label);
-        let cache = p
-            .map(|p| {
-                autocode_core::helpers::model_or_safe(&p.kind, &p.model).supports_cache_control
-            })
-            .unwrap_or(false);
-        let strict = p.map(|p| p.supports_strict_tools()).unwrap_or(true);
-        (cache, strict)
+        p.map(|p| {
+            autocode_core::helpers::model_or_safe(&p.kind, &p.model).supports_cache_control
+        })
+        .unwrap_or(false)
     };
 
     // Load full history from disk (the source of truth).
@@ -115,19 +112,15 @@ pub fn prepare_request_messages_for_session(
         }
     }
 
-    // Compute an estimate for the full disk-backed message list + tool definitions.
-    // This is stored on the session so the UI can display it instead of the
-    // in-RAM-only token_count(). Uses incremental counting: compute per-message
-    // estimates and cache them, then sum for the running total.
+    // Compute estimated_messages_tokens from the full disk-backed list for the
+    // auto-handoff fallback. estimated_full_tokens is NOT set here — that's only
+    // done by authoritative sources (pre-flight tiktoken check, update_full_estimate).
     {
         let model = state
             .sessions
             .iter()
             .find(|s| s.id == session_id)
             .map(|s| s.model.as_str());
-        // Compute and cache per-message estimates for any messages that
-        // don't already have one (e.g. loaded from disk before this field
-        // existed, or messages whose content was modified).
         let mut messages_total: usize = 0;
         for m in full_messages.iter().filter(|m| m.role != Role::Error) {
             let est = if m.full_token_estimate > 0 {
@@ -137,11 +130,7 @@ pub fn prepare_request_messages_for_session(
             };
             messages_total = messages_total.saturating_add(est);
         }
-        let tools = tool_definitions(supports_strict);
-        let tools_tokens = autocode_core::helpers::estimate_tools_tokens(&tools, model);
-        let estimated_full = messages_total.saturating_add(tools_tokens);
         if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == session_id) {
-            sess.estimated_full_tokens = estimated_full;
             sess.estimated_messages_tokens = messages_total;
         }
     }
