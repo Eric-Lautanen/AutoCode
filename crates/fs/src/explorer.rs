@@ -390,10 +390,13 @@ const MAX_FUZZY_FILES: usize = 200;
 /// Score a candidate word against the search pattern. Returns None if not
 /// relevant, or Some((score, word)) where lower score = better match.
 ///
+/// Score a candidate word against the search pattern. Returns None if not
+/// relevant, or Some((score, word)) where lower score = better match.
+///
 /// Scoring (lower is better):
-///   1 = exact substring of the candidate (e.g. "pattern" in "pattern_id")
-///   2 = candidate is a substring of the pattern (e.g. "id" in "pattern_id")
-///   3+ = Levenshtein distance (only if ≤ MAX_FUZZY_DISTANCE)
+///   1xx = exact substring of the candidate (e.g. "pattern" in "pattern_id")
+///   2xx = candidate is a substring of the pattern, or prefix match
+///   3xx = Levenshtein distance (only if ≤ MAX_FUZZY_DISTANCE)
 fn score_candidate(
     pattern_cmp: &str,
     word_cmp: &str,
@@ -401,6 +404,11 @@ fn score_candidate(
 ) -> Option<(usize, String)> {
     // Exact match is not a suggestion.
     if pattern_cmp == word_cmp {
+        return None;
+    }
+
+    // Skip very short candidates — they're usually noise (e.g. "pat", "exp").
+    if word_cmp.len() < 3 {
         return None;
     }
 
@@ -414,16 +422,22 @@ fn score_candidate(
 
     // Substring match: candidate is contained in the pattern.
     // e.g. searching "pattern_id" finds "pattern" and "id".
-    if pattern_cmp.contains(word_cmp) && word_cmp.len() >= 3 {
+    // Require candidate to be at least half the pattern length to avoid
+    // noise like "pat" when searching for "patterm".
+    if pattern_cmp.contains(word_cmp) && word_cmp.len() * 2 >= pattern_cmp.len() {
         let len_diff = pattern_cmp.len().saturating_sub(word_cmp.len());
         return Some((200 + len_diff, word_original.to_string()));
     }
 
     // Prefix match: pattern starts with the candidate or vice versa.
     // e.g. "explrer" starts with "expl" → finds "explorer" via prefix.
+    // Require the shorter one to be at least half the length of the longer
+    // to avoid trivial prefix matches like "ex" → "explorer".
     if word_cmp.starts_with(pattern_cmp) || pattern_cmp.starts_with(word_cmp) {
-        let len_diff = word_cmp.len().abs_diff(pattern_cmp.len());
-        if len_diff <= MAX_FUZZY_DISTANCE + 1 {
+        let min_len = word_cmp.len().min(pattern_cmp.len());
+        let max_len = word_cmp.len().max(pattern_cmp.len());
+        let len_diff = max_len - min_len;
+        if min_len * 2 >= max_len && len_diff <= MAX_FUZZY_DISTANCE + 1 {
             return Some((200 + len_diff, word_original.to_string()));
         }
     }
