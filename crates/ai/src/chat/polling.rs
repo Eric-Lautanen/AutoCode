@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::provider::{ProviderEvent, ToolCall, tool_definitions};
+use crate::provider::{ProviderEvent, ToolCall};
 use autocode_core::{
     helpers as core_helpers,
     state::{AppState, ChatMessage, Role, ToolMeta},
@@ -853,15 +853,8 @@ fn poll_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     if let Some(sid) = runtime.active_session_id.as_deref()
                         && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
                     {
-                        let model_owned = if sess.model.is_empty() {
-                            None
-                        } else {
-                            Some(sess.model.clone())
-                        };
-                        let model = model_owned.as_deref();
-                        sess.recompute_messages_tokens(model);
-                        let tools_json = tool_definitions(true, sess.handoff_enabled);
-                        sess.recompute_full_tokens(&tools_json, model);
+                        sess.recompute_messages_tokens();
+                        sess.recompute_full_tokens();
                     }
                     // Only start next completion if shell calls are also done.
                     if runtime.live_shell_rx.is_none() && runtime.pending_tool_remaining.is_empty()
@@ -1150,15 +1143,8 @@ fn commit_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) {
         if let Some(sid) = runtime.active_session_id.as_deref()
             && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
         {
-            let model_owned = if sess.model.is_empty() {
-                None
-            } else {
-                Some(sess.model.clone())
-            };
-            let model = model_owned.as_deref();
-            sess.recompute_messages_tokens(model);
-            let tools_json = tool_definitions(true, sess.handoff_enabled);
-            sess.recompute_full_tokens(&tools_json, model);
+            sess.recompute_messages_tokens();
+            sess.recompute_full_tokens();
         }
 
         // Only continue if non-shell tools are also done.

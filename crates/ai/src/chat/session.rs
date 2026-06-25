@@ -114,17 +114,12 @@ pub fn prepare_request_messages_for_session(
     // estimated_full_tokens is kept in sync by push_to_session and turn-
     // completion recomputes, so it doesn't need to be set here.
     {
-        let model = state
-            .sessions
-            .iter()
-            .find(|s| s.id == session_id)
-            .map(|s| s.model.as_str());
         let mut messages_total: usize = 0;
         for m in full_messages.iter().filter(|m| m.role != Role::Error) {
             let est = if m.full_token_estimate > 0 {
                 m.full_token_estimate
             } else {
-                autocode_core::helpers::estimate_single_message_json_tokens(m, model)
+                autocode_core::helpers::estimate_single_message_json_tokens(m)
             };
             messages_total = messages_total.saturating_add(est);
         }

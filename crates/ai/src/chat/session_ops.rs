@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use crate::provider::tool_definitions;
 use autocode_core::state::{AppState, ChatMessage, Role};
 
 use super::runtime::ChatRuntime;
@@ -19,16 +18,7 @@ pub fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: 
     {
         msg.id = sess.next_message_id;
         sess.next_message_id += 1;
-        // Compute and cache the per-message JSON token estimate before any
-        // clone so the persisted copy (pending_writes) also has the estimate.
-        let model_str = sess.model.clone();
-        let model = if model_str.is_empty() {
-            None
-        } else {
-            Some(model_str.as_str())
-        };
-        msg.full_token_estimate =
-            autocode_core::helpers::estimate_single_message_json_tokens(&msg, model);
+        msg.full_token_estimate = autocode_core::helpers::estimate_single_message_json_tokens(&msg);
         // Error messages are display-only - never persist to disk.
         if msg.role != Role::Error {
             state
@@ -37,15 +27,11 @@ pub fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: 
                 .push((sid.to_string(), msg.clone()));
         }
         sess.messages.push(msg);
-        // Keep both estimates in sync: messages-only and full (messages + tools).
-        // The full estimate uses the heuristic tier here (fast, O(1)).
-        // A tiered recompute (API → tiktoken → heuristic) happens at turn-completion.
         let last_estimate = sess.messages.last().unwrap().full_token_estimate;
-        let handoff_enabled = sess.handoff_enabled;
+        let _handoff_enabled = sess.handoff_enabled;
         sess.estimated_messages_tokens =
             sess.estimated_messages_tokens.saturating_add(last_estimate);
-        let tools_json = tool_definitions(true, handoff_enabled);
-        sess.recompute_full_tokens(&tools_json, model);
+        sess.recompute_full_tokens();
     }
 }
 
@@ -96,17 +82,9 @@ pub fn replay_to_message(
         sess.next_message_id = message_id;
         sess.actual_tokens_used = 0;
 
-        // Recompute token estimates incrementally from cached per-message estimates.
-        let model_owned = if sess.model.is_empty() {
-            None
-        } else {
-            Some(sess.model.clone())
-        };
-        sess.recompute_messages_tokens(model_owned.as_deref());
-        // Re-add the constant tools overhead so estimated_full_tokens stays
-        // in sync (messages + tools), not just messages.
-        let tools_json = crate::provider::tool_definitions(true, sess.handoff_enabled);
-        sess.recompute_full_tokens(&tools_json, model_owned.as_deref());
+        // Recompute token estimates from cached per-message estimates.
+        sess.recompute_messages_tokens();
+        sess.recompute_full_tokens();
 
         let proj = &state.projects[proj_idx];
         autocode_core::storage::truncate_messages_after(proj, sess, message_id.saturating_sub(1))
@@ -261,9 +239,10 @@ pub fn context_usage_info_for_session(
         .iter()
         .find(|s| s.id == session_id)
         .map(|s| {
-            if s.actual_tokens_used > 0 {
-                s.actual_tokens_used
-            } else if s.estimated_full_tokens > 0 {
+            // Always prefer estimated_full_tokens — it's kept up-to-date
+            // by push_to_session on every message push. actual_tokens_used
+            // is from the last API response and can be stale by 1 turn.
+            if s.estimated_full_tokens > 0 {
                 s.estimated_full_tokens
             } else {
                 s.token_count()

@@ -2,9 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
     helpers,
-    provider::{
-        CompletionRequest, ProviderClient, ToolChoice, count_input_tokens, tool_definitions,
-    },
+    provider::{CompletionRequest, ProviderClient, ToolChoice, count_input_tokens},
 };
 use autocode_core::{
     helpers as core_helpers,
@@ -225,8 +223,8 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
     };
     let reasoning_effort = session_reasoning_effort.to_string();
 
-    // Pre-flight context check: use the cached estimate (computed at turn
-    // completion) rather than re-deriving it. Only recompute if the value
+    // Pre-flight context check: use the cached estimate (kept up-to-date
+    // by push_to_session on every message push). Only recompute if the value
     // is 0 (fresh session or never computed) or the model changed.
     let _estimated = {
         let (cached, model_changed) = state
@@ -244,7 +242,6 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
         } else {
             // Full tiered computation needed — session was just created,
             // loaded from disk, or the model changed since last compute.
-            let tools_json = tool_definitions(provider.supports_strict_tools(), session_handoff);
             let msgs: Vec<serde_json::Value> = messages
                 .iter()
                 .map(|m| {
@@ -266,7 +263,6 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
                 .collect();
             let body = serde_json::json!({
                 "messages": msgs,
-                "tools": tools_json,
             });
             let json_str = serde_json::to_string(&body).unwrap_or_default();
             let count = 'block: {
@@ -276,13 +272,7 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
                 {
                     break 'block c;
                 }
-                // Tier 2: Offline tokenizer via tiktoken.
-                if let Some(c) =
-                    autocode_core::tokenizer::offline_token_count(&provider.model, &json_str)
-                {
-                    break 'block c;
-                }
-                // Tier 3: Heuristic fallback.
+                // Tier 2: Heuristic fallback.
                 core_helpers::estimate_full_request_tokens(
                     &messages
                         .iter()
@@ -305,10 +295,11 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
                             reasoning_content: m.reasoning_content.clone(),
                         })
                         .collect::<Vec<_>>(),
-                    Some(&tools_json),
-                    Some(&provider.model),
+                    None,
                 )
             };
+            // Add hardcoded tool defs overhead.
+            let count = count.saturating_add(autocode_core::state::session::TOOL_DEFS_TOKENS);
             if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == session_id) {
                 sess.estimated_full_tokens = count;
             }
@@ -600,17 +591,18 @@ pub fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
                 .map(|p| p.max_context_tokens as usize)
                 .unwrap_or(128_000);
             // Recompute estimate from cached per-message estimates for real-time accuracy.
-            let model = if s.model.is_empty() {
+            let _model = if s.model.is_empty() {
                 None
             } else {
                 Some(s.model.as_str())
             };
-            let tools_json = tool_definitions(true, s.handoff_enabled);
-            let estimated = s.estimated_messages_tokens.saturating_add(
-                autocode_core::helpers::estimate_tools_tokens(&tools_json, model),
-            );
-            let used = if s.actual_tokens_used > 0 {
-                s.actual_tokens_used.max(estimated)
+            let estimated = s.estimated_full_tokens;
+            // Always prefer estimated_full_tokens — it's kept up-to-date
+            // by push_to_session on every message push. Use actual as a floor
+            // only when it exceeds the estimate (the API count is authoritative
+            // for the request that produced it).
+            let used = if s.actual_tokens_used > estimated {
+                s.actual_tokens_used
             } else {
                 estimated
             };
@@ -708,15 +700,8 @@ fn auto_continue_impl(
     if let Some(sid) = runtime.active_session_id.as_deref()
         && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
     {
-        let model_owned = if sess.model.is_empty() {
-            None
-        } else {
-            Some(sess.model.clone())
-        };
-        let model = model_owned.as_deref();
-        sess.recompute_messages_tokens(model);
-        let tools_json = tool_definitions(true, sess.handoff_enabled);
-        sess.recompute_full_tokens(&tools_json, model);
+        sess.recompute_messages_tokens();
+        sess.recompute_full_tokens();
     }
     start_completion(state, runtime);
 }
