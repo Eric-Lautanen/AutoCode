@@ -2,7 +2,7 @@
 
 **AutoCode** is an autonomous AI coding agent — a native Rust desktop app that connects to LLMs and gives them full access to your filesystem and shell. Not a harness or scaffold — a single self-contained binary. Built in simple code editor, handoff system.  Run tasks for days/weeks.
 
-> **[v0.2.3 Release](https://github.com/Eric-Lautanen/AutoCode/releases/tag/v0.2.3)** — Download for Windows, Linux, and macOS
+> **[v0.2.4 Release](https://github.com/Eric-Lautanen/AutoCode/releases/tag/v0.2.4)** — Download for Windows, Linux, and macOS
 
 > **⚠️ WARNING — You're piloting a chainsaw**
 > AutoCode reads, writes, deletes, and runs code with **zero confirmation prompts**. No "Are you sure?" popup. No safety rail. If you tell it to `rm -rf /`, it will try its hardest. Use at your own risk.
