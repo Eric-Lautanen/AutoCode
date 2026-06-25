@@ -37,10 +37,19 @@ pub fn show_token_meter(ui: &mut egui::Ui, state: &AppState, frac: f32) {
     resp.on_hover_text(format!("{:.0}% context used", frac * 100.0));
 
     ui.add_space(4.0);
-    ui.label(
-        RichText::new(core_helpers::usage_display(state))
-            .size(10.0)
-            .color(Palette::TEXT_MUTED),
+    let usage_resp = ui.add(
+        egui::Label::new(
+            RichText::new(core_helpers::usage_display(state))
+                .size(10.0)
+                .color(Palette::TEXT_MUTED),
+        )
+        .sense(Sense::hover()),
+    );
+    if usage_resp.clone().hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    usage_resp.on_hover_text(
+        "Estimated: heuristic token count, updated in real time.\nActual: API-reported count from the last request (1 message behind).",
     );
 }
 
