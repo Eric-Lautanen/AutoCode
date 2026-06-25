@@ -210,14 +210,8 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
                 session.reasoning_effort = meta.reasoning_effort;
                 // Recompute token estimates from loaded messages so the UI shows
                 // accurate context usage immediately after startup.
-                let model_owned = if session.model.is_empty() {
-                    None
-                } else {
-                    Some(session.model.clone())
-                };
-                let model_ref = model_owned.as_deref();
-                session.recompute_messages_tokens(model_ref);
-                session.estimated_full_tokens = session.estimated_messages_tokens;
+                session.recompute_messages_tokens();
+                session.recompute_full_tokens();
             }
             Err(_e) => {}
         },

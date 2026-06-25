@@ -3,6 +3,12 @@ use serde::{Deserialize, Serialize};
 use super::chat::{ChatMessage, Role};
 use super::todo::TodoList;
 
+/// Hardcoded token count for tool definitions JSON sent with every request.
+/// This is a fixed overhead that doesn't change between requests — only the
+/// handoff toggle adds/removes ~2 small tool defs (~200 tokens), which is
+/// negligible for the toolbar meter and pre-flight check.
+pub const TOOL_DEFS_TOKENS: usize = 2311;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
     pub id: String,
@@ -42,8 +48,8 @@ pub struct Session {
     /// Estimated token count for the full disk-backed message list + tool definitions.
     /// This is the single authoritative cached value — updated by push_to_session
     /// (heuristic tier, O(1)) and by turn-completion points (full tiered recompute
-    /// with API → tiktoken → heuristic). The pre-flight check in start_completion
-    /// reads this cached value rather than recomputing it.
+    /// with API or heuristic). The pre-flight check in start_completion reads this
+    /// cached value rather than recomputing it.
     #[serde(default)]
     pub estimated_full_tokens: usize,
     /// Estimated token count for disk-backed messages only (no tool definitions).
@@ -117,18 +123,10 @@ impl Session {
             .sum()
     }
 
-    /// Incrementally update `estimated_messages_tokens` after pushing a new
-    /// message. Only counts the new message's JSON token cost and adds it
-    /// to the running total — O(1) instead of re-serializing all messages.
-    pub fn increment_messages_tokens(&mut self, msg: &ChatMessage, model: Option<&str>) {
-        let tokens = crate::helpers::estimate_single_message_json_tokens(msg, model);
-        self.estimated_messages_tokens = self.estimated_messages_tokens.saturating_add(tokens);
-    }
-
     /// Recompute `estimated_messages_tokens` from scratch by summing each
     /// message's `full_token_estimate`. Used after replay/truncation or
     /// when loading a session from disk (where running totals are stale).
-    pub fn recompute_messages_tokens(&mut self, model: Option<&str>) {
+    pub fn recompute_messages_tokens(&mut self) {
         let mut total: usize = 0;
         for msg in &self.messages {
             if msg.role == Role::Error {
@@ -137,20 +135,19 @@ impl Session {
             if msg.full_token_estimate > 0 {
                 total = total.saturating_add(msg.full_token_estimate);
             } else {
-                total = total.saturating_add(crate::helpers::estimate_single_message_json_tokens(
-                    msg, model,
-                ));
+                total =
+                    total.saturating_add(crate::helpers::estimate_single_message_json_tokens(msg));
             }
         }
         self.estimated_messages_tokens = total;
     }
 
     /// Recompute `estimated_full_tokens` from `estimated_messages_tokens`
-    /// plus the tool definitions overhead. O(1) if messages tokens are
-    /// already up-to-date.
-    pub fn recompute_full_tokens(&mut self, tools_json: &serde_json::Value, model: Option<&str>) {
-        let tools_tokens = crate::helpers::estimate_tools_tokens(tools_json, model);
-        self.estimated_full_tokens = self.estimated_messages_tokens.saturating_add(tools_tokens);
+    /// plus the hardcoded tool definitions overhead. O(1).
+    pub fn recompute_full_tokens(&mut self) {
+        self.estimated_full_tokens = self
+            .estimated_messages_tokens
+            .saturating_add(TOOL_DEFS_TOKENS);
     }
 
     pub fn record_actual_usage(&mut self, prompt: usize, _completion: usize) {
