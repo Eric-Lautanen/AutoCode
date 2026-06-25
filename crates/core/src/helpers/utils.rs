@@ -144,57 +144,12 @@ pub fn unique_data_dir_name(projects: &[Project], desired: &str) -> String {
     candidate
 }
 
-/// Recompute estimated_full_tokens on a session using the actual tool
-/// definitions JSON. Called after loading messages from disk so the
-/// toolbar meter shows an accurate value from the start.
-/// Uses tiktoken with heuristic fallback.
-/// NOTE: After the token-estimation consolidation, push_to_session keeps
-/// estimated_full_tokens fresh on every message push, so this is only
-/// needed for the initial load case (when messages are loaded from disk
-/// and the running totals are stale).
-pub fn update_full_estimate(session: &mut crate::state::Session, tools_json: &serde_json::Value) {
-    let model = if session.model.is_empty() {
-        None
-    } else {
-        Some(session.model.as_str())
-    };
-    let model_owned = model.map(|s| s.to_string());
-    let model_ref = model_owned.as_deref();
-
-    // Try tiktoken first so the toolbar matches the pre-flight check.
-    if let Some(model_str) = model_ref {
-        let msgs: Vec<serde_json::Value> = session
-            .messages
-            .iter()
-            .map(|m| {
-                let mut obj = serde_json::json!({
-                    "role": m.role,
-                    "content": m.content,
-                });
-                if let Some(id) = &m.tool_call_id {
-                    obj["tool_call_id"] = serde_json::json!(id);
-                }
-                if let Some(tc) = &m.tool_calls {
-                    obj["tool_calls"] = tc.clone();
-                }
-                if let Some(rc) = &m.reasoning_content {
-                    obj["reasoning_content"] = serde_json::json!(rc);
-                }
-                obj
-            })
-            .collect::<Vec<_>>();
-        let body = serde_json::json!({"messages": msgs, "tools": tools_json});
-        if let Ok(json_str) = serde_json::to_string(&body)
-            && let Some(count) = crate::tokenizer::offline_token_count(model_str, &json_str)
-        {
-            session.estimated_full_tokens = count;
-            return;
-        }
-    }
-
-    // Fall back to heuristic if tiktoken not available.
-    session.recompute_messages_tokens(model_ref);
-    session.recompute_full_tokens(tools_json, model_ref);
+/// Recompute estimated_full_tokens on a session after loading messages
+/// from disk so the toolbar meter shows an accurate value from the start.
+/// Uses heuristic counting, then adds the tool definitions overhead.
+pub fn update_full_estimate(session: &mut crate::state::Session) {
+    session.recompute_messages_tokens();
+    session.recompute_full_tokens();
 }
 
 /// Replace or strip Unicode characters that the UI framework's default fonts don't support
@@ -307,21 +262,27 @@ fn session_provider_config(state: &AppState) -> (usize, usize) {
     (max, handoff_pct)
 }
 
-/// Get the token count for user-facing display: messages only (no tool definitions).
-/// Tool definitions are fixed overhead sent with every request but not part of chat history.
-fn session_messages_usage(state: &AppState) -> usize {
+/// Get the token count for user-facing display: always uses `estimated_full_tokens`
+/// which is kept up-to-date by `push_to_session` on every message push.
+/// `actual_tokens_used` is from the last API response and can be stale by 1 turn,
+/// so it is returned separately for comparison, not as the primary count.
+fn session_messages_usage(state: &AppState) -> (usize, Option<usize>) {
     state
         .active_session()
         .map(|s| {
-            if s.actual_tokens_used > 0 {
-                s.actual_tokens_used
-            } else if s.estimated_full_tokens > 0 {
+            let estimated = if s.estimated_full_tokens > 0 {
                 s.estimated_full_tokens
             } else {
                 s.token_count()
-            }
+            };
+            let actual = if s.actual_tokens_used > 0 {
+                Some(s.actual_tokens_used)
+            } else {
+                None
+            };
+            (estimated, actual)
         })
-        .unwrap_or(0)
+        .unwrap_or((0, None))
 }
 
 /// Percentage of context window used (0.0 - 1.0),
@@ -330,34 +291,33 @@ fn session_messages_usage(state: &AppState) -> usize {
 /// the pre-flight check in start_completion.
 pub fn budget_fraction(state: &AppState) -> f32 {
     let (max, _) = session_provider_config(state);
-    let used = session_messages_usage(state);
+    let (used, _actual) = session_messages_usage(state);
     (used as f32) / (max as f32).max(1.0)
 }
 
 /// Human-readable token usage string.
-/// Shows messages-only count (tool definitions are fixed overhead, not chat history).
+/// Shows estimated count (always up-to-date) and actual count from the
+/// last API response (when available) for comparison.
 pub fn usage_display(state: &AppState) -> String {
     let (max, handoff_pct) = session_provider_config(state);
     let threshold = (max * handoff_pct) / 100;
-    let sess = state.active_session();
-    let (used, label) = if let Some(s) = sess {
-        if s.actual_tokens_used > 0 {
-            (s.actual_tokens_used, "actual")
-        } else if s.estimated_full_tokens > 0 {
-            (s.estimated_full_tokens, "est")
-        } else {
-            (s.token_count(), "est")
-        }
+    let (used, actual) = session_messages_usage(state);
+    if let Some(actual_val) = actual {
+        format!(
+            "{} est / {} actual / {} (handoff @{})",
+            fmt_tokens(used),
+            fmt_tokens(actual_val),
+            fmt_tokens(max),
+            fmt_tokens(threshold)
+        )
     } else {
-        (0, "est")
-    };
-    format!(
-        "{} ({}) / {} (handoff @{})",
-        fmt_tokens(used),
-        label,
-        fmt_tokens(max),
-        fmt_tokens(threshold)
-    )
+        format!(
+            "{} est / {} (handoff @{})",
+            fmt_tokens(used),
+            fmt_tokens(max),
+            fmt_tokens(threshold)
+        )
+    }
 }
 
 fn fmt_tokens(n: usize) -> String {

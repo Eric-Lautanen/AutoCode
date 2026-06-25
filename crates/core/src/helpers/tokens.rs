@@ -1,7 +1,6 @@
 use crate::state::ChatMessage;
 
-/// Estimate token count for text using an improved heuristic.
-/// This is a fallback when tiktoken or API-based counting is unavailable.
+/// Estimate token count for text using a heuristic.
 /// Accuracy: ~10-15% for code, ~5-10% for English prose.
 pub fn estimate_tokens(text: &str) -> usize {
     if text.is_empty() {
@@ -123,17 +122,11 @@ pub fn estimate_message_tokens(msg: &crate::state::ChatMessage) -> usize {
 /// quotes, colons, commas). The result is suitable for caching on the
 /// message's `full_token_estimate` field so the session running total can
 /// be updated incrementally without re-serializing all messages.
-///
-/// If `model` is provided, uses tiktoken for accuracy. Otherwise falls back
-/// to heuristic.
-pub fn estimate_single_message_json_tokens(msg: &ChatMessage, model: Option<&str>) -> usize {
-    let obj = serde_json::json!({
+pub fn estimate_single_message_json_tokens(msg: &ChatMessage) -> usize {
+    let mut obj = serde_json::json!({
         "role": msg.role.label(),
         "content": msg.content,
     });
-    // Build the same JSON object that estimate_full_request_tokens would
-    // produce for this single message, then count tokens on it.
-    let mut obj = obj;
     if let Some(id) = &msg.tool_call_id {
         obj["tool_call_id"] = serde_json::json!(id);
     }
@@ -143,52 +136,29 @@ pub fn estimate_single_message_json_tokens(msg: &ChatMessage, model: Option<&str
     if let Some(rc) = &msg.reasoning_content {
         obj["reasoning_content"] = serde_json::json!(rc);
     }
-
     let json_str = serde_json::to_string(&obj).unwrap_or_default();
-
-    // Try tiktoken first for accuracy
-    if let Some(model_name) = model
-        && let Some(count) = crate::tokenizer::offline_token_count(model_name, &json_str)
-    {
-        return count;
-    }
-
-    // Fallback to heuristic
     estimate_tokens_json(&json_str)
 }
 
 /// Estimate tokens for tool definitions JSON. This is a fixed overhead sent
 /// with every request but not part of chat history. Cached so the session
 /// running total can be updated incrementally.
-///
-/// If `model` is provided, uses tiktoken for accuracy. Otherwise falls back
-/// to heuristic.
-pub fn estimate_tools_tokens(tools_json: &serde_json::Value, model: Option<&str>) -> usize {
+pub fn estimate_tools_tokens(tools_json: &serde_json::Value) -> usize {
     let json_str = serde_json::to_string(tools_json).unwrap_or_default();
-
-    if let Some(model_name) = model
-        && let Some(count) = crate::tokenizer::offline_token_count(model_name, &json_str)
-    {
-        return count;
-    }
-
     estimate_tokens_json(&json_str)
 }
 
 /// Estimate tokens for a full API request body by serializing the relevant
 /// message fields (content, role, tool_calls, tool_call_id, reasoning_content)
-/// into a JSON array and applying the tokenizer/heuristic to the full serialized text.
+/// into a JSON array and applying the heuristic to the full serialized text.
 /// This accounts for JSON structural overhead, tool calls, and reasoning content
 /// that the per-message `estimate_tokens(&content)` misses.
-///
-/// If `model` is provided, uses tiktoken for accurate counting. Otherwise falls back to heuristic.
 ///
 /// **Note:** For incremental updates prefer `estimate_single_message_json_tokens`
 /// + `estimate_tools_tokens` to avoid re-serializing all messages every time.
 pub fn estimate_full_request_tokens(
     messages: &[ChatMessage],
     tools_json: Option<&serde_json::Value>,
-    model: Option<&str>,
 ) -> usize {
     let msgs: Vec<serde_json::Value> = messages
         .iter()
@@ -218,16 +188,6 @@ pub fn estimate_full_request_tokens(
     }
 
     let json_str = serde_json::to_string(&body).unwrap_or_default();
-
-    // Try tiktoken first for accuracy
-    if let Some(model_name) = model
-        && let Some(count) = crate::tokenizer::offline_token_count(model_name, &json_str)
-    {
-        return count;
-    }
-
-    // Fallback to heuristic with adjusted char/token ratio for JSON
-    // JSON has more structural chars (braces, quotes, colons) so ~3.5 chars/token
     estimate_tokens_json(&json_str)
 }
 
