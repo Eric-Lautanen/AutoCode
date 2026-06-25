@@ -81,13 +81,14 @@ pub fn estimate_tokens(text: &str) -> usize {
     };
 
     let word_tokens = (word_count as f32 * word_mult) as usize;
-    let symbol_tokens = symbol_count; // Most symbols are 1 token each
     let cjk_tokens = (cjk_count as f32 * 1.3) as usize; // ~1.3 tokens per CJK char
     let char_floor = (total_chars as f32 / char_per_token).ceil() as usize;
 
-    // Combine estimates: max of word+symbol, cjk+word, char_floor
-    let combined = word_tokens + symbol_tokens;
-    let estimate = combined.max(cjk_tokens + word_tokens).max(char_floor);
+    // Combine estimates: max of word, cjk+word, char_floor
+    // symbol_tokens is not added separately — real tokenizers merge
+    // adjacent symbols into surrounding word tokens, so the chars/token
+    // ratio in char_floor already accounts for them.
+    let estimate = word_tokens.max(cjk_tokens + word_tokens).max(char_floor);
 
     // Per-message overhead for API format (role, formatting)
     estimate.saturating_add(3)
@@ -191,7 +192,7 @@ pub fn estimate_full_request_tokens(
     estimate_tokens_json(&json_str)
 }
 
-/// Heuristic token estimation optimized for JSON text (more structural characters).
+/// Heuristic token estimation optimized for JSON text.
 fn estimate_tokens_json(text: &str) -> usize {
     if text.is_empty() {
         return 0;
@@ -201,11 +202,8 @@ fn estimate_tokens_json(text: &str) -> usize {
     }
 
     let mut word_count = 0usize;
-    let mut symbol_count = 0usize;
     let mut cjk_count = 0usize;
     let mut in_word = false;
-
-    const JSON_SYMBOLS: &[char] = &['{', '}', '[', ']', ':', ',', '"', '\\'];
 
     for ch in text.chars() {
         if ch.is_alphanumeric() || ch == '_' {
@@ -213,31 +211,22 @@ fn estimate_tokens_json(text: &str) -> usize {
                 word_count += 1;
                 in_word = true;
             }
-        } else if JSON_SYMBOLS.contains(&ch) {
-            symbol_count += 1;
-            in_word = false;
         } else if ch.is_whitespace() {
             in_word = false;
         } else {
-            // Other punctuation/unicode
             in_word = false;
             if is_cjk(ch) {
                 cjk_count += 1;
-            } else {
-                symbol_count += 1;
             }
         }
     }
 
     let total_chars = text.chars().count();
-    // JSON: ~3.5 chars/token due to structural overhead
-    let char_floor = (total_chars as f32 / 3.5).ceil() as usize;
+    let char_floor = (total_chars as f32 / 4.5).ceil() as usize;
     let word_tokens = (word_count as f32 * 1.3) as usize;
-    let symbol_tokens = symbol_count;
     let cjk_tokens = (cjk_count as f32 * 1.3) as usize;
 
-    let combined = word_tokens + symbol_tokens;
-    combined
+    word_tokens
         .max(cjk_tokens + word_tokens)
         .max(char_floor)
         .saturating_add(3)

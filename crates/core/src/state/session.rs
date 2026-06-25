@@ -3,12 +3,6 @@ use serde::{Deserialize, Serialize};
 use super::chat::{ChatMessage, Role};
 use super::todo::TodoList;
 
-/// Hardcoded token count for tool definitions JSON sent with every request.
-/// This is a fixed overhead that doesn't change between requests — only the
-/// handoff toggle adds/removes ~2 small tool defs (~200 tokens), which is
-/// negligible for the toolbar meter and pre-flight check.
-pub const TOOL_DEFS_TOKENS: usize = 2311;
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
     pub id: String,
@@ -46,10 +40,7 @@ pub struct Session {
     #[serde(default)]
     pub closed: bool,
     /// Estimated token count for the full disk-backed message list + tool definitions.
-    /// This is the single authoritative cached value — updated by push_to_session
-    /// (heuristic tier, O(1)) and by turn-completion points (full tiered recompute
-    /// with API or heuristic). The pre-flight check in start_completion reads this
-    /// cached value rather than recomputing it.
+    /// Computed dynamically at each push and at turn-completion points.
     #[serde(default)]
     pub estimated_full_tokens: usize,
     /// Estimated token count for disk-backed messages only (no tool definitions).
@@ -140,14 +131,6 @@ impl Session {
             }
         }
         self.estimated_messages_tokens = total;
-    }
-
-    /// Recompute `estimated_full_tokens` from `estimated_messages_tokens`
-    /// plus the hardcoded tool definitions overhead. O(1).
-    pub fn recompute_full_tokens(&mut self) {
-        self.estimated_full_tokens = self
-            .estimated_messages_tokens
-            .saturating_add(TOOL_DEFS_TOKENS);
     }
 
     pub fn record_actual_usage(&mut self, prompt: usize, _completion: usize) {

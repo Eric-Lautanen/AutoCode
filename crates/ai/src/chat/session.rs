@@ -27,11 +27,9 @@ pub fn ensure_session(state: &mut AppState) -> bool {
     prompt.push('\n');
     prompt.push_str(&helpers::project_context_string(state));
     prompt.push('\n');
-    if let Some(sess) = state.active_session_mut()
-        && sess.messages.is_empty()
-    {
+    if let Some(sid) = state.active_session_id.clone() {
         let sys = ChatMessage::new(Role::System, prompt);
-        sess.messages.push(sys);
+        super::session_ops::push_to_session(state, Some(&sid), sys);
     }
     false
 }

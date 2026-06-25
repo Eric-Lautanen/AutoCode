@@ -13,6 +13,8 @@ pub fn still_owns_session(runtime: &ChatRuntime, state: &AppState) -> bool {
 }
 
 pub fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: ChatMessage) {
+    // Compute tool defs tokens before the mutable session borrow.
+    let tool_tokens = tool_defs_tokens_for_session(state, session_id);
     if let Some(sid) = session_id
         && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
     {
@@ -28,11 +30,35 @@ pub fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: 
         }
         sess.messages.push(msg);
         let last_estimate = sess.messages.last().unwrap().full_token_estimate;
-        let _handoff_enabled = sess.handoff_enabled;
         sess.estimated_messages_tokens =
             sess.estimated_messages_tokens.saturating_add(last_estimate);
-        sess.recompute_full_tokens();
+        sess.estimated_full_tokens = sess.estimated_messages_tokens.saturating_add(tool_tokens);
     }
+}
+
+/// Compute the heuristic token count for tool definitions for a given session.
+pub fn tool_defs_tokens_for_session(state: &AppState, session_id: Option<&str>) -> usize {
+    let Some(sid) = session_id else { return 0 };
+    let (handoff_enabled, prov_label) = state
+        .sessions
+        .iter()
+        .find(|s| s.id == sid)
+        .map(|s| {
+            let label = if !s.provider_label.is_empty() {
+                s.provider_label.clone()
+            } else {
+                state.active_provider.clone()
+            };
+            (s.handoff_enabled, label)
+        })
+        .unwrap_or_else(|| (true, state.active_provider.clone()));
+    let strict = state
+        .providers
+        .get(&prov_label)
+        .map(|p| p.supports_strict_tools())
+        .unwrap_or(false);
+    let tools_json = crate::provider::tool_definitions(strict, handoff_enabled);
+    autocode_core::helpers::estimate_tools_tokens(&tools_json)
 }
 
 /// Replay from a user message: truncate the conversation at that message,
@@ -84,7 +110,7 @@ pub fn replay_to_message(
 
         // Recompute token estimates from cached per-message estimates.
         sess.recompute_messages_tokens();
-        sess.recompute_full_tokens();
+        sess.estimated_full_tokens = sess.estimated_messages_tokens;
 
         let proj = &state.projects[proj_idx];
         autocode_core::storage::truncate_messages_after(proj, sess, message_id.saturating_sub(1))

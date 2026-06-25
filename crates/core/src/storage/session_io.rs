@@ -211,7 +211,7 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
                 // Recompute token estimates from loaded messages so the UI shows
                 // accurate context usage immediately after startup.
                 session.recompute_messages_tokens();
-                session.recompute_full_tokens();
+                session.estimated_full_tokens = session.estimated_messages_tokens;
             }
             Err(_e) => {}
         },

@@ -298,8 +298,13 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
                     None,
                 )
             };
-            // Add hardcoded tool defs overhead.
-            let count = count.saturating_add(autocode_core::state::session::TOOL_DEFS_TOKENS);
+            // Add tool definitions overhead computed dynamically.
+            let tools_json = crate::provider::tool_definitions(
+                provider.supports_strict_tools(),
+                session_handoff,
+            );
+            let tool_tokens = core_helpers::estimate_tools_tokens(&tools_json);
+            let count = count.saturating_add(tool_tokens);
             if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == session_id) {
                 sess.estimated_full_tokens = count;
             }
@@ -590,22 +595,7 @@ pub fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
                 })
                 .map(|p| p.max_context_tokens as usize)
                 .unwrap_or(128_000);
-            // Recompute estimate from cached per-message estimates for real-time accuracy.
-            let _model = if s.model.is_empty() {
-                None
-            } else {
-                Some(s.model.as_str())
-            };
-            let estimated = s.estimated_full_tokens;
-            // Always prefer estimated_full_tokens — it's kept up-to-date
-            // by push_to_session on every message push. Use actual as a floor
-            // only when it exceeds the estimate (the API count is authoritative
-            // for the request that produced it).
-            let used = if s.actual_tokens_used > estimated {
-                s.actual_tokens_used
-            } else {
-                estimated
-            };
+            let used = s.estimated_full_tokens;
             (used, max)
         })
         .unwrap_or((0, 0));
@@ -697,11 +687,16 @@ fn auto_continue_impl(
     // so the toolbar meter and auto-handoff threshold stay accurate.
     // Per-message full_token_estimate was computed on push, so recompute
     // running totals from cached per-message estimates.
+    let tool_tokens = runtime
+        .active_session_id
+        .as_deref()
+        .map(|sid| super::session_ops::tool_defs_tokens_for_session(state, Some(sid)))
+        .unwrap_or(0);
     if let Some(sid) = runtime.active_session_id.as_deref()
         && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
     {
         sess.recompute_messages_tokens();
-        sess.recompute_full_tokens();
+        sess.estimated_full_tokens = sess.estimated_messages_tokens.saturating_add(tool_tokens);
     }
     start_completion(state, runtime);
 }

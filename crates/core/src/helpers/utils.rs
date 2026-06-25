@@ -146,10 +146,10 @@ pub fn unique_data_dir_name(projects: &[Project], desired: &str) -> String {
 
 /// Recompute estimated_full_tokens on a session after loading messages
 /// from disk so the toolbar meter shows an accurate value from the start.
-/// Uses heuristic counting, then adds the tool definitions overhead.
+/// Uses heuristic counting.
 pub fn update_full_estimate(session: &mut crate::state::Session) {
     session.recompute_messages_tokens();
-    session.recompute_full_tokens();
+    session.estimated_full_tokens = session.estimated_messages_tokens;
 }
 
 /// Replace or strip Unicode characters that the UI framework's default fonts don't support
