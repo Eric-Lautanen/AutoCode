@@ -1,12 +1,13 @@
 use autocode_core::{state::AppState, storage};
 
+use crate::helpers;
 use crate::tasks::task_window::{TodoWindowConfig, show_todo_window};
 
 const SESSION_TASKS_CONFIG: TodoWindowConfig<'static> = TodoWindowConfig {
     window_title: "Session tasks",
     header_icon: "[=]",
     default_y: 60.0,
-    open_id: "todo_open",
+    open_id: helpers::data::TODO_OPEN,
     list_title: "Session tasks",
     clear_hover: "Clear all tasks",
     empty_icon: "[=]",
@@ -19,7 +20,7 @@ const PROJECT_TASKS_CONFIG: TodoWindowConfig<'static> = TodoWindowConfig {
     window_title: "Project tasks",
     header_icon: "[~]",
     default_y: 320.0,
-    open_id: "project_tasks_open",
+    open_id: helpers::data::PROJECT_TASKS_OPEN,
     list_title: "Project tasks",
     clear_hover: "Clear project tasks",
     empty_icon: "[~]",
@@ -51,9 +52,7 @@ pub fn show_session_tasks(ctx: &egui::Context, state: &mut AppState) {
         state.todo_list.clear();
         state.todo_user_dismissed = false;
         state.show_todo = true;
-        ctx.data_mut(|d| {
-            d.insert_temp(egui::Id::new("todo_open"), false);
-        });
+        helpers::set_temp_bool(ctx, helpers::data::TODO_OPEN, false);
     }
 
     if out.close_clicked {
@@ -90,9 +89,7 @@ pub fn show_project_tasks(ctx: &egui::Context, state: &mut AppState) {
             meta.project_task_list = ptl;
             let _ = storage::save_project_meta(proj, &meta);
         }
-        ctx.data_mut(|d| {
-            d.insert_temp(egui::Id::new("project_tasks_open"), false);
-        });
+        helpers::set_temp_bool(ctx, helpers::data::PROJECT_TASKS_OPEN, false);
     }
 
     if out.close_clicked {

@@ -18,6 +18,7 @@ use super::state::ChatPanelState;
 use super::tabs::show_session_tabs;
 use super::theme::theme;
 use super::tool_result::render_tool_result;
+use crate::helpers;
 
 pub fn show(
     ui: &mut egui::Ui,
@@ -120,7 +121,7 @@ pub fn show(
             let scroll_h = (ui.available_height() - input_row_h).max(40.0);
 
             let scroll_resp = ScrollArea::both()
-                .id_salt(("chat_scroll", active_sid.as_deref().unwrap_or("")))
+                .id_salt(panel_state.chat_scroll_id)
                 .max_height(scroll_h)
                 .stick_to_bottom(true)
                 .auto_shrink([false; 2])
@@ -156,12 +157,11 @@ pub fn show(
                                         match msg.role {
                                             Role::User => {
                                                 if show_user_bubble(ui, msg, chat_w) {
-                                                    ui.ctx().data_mut(|d| {
-                                                        d.insert_temp(
-                                                            egui::Id::new("replay_action"),
-                                                            Some((sid.to_string(), msg.id)),
-                                                        );
-                                                    });
+                                                    helpers::set_temp(
+                                                        ui.ctx(),
+                                                        helpers::data::REPLAY_ACTION,
+                                                        Some((sid.to_string(), msg.id)),
+                                                    );
                                                 }
                                             }
                                             Role::Assistant => {
@@ -284,10 +284,9 @@ pub fn show(
 
         // Handle any pending replay action from a ↺ button click.
         // The action was stored by show_user_bubble during the message loop above.
-        let replay = ui
-            .ctx()
-            .data_mut(|d| d.remove_temp::<Option<(String, u64)>>(egui::Id::new("replay_action")))
-            .flatten();
+        let replay =
+            helpers::take_temp::<Option<(String, u64)>>(ui.ctx(), helpers::data::REPLAY_ACTION)
+                .flatten();
         if let Some((sid, msg_id)) = replay
             && let Some(text) = autocode_ai::chat::replay_to_message(state, runtimes, &sid, msg_id)
         {
@@ -305,7 +304,7 @@ pub fn show(
             panel_state.input = text;
             panel_state.scroll_to_bottom = true;
             ui.ctx().memory_mut(|mem| {
-                mem.request_focus(egui::Id::new(format!("chat_input_{}", sid)));
+                mem.request_focus(panel_state.input_id);
             });
             ui.ctx().request_repaint();
         }

@@ -20,7 +20,7 @@ pub(crate) fn show_session_tabs(
 ) {
     ui.add_space(6.0); // top padding for session tabs
     let tab_scroll = ScrollArea::horizontal()
-        .id_salt("session_tabs")
+        .id_salt(panel_state.tabs_scroll_id)
         .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
         .show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -194,14 +194,14 @@ pub(crate) fn show_session_tabs(
     // (new tabs are added at the right edge).
     if tab_scroll.content_size.x > tab_scroll.inner_rect.width() {
         let mut sa_state = ui.ctx().data_mut(|d| {
-            d.get_persisted::<egui::scroll_area::State>(egui::Id::new("session_tabs"))
+            d.get_persisted::<egui::scroll_area::State>(panel_state.tabs_scroll_id)
                 .unwrap_or_default()
         });
         let max_offset = tab_scroll.content_size.x - tab_scroll.inner_rect.width();
         if sa_state.offset.x < max_offset - 20.0 {
             sa_state.offset.x = max_offset;
             ui.ctx()
-                .data_mut(|d| d.insert_persisted(egui::Id::new("session_tabs"), sa_state));
+                .data_mut(|d| d.insert_persisted(panel_state.tabs_scroll_id, sa_state));
         }
     }
 }

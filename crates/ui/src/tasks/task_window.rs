@@ -46,9 +46,7 @@ pub fn show_todo_window(
 
     // Store open state in ctx.data so the chat input focus logic
     // can check if a popup window is currently open.
-    ctx.data_mut(|d| {
-        d.insert_temp(egui::Id::new(config.open_id), true);
-    });
+    helpers::set_temp_bool(ctx, config.open_id, true);
 
     let mut open = true;
     let mut clear_clicked = false;
@@ -219,10 +217,8 @@ pub fn show_todo_window(
 
     let close_clicked = !open || close_requested.get();
     if close_clicked {
-        ctx.data_mut(|d| {
-            d.insert_temp(egui::Id::new(config.open_id), false);
-            d.insert_temp(egui::Id::new("popup_just_closed"), true);
-        });
+        helpers::set_temp_bool(ctx, config.open_id, false);
+        helpers::set_temp_bool(ctx, helpers::data::POPUP_JUST_CLOSED, true);
     }
 
     TodoWindowOutput {

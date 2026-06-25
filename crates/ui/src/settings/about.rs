@@ -87,9 +87,7 @@ pub fn show_about(ui: &mut egui::Ui, state: &mut AppState) {
             }
             ctx.request_repaint();
         });
-        ui.ctx().data_mut(|d| {
-            d.insert_temp(egui::Id::new("sysinfo_refresh_requested"), true);
-        });
+        helpers::set_temp_bool(ui.ctx(), helpers::data::SYSINFO_REFRESH_REQUESTED, true);
     }
 
     ui.label(

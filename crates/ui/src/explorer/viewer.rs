@@ -4,6 +4,7 @@ use egui::{
     Color32, FontId, Frame, Key, Margin, RichText, ScrollArea, Stroke, TextEdit, TextureHandle,
 };
 
+use crate::helpers;
 use crate::theme::Palette;
 
 use super::ExplorerPanelState;
@@ -15,9 +16,7 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
 
     // Store open state in ctx.data so the chat input focus logic
     // can check if a popup window is currently open.
-    ctx.data_mut(|d| {
-        d.insert_temp(egui::Id::new("file_viewer_open"), true);
-    });
+    helpers::set_temp_bool(ctx, helpers::data::FILE_VIEWER_OPEN, true);
 
     let mut open = panel.show_file_viewer;
 
@@ -45,7 +44,7 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
     };
 
     let window_resp = egui::Window::new("file_viewer")
-        .id(egui::Id::new("file_viewer_window"))
+        .id(panel.viewer_window_id)
         .title_bar(false)
         .resizable(true)
         .default_size([960.0, 600.0])
@@ -97,9 +96,11 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
                                 .on_hover_text("Close")
                                 .clicked()
                             {
-                                ui.data_mut(|d| {
-                                    d.insert_temp(egui::Id::new("file_viewer_close"), true);
-                                });
+                                helpers::set_temp_bool(
+                                    ui.ctx(),
+                                    helpers::data::FILE_VIEWER_CLOSE,
+                                    true,
+                                );
                             }
                             let ctrl_s =
                                 ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, Key::S));
@@ -203,7 +204,7 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
                     let max_content_width =
                         gutter_w + gutter_gap + max_line_len as f32 * char_width + right_pad;
                     let scroll_out = ScrollArea::both()
-                        .id_salt("file_viewer_scroll")
+                        .id_salt(panel.viewer_scroll_area_id)
                         .auto_shrink([false; 2])
                         .scroll_offset(panel.viewer_scroll)
                         .scroll_source(egui::scroll_area::ScrollSource {
@@ -246,7 +247,7 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
                                 // context layer bypasses that and always renders correctly.
                                 let mut ctx_painter = ui.ctx().layer_painter(egui::LayerId::new(
                                     egui::Order::Middle,
-                                    egui::Id::new("gutter_layer"),
+                                    panel.gutter_layer_id,
                                 ));
                                 ctx_painter.set_clip_rect(clip_rect_before);
                                 ctx_painter.rect_filled(
@@ -365,10 +366,7 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
     }
 
     // X button / egui close signal
-    if ctx.data_mut(|d| {
-        d.remove_temp::<bool>(egui::Id::new("file_viewer_close"))
-            .unwrap_or(false)
-    }) {
+    if helpers::take_temp_bool(ctx, helpers::data::FILE_VIEWER_CLOSE) {
         if is_modified {
             panel.show_close_confirm = true;
         } else {
@@ -384,7 +382,7 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
         let dialog_size = egui::vec2(320.0, 148.0);
         let dialog_pos = viewer_rect.center() - dialog_size * 0.5;
 
-        egui::Area::new(egui::Id::new("close_confirm_dialog"))
+        egui::Area::new(panel.close_confirm_id)
             .fixed_pos(dialog_pos)
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
@@ -489,10 +487,8 @@ pub fn show_file_viewer(ctx: &egui::Context, panel: &mut ExplorerPanelState) {
         panel.file_edit_buffer = None;
         panel.viewer_scroll = egui::Vec2::ZERO;
         // Clear the open flag so the chat input can reclaim focus.
-        ctx.data_mut(|d| {
-            d.insert_temp(egui::Id::new("file_viewer_open"), false);
-            d.insert_temp(egui::Id::new("popup_just_closed"), true);
-        });
+        helpers::set_temp_bool(ctx, helpers::data::FILE_VIEWER_OPEN, false);
+        helpers::set_temp_bool(ctx, helpers::data::POPUP_JUST_CLOSED, true);
     }
 }
 

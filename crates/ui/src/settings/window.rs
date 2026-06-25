@@ -1,3 +1,4 @@
+use crate::helpers;
 use crate::theme::{Palette, ROUND_SM};
 use autocode_core::state::AppState;
 use autocode_core::storage::provider_file;
@@ -14,9 +15,7 @@ pub fn show_window(ctx: &egui::Context, state: &mut AppState, settings: &mut Set
         // Clean up stale debounce flag from a prior outside-click close.
         // egui insert_temp is persistent across frames, so we must clear it
         // here to avoid the first Settings button click being silently swallowed.
-        ctx.data_mut(|d| {
-            d.remove_temp::<bool>(egui::Id::new("settings_closed_this_frame"));
-        });
+        helpers::take_temp_bool(ctx, helpers::data::SETTINGS_CLOSED_THIS_FRAME);
         return;
     }
     let mut open = true;
@@ -31,6 +30,7 @@ pub fn show_window(ctx: &egui::Context, state: &mut AppState, settings: &mut Set
     });
 
     let window_resp = egui::Window::new("Settings")
+        .id(settings.window_id)
         .title_bar(false)
         .open(&mut open)
         .resizable(true)
@@ -167,12 +167,12 @@ pub fn show_window(ctx: &egui::Context, state: &mut AppState, settings: &mut Set
 
     if request_close {
         state.settings_open = false;
-        ctx.data_mut(|d| d.insert_temp(egui::Id::new("settings_closed_this_frame"), true));
+        helpers::set_temp_bool(ctx, helpers::data::SETTINGS_CLOSED_THIS_FRAME, true);
         let _ = provider_file::save_providers_file(&state.providers);
     }
     if !state.settings_open {
         // Notify the chat input that a popup just closed so it can reclaim focus.
-        ctx.data_mut(|d| d.insert_temp(egui::Id::new("popup_just_closed"), true));
+        helpers::set_temp_bool(ctx, helpers::data::POPUP_JUST_CLOSED, true);
     }
 }
 

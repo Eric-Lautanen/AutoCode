@@ -2,6 +2,8 @@
 
 use autocode_core::state::ChatMessage;
 
+use crate::helpers::next_id;
+
 pub struct ChatPanelState {
     pub input: String,
     pub scroll_to_bottom: bool,
@@ -22,6 +24,16 @@ pub struct ChatPanelState {
     /// Oldest non-Error message ID on disk, populated at session load.
     /// 0 = no history on disk, or not yet checked.
     pub(crate) oldest_disk_id: u64,
+
+    // --- Stable widget IDs (assigned once at creation) ---
+    /// Unique ID for the chat input TextEdit.
+    pub(crate) input_id: egui::Id,
+    /// Unique ID for the input scroll area.
+    pub(crate) input_scroll_id: egui::Id,
+    /// Unique ID for the chat messages scroll area.
+    pub(crate) chat_scroll_id: egui::Id,
+    /// Unique ID for the session tabs scroll area.
+    pub(crate) tabs_scroll_id: egui::Id,
 }
 
 impl Default for ChatPanelState {
@@ -38,6 +50,10 @@ impl Default for ChatPanelState {
             prev_message_count: 0,
             user_scrolled_up: false,
             oldest_disk_id: 0,
+            input_id: next_id(),
+            input_scroll_id: next_id(),
+            chat_scroll_id: next_id(),
+            tabs_scroll_id: next_id(),
         }
     }
 }

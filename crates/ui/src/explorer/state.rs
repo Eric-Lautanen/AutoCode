@@ -3,8 +3,9 @@
 use egui::TextureHandle;
 use std::collections::HashSet;
 
+use crate::helpers::next_id;
+
 /// Ephemeral (non-persisted) state for the explorer panel.
-#[derive(Default)]
 pub struct ExplorerPanelState {
     pub expanded: HashSet<String>,
     pub selected_file: Option<String>,
@@ -22,4 +23,35 @@ pub struct ExplorerPanelState {
     /// Ephemeral scroll offset for the file viewer — never persisted.
     /// Driven explicitly so egui never writes it to its ron memory store.
     pub viewer_scroll: egui::Vec2,
+
+    // --- Stable widget IDs (assigned once at creation) ---
+    /// Unique ID for the file viewer window.
+    pub(crate) viewer_window_id: egui::Id,
+    /// Unique ID for the file viewer scroll area.
+    pub(crate) viewer_scroll_area_id: egui::Id,
+    /// Unique ID for the gutter layer painter.
+    pub(crate) gutter_layer_id: egui::Id,
+    /// Unique ID for the close-confirm dialog Area.
+    pub(crate) close_confirm_id: egui::Id,
+}
+
+impl Default for ExplorerPanelState {
+    fn default() -> Self {
+        Self {
+            expanded: HashSet::new(),
+            selected_file: None,
+            file_content: None,
+            show_file_viewer: false,
+            image_texture: None,
+            renaming: None,
+            rename_buffer: String::new(),
+            file_edit_buffer: None,
+            show_close_confirm: false,
+            viewer_scroll: egui::Vec2::ZERO,
+            viewer_window_id: next_id(),
+            viewer_scroll_area_id: next_id(),
+            gutter_layer_id: next_id(),
+            close_confirm_id: next_id(),
+        }
+    }
 }

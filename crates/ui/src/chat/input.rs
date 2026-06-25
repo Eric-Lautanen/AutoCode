@@ -15,7 +15,7 @@ pub(crate) fn show_input_row(
     state: &mut AppState,
     runtimes: &mut HashMap<String, ChatRuntime>,
     panel_state: &mut ChatPanelState,
-    sid: &str,
+    _sid: &str,
 ) {
     Frame::NONE
         .fill(theme().bg_base)
@@ -26,7 +26,7 @@ pub(crate) fn show_input_row(
             bottom: 6,
         })
         .show(ui, |ui| {
-            ui.push_id(format!("input_row_{}", sid), |ui| {
+            ui.push_id(panel_state.input_id, |ui| {
                 ui.horizontal(|ui| {
                     let active_sid = state.active_session_id.clone();
                     let busy = active_sid.as_ref().is_some_and(|sid| {
@@ -38,7 +38,7 @@ pub(crate) fn show_input_row(
                     let send_enabled = !panel_state.input.trim().is_empty() && !busy;
 
                     let resp = ScrollArea::vertical()
-                        .id_salt(format!("input_scroll_{}", sid))
+                        .id_salt(panel_state.input_scroll_id)
                         .max_height(60.0)
                         .min_scrolled_height(60.0)
                         .auto_shrink([false, false])
@@ -46,7 +46,7 @@ pub(crate) fn show_input_row(
                         .show(ui, |ui: &mut egui::Ui| {
                             ui.add(
                                 TextEdit::multiline(&mut panel_state.input)
-                                    .id(egui::Id::new(format!("chat_input_{}", sid)))
+                                    .id(panel_state.input_id)
                                     .hint_text("Describe a task... Shift+Enter for newline")
                                     .desired_width(input_w)
                                     .desired_rows(3)
@@ -66,7 +66,7 @@ pub(crate) fn show_input_row(
                     // Focus management: only focus the input when the user clicks it.
                     if resp.clicked() {
                         ui.ctx().memory_mut(|mem| {
-                            mem.request_focus(egui::Id::new(format!("chat_input_{}", sid)))
+                            mem.request_focus(panel_state.input_id);
                         });
                     }
 

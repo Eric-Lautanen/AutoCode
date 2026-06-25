@@ -3,16 +3,14 @@ use std::collections::HashMap;
 use eframe::CreationContext;
 use egui::{CentralPanel, Frame, Panel};
 
-use autocode_ai::{
-    chat::{self, ChatRuntime},
-    provider,
-};
+use autocode_ai::chat::{self, ChatRuntime};
 use autocode_core::state::AppState;
 use autocode_core::storage::PersistenceThread;
 use autocode_core::storage::{AppStorage, StorageLoad};
 
 use crate::chat::{self as ui_chat, ChatPanelState};
 use crate::explorer::{self, ExplorerPanelState};
+use crate::helpers;
 use crate::settings::{self, SettingsState};
 use crate::tasks;
 use crate::toolbar;
@@ -121,15 +119,12 @@ impl AutocodeApp {
             } else {
                 &sess.provider_label
             };
-            let strict = state
+            let _strict = state
                 .providers
                 .get(prov_label)
                 .map(|p| p.supports_strict_tools())
                 .unwrap_or(true);
-            autocode_core::helpers::update_full_estimate(
-                sess,
-                &provider::tool_definitions(strict, sess.handoff_enabled),
-            );
+            autocode_core::helpers::update_full_estimate(sess);
             let window = state.ui_display_window;
             let total = sess.messages.len();
             if total > window * 2 {
@@ -270,10 +265,15 @@ impl eframe::App for AutocodeApp {
         {
             let now = autocode_core::helpers::unix_now();
             let last = ctx.data_mut(|d| {
-                *d.get_temp_mut_or_insert_with(egui::Id::new("last_stale_purge"), || 0u64)
+                *d.get_temp_mut_or_insert_with(
+                    helpers::data_id(helpers::data::LAST_STALE_PURGE),
+                    || 0u64,
+                )
             });
             if now.saturating_sub(last) >= 30 {
-                ctx.data_mut(|d| d.insert_temp(egui::Id::new("last_stale_purge"), now));
+                ctx.data_mut(|d| {
+                    d.insert_temp(helpers::data_id(helpers::data::LAST_STALE_PURGE), now)
+                });
                 self.state.prune_disk_state();
             }
         }
@@ -290,10 +290,7 @@ impl eframe::App for AutocodeApp {
         }
 
         if self.sysinfo_rx.is_none()
-            && ctx.data_mut(|d| {
-                d.remove_temp::<bool>(egui::Id::new("sysinfo_refresh_requested"))
-                    .unwrap_or(false)
-            })
+            && helpers::take_temp_bool(ctx, helpers::data::SYSINFO_REFRESH_REQUESTED)
         {
             self.sysinfo_rx = Some(autocode_core::utils::sysinfo::start_detect());
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
@@ -388,10 +385,7 @@ impl eframe::App for AutocodeApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
-        let wants_picker = ctx.data_mut(|d| {
-            d.remove_temp::<bool>(egui::Id::new("open_new_project"))
-                .unwrap_or(false)
-        });
+        let wants_picker = helpers::take_temp_bool(&ctx, helpers::data::OPEN_NEW_PROJECT);
         if wants_picker && self.folder_picker.is_none() {
             let (tx, rx) = std::sync::mpsc::channel::<Option<String>>();
             self.folder_picker = Some(rx);

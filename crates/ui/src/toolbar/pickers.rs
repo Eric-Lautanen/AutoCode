@@ -31,10 +31,13 @@ pub fn show_project_picker(ui: &mut egui::Ui, state: &mut AppState) {
                 let current_dir = std::env::current_dir()
                     .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_else(|_| ".".to_string());
-                ui.ctx().data_mut(|d| {
-                    d.insert_temp(egui::Id::new("open_new_project"), true);
-                    d.insert_temp(egui::Id::new("new_project_dialog_path"), current_dir);
-                });
+                let ctx = ui.ctx();
+                crate::helpers::set_temp_bool(ctx, crate::helpers::data::OPEN_NEW_PROJECT, true);
+                crate::helpers::set_temp(
+                    ctx,
+                    crate::helpers::data::NEW_PROJECT_DIALOG_PATH,
+                    current_dir,
+                );
             }
         });
 }

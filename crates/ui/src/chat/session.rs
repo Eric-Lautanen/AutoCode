@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 
 use autocode_ai::chat::ChatRuntime;
-use autocode_ai::provider;
 use autocode_core::state::{AppState, Role};
 
 use super::state::ChatPanelState;
@@ -55,10 +54,7 @@ pub(crate) fn load_new_session(
                 if !found {
                     purge_on_missing = Some(new_id.clone());
                 } else {
-                    autocode_core::helpers::update_full_estimate(
-                        new_sess,
-                        &provider::tool_definitions(true, new_sess.handoff_enabled),
-                    );
+                    autocode_core::helpers::update_full_estimate(new_sess);
                 }
             }
             if purge_on_missing.is_none() {
@@ -156,7 +152,7 @@ pub(crate) fn restore_scroll_offset(
         }
         if let Some(ref next) = state.active_session_id {
             if let Some(saved_y) = panel_state.scroll_offsets.get(next) {
-                let next_sa_id = egui::Id::new(("chat_scroll", next.as_str()));
+                let next_sa_id = panel_state.chat_scroll_id;
                 let mut sid = ui.ctx().data_mut(|d| {
                     d.get_persisted::<egui::scroll_area::State>(next_sa_id)
                         .unwrap_or_default()

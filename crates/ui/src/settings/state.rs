@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use crate::helpers::next_id;
+
 #[derive(Default, PartialEq)]
 pub(crate) enum Tab {
     #[default]
@@ -11,7 +13,6 @@ pub(crate) enum Tab {
     About,
 }
 
-#[derive(Default)]
 pub struct SettingsState {
     pub(crate) tab: Tab,
     pub(crate) fetched_models: HashMap<String, Vec<String>>,
@@ -24,4 +25,23 @@ pub struct SettingsState {
     pub(crate) add_buffer: String,
     /// When true, show an inline name input for adding a new provider.
     pub(crate) adding_provider: bool,
+
+    // --- Stable widget IDs (assigned once at creation) ---
+    /// Unique ID for the settings window.
+    pub(crate) window_id: egui::Id,
+}
+
+impl Default for SettingsState {
+    fn default() -> Self {
+        Self {
+            tab: Tab::default(),
+            fetched_models: HashMap::new(),
+            fetch_status: HashMap::new(),
+            renaming_provider: None,
+            rename_buffer: String::new(),
+            add_buffer: String::new(),
+            adding_provider: false,
+            window_id: next_id(),
+        }
+    }
 }
