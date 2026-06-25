@@ -34,7 +34,7 @@ autocode/resources/app.rc | 1 | Resource script referencing icon.ico for Windows
 autocode/src/main.rs | 7 | Entry point: hides console on Windows, delegates to autocode_ui::run()
 
 ## core/ — Shared types, state, storage, tokenizer, utils
-core/Cargo.toml | 9 | Crate manifest: deps (serde, scraper, tiktoken), workspace edition/version
+core/Cargo.toml | 9 | Crate manifest: deps (serde, scraper), workspace edition/version
 core/src/lib.rs | 14 | Crate root: re-exports modules; doc comment describes core types, regex, tokenizer, fs, sysinfo
 core/src/helpers/mod.rs | 36 | Re-exports all helper items (id, paths, regex, sanitize, serde_defaults, tokens, utils)
 core/src/helpers/id.rs | 35 | Atomic counter + hashed base36 short ID generation, session ID with uniqueness loop
@@ -42,7 +42,7 @@ core/src/helpers/paths.rs | 258 | Path resolution with LRU cache, traversal-bloc
 core/src/helpers/regex.rs | 366 | Minimal regex engine: literal/alternation/simple-pattern matching with backtracking
 core/src/helpers/sanitize.rs | 56 | Repair corrupt tool_call JSON args in-place, removing entries that can't be fixed
 core/src/helpers/serde_defaults.rs | 81 | Serde default-value functions and SecretString serialize/deserialize helpers
-core/src/helpers/tokens.rs | 262 | Token estimation: heuristic (code/prose/CJK) + tiktoken for full request/message/tools JSON
+core/src/helpers/tokens.rs | 262 | Token estimation: heuristic for content, messages, tools, and full request JSON
 core/src/helpers/utils.rs | 342 | Provider manifest loader, truncation helpers, token-usage display, sanitize display text
 core/src/state/mod.rs | 19 | Re-exports all state types (AppState, ChatMessage, Project, Provider, Session, Todo, Secret)
 core/src/state/app_state.rs | 548 | Top-level AppState: projects, providers, sessions, timeouts, rate limits, pending writes flush
@@ -62,7 +62,7 @@ core/src/storage/provider_file.rs | 230 | Serialize/deserialize providers.json w
 core/src/storage/session_io.rs | 291 | Session dir management, atomic JSON writes, load/save/delete session meta & messages, orphan cleanup
 core/src/storage/session_meta.rs | 85 | SessionMeta struct: session state snapshot persisted as session.json in subdirectory
 core/src/storage/shell_task.rs | 82 | CRUD + pruning for per-project shell task JSON files on disk
-core/src/tokenizer/mod.rs | 88 | Tokenizer trait, TiktokenTokenizer (model-family fallback), HeuristicTokenizer, offline_token_count
+core/src/tokenizer/mod.rs | 88 | Tokenizer trait, HeuristicTokenizer, tokenizer_for_model, offline_token_count
 core/src/utils/mod.rs | 15 | Re-exports extract, fsutil, sysinfo modules and their public items
 core/src/utils/extract.rs | 298 | HTML content extraction: DDG search results, GitHub code, generic main-content with blacklisted domains
 core/src/utils/fsutil.rs | 148 | Filesystem wrappers with Windows \\?\ extended paths, exe_dir(), temp file tracking

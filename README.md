@@ -17,7 +17,7 @@
 | **Multi-Provider** | Built-in configs for popular providers + add any OpenAI-compatible provider via Settings |
 | **Streaming** | Real-time SSE with auto-recovery, exponential backoff, auto-continue on drop |
 | **Sessions** | Named sessions per project (up to 50), JSONL history, lazy-load display buffer, per-project tab colors |
-| **Token Management** | 3-tier counting (API → tiktoken → heuristic), auto-handoff at configurable threshold |
+| **Token Management** | 2-tier counting (API → heuristic), auto-handoff at configurable threshold |
 | **File Explorer** | gitignore-aware tree with git status colors, text/image preview, inline rename/delete, simple code editor |
 | **Task Tracking** | Session-level floating todo list + project-level task list (disk-persisted) |
 | **Session Handoff** | Auto-continuation when context limits hit — trigger prompt, RESUME.md generation |
@@ -63,7 +63,7 @@ Built in **Rust 2024** with **egui 0.34** / **eframe 0.34**. Zero async — all 
 - **No async runtime** — blocking I/O on spawned threads, UI polls via channels
 - **Immediate-mode GUI** — egui rebuilds every frame
 - **Disk as source of truth** — messages always written to JSONL immediately; RAM only holds a display window
-- **3-tier token estimation** — API counting endpoint → tiktoken offline → heuristic fallback
+- **2-tier token estimation** — API counting endpoint → heuristic fallback
 - **7-strategy fuzzy patching** — exact → CRLF-normalized → whitespace-normalized → tabs-normalized → anchored line → Myers DP alignment → single-line fuzzy
 - **Transient/permanent error classification** — rate limits/timeouts/5xx retry forever (5s→180s cap); auth/quota/filter surface immediately
 
