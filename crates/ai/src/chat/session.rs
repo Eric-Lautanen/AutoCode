@@ -110,9 +110,9 @@ pub fn prepare_request_messages_for_session(
         }
     }
 
-    // Compute estimated_messages_tokens from the full disk-backed list for the
-    // auto-handoff fallback. estimated_full_tokens is NOT set here — that's only
-    // done by authoritative sources (pre-flight tiktoken check, update_full_estimate).
+    // Compute estimated_messages_tokens from the full disk-backed list.
+    // estimated_full_tokens is kept in sync by push_to_session and turn-
+    // completion recomputes, so it doesn't need to be set here.
     {
         let model = state
             .sessions

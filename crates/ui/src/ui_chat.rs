@@ -758,7 +758,7 @@ fn show_session_tabs(
                                             }
                                         } else {
                                             // Never used — delete entirely.
-                                            autocode_ai::session::delete_session(state, &id);
+                                            autocode_ai::chat::delete_session(state, &id);
                                         }
                                         // Show welcome screen — never auto-switch to another tab.
                                         if state.active_session_id.as_deref() == Some(&id) {

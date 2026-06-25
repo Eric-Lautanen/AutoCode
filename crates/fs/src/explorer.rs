@@ -370,8 +370,6 @@ pub fn glob_files(search_root: Option<&Path>, pattern: &str) -> Vec<String> {
     results
 }
 
-
-
 /// Maximum Levenshtein distance to consider a word a "close" match.
 const MAX_FUZZY_DISTANCE: usize = 3;
 /// Maximum number of fuzzy suggestions to return.
@@ -516,9 +514,11 @@ fn fuzzy_suggest(
         project_root,
         file_glob,
         gitignore,
-        &mut candidates,
-        &mut phrase_lines,
-        &mut files_scanned,
+        &mut FuzzyWalkState {
+            candidates: &mut candidates,
+            phrase_lines: &mut phrase_lines,
+            files_scanned: &mut files_scanned,
+        },
     );
 
     // Score each candidate and collect the best ones.
@@ -594,7 +594,14 @@ fn walk_files(
         }
 
         if is_dir {
-            walk_files(&path, search_root, project_root, file_glob, gitignore, visitor);
+            walk_files(
+                &path,
+                search_root,
+                project_root,
+                file_glob,
+                gitignore,
+                visitor,
+            );
         } else {
             let rel_raw = path
                 .strip_prefix(search_root)
@@ -628,17 +635,21 @@ fn walk_files(
     }
 }
 
+struct FuzzyWalkState<'a> {
+    candidates: &'a mut HashSet<String>,
+    phrase_lines: &'a mut Vec<String>,
+    files_scanned: &'a mut usize,
+}
+
 fn fuzzy_walk(
     dir: &Path,
     search_root: &Path,
     project_root: &Path,
     file_glob: &str,
     gitignore: Option<&Gitignore>,
-    candidates: &mut HashSet<String>,
-    phrase_lines: &mut Vec<String>,
-    files_scanned: &mut usize,
+    state: &mut FuzzyWalkState,
 ) {
-    if *files_scanned >= MAX_FUZZY_FILES {
+    if *state.files_scanned >= MAX_FUZZY_FILES {
         return;
     }
 
@@ -649,17 +660,17 @@ fn fuzzy_walk(
         file_glob,
         gitignore,
         &mut |_path: &Path, _rel: &str, content: &str| {
-            if *files_scanned >= MAX_FUZZY_FILES {
+            if *state.files_scanned >= MAX_FUZZY_FILES {
                 return;
             }
 
-            *files_scanned += 1;
+            *state.files_scanned += 1;
 
             // Extract unique words from the file content.
             for token in content.split(|c: char| !c.is_alphanumeric() && c != '_') {
                 let trimmed = token.trim_matches('_');
                 if trimmed.len() >= 2 && trimmed.len() <= 64 {
-                    candidates.insert(trimmed.to_string());
+                    state.candidates.insert(trimmed.to_string());
                 }
             }
 
@@ -667,7 +678,7 @@ fn fuzzy_walk(
             for line in content.lines() {
                 let trimmed = line.trim();
                 if trimmed.len() >= 10 && trimmed.len() <= 200 {
-                    phrase_lines.push(trimmed.to_string());
+                    state.phrase_lines.push(trimmed.to_string());
                 }
             }
         },
@@ -755,7 +766,9 @@ pub fn grep_files(
                 pattern,
                 autocode_core::utils::fsutil::display_path(search_path).display()
             );
-            if !has_regex_meta(pattern) && let Some(content) = content {
+            if !has_regex_meta(pattern)
+                && let Some(content) = content
+            {
                 let suggestions = fuzzy_suggest_single_file(&content, pattern, case_sensitive);
                 if !suggestions.is_empty() {
                     msg.push_str(&format!(

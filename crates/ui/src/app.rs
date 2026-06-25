@@ -5,7 +5,7 @@ use egui::{CentralPanel, Frame, Panel};
 
 use autocode_ai::{
     chat::{self, ChatRuntime},
-    provider, session,
+    provider,
 };
 use autocode_core::state::AppState;
 use autocode_core::storage::PersistenceThread;
@@ -312,7 +312,7 @@ impl eframe::App for AutocodeApp {
                 .active_session()
                 .is_some_and(|s| s.messages.is_empty())
         {
-            session::ensure_session(&mut self.state)
+            chat::ensure_session(&mut self.state)
         } else {
             false
         };

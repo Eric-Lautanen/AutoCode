@@ -40,15 +40,14 @@ pub struct Session {
     #[serde(default)]
     pub closed: bool,
     /// Estimated token count for the full disk-backed message list + tool definitions.
-    /// Populated by prepare_request_messages_for_session(). More accurate than
-    /// token_count() (which only covers in-RAM messages) but less accurate than
-    /// actual_tokens_used (which is the provider's official count).
-    /// Includes tool definitions which are NOT part of the stored chat history.
+    /// This is the single authoritative cached value — updated by push_to_session
+    /// (heuristic tier, O(1)) and by turn-completion points (full tiered recompute
+    /// with API → tiktoken → heuristic). The pre-flight check in start_completion
+    /// reads this cached value rather than recomputing it.
     #[serde(default)]
     pub estimated_full_tokens: usize,
     /// Estimated token count for disk-backed messages only (no tool definitions).
-    /// This is the user-visible count since tool definitions are not stored
-    /// in the chat history and are the same for every request.
+    /// Incrementively updated by push_to_session and recomputed on truncation/load.
     #[serde(default)]
     pub estimated_messages_tokens: usize,
 

@@ -145,9 +145,13 @@ pub fn unique_data_dir_name(projects: &[Project], desired: &str) -> String {
 }
 
 /// Recompute estimated_full_tokens on a session using the actual tool
-/// definitions JSON. Must be called after loading messages from disk so
-/// the toolbar meter and pre-flight check agree from the start.
-/// Uses tiktoken (matching pre-flight check) with heuristic fallback.
+/// definitions JSON. Called after loading messages from disk so the
+/// toolbar meter shows an accurate value from the start.
+/// Uses tiktoken with heuristic fallback.
+/// NOTE: After the token-estimation consolidation, push_to_session keeps
+/// estimated_full_tokens fresh on every message push, so this is only
+/// needed for the initial load case (when messages are loaded from disk
+/// and the running totals are stale).
 pub fn update_full_estimate(session: &mut crate::state::Session, tools_json: &serde_json::Value) {
     let model = if session.model.is_empty() {
         None

@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use crate::helpers;
 use crate::theme::Palette;
-use autocode_ai::{chat::ChatRuntime, session};
+use autocode_ai::chat::{self, ChatRuntime};
 use autocode_core::{
     helpers as core_helpers,
     state::{AppState, Project},
@@ -44,7 +44,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                                 let selected = state.active_project_id.as_deref() == Some(&p.id);
                                 if ui.selectable_label(selected, &p.name).clicked() {
                                     autocode_core::storage::switch_to_project(state, &p.id);
-                                    session::ensure_session(state);
+                                    chat::ensure_session(state);
                                 }
                             });
                         }
@@ -117,7 +117,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                     // New session button next to the session picker.
                     if lit_btn(ui, "+ Session", false).clicked() {
                         state.new_session_for_project(Some(pid.clone()));
-                        session::ensure_session(state);
+                        chat::ensure_session(state);
                     }
                 }
 

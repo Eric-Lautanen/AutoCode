@@ -1150,7 +1150,7 @@ fn show_projects(ui: &mut egui::Ui, state: &mut AppState) {
         }
     }
     for sid in delete_ops {
-        autocode_ai::session::delete_session(state, &sid);
+        autocode_ai::chat::delete_session(state, &sid);
     }
     if let Some(pid) = delete_all_for_project {
         let ids: Vec<String> = state
@@ -1160,7 +1160,7 @@ fn show_projects(ui: &mut egui::Ui, state: &mut AppState) {
             .map(|s| s.id.clone())
             .collect();
         for sid in ids {
-            autocode_ai::session::delete_session(state, &sid);
+            autocode_ai::chat::delete_session(state, &sid);
         }
     }
     if let Some(id) = to_remove {
@@ -1176,7 +1176,7 @@ fn show_projects(ui: &mut egui::Ui, state: &mut AppState) {
             .find(|p| p.id == id)
             .map(autocode_core::storage::project_sessions_dir);
         for sid in sess_ids {
-            autocode_ai::session::delete_session(state, &sid);
+            autocode_ai::chat::delete_session(state, &sid);
         }
         if let Some(dir) = proj_dir {
             let _ = autocode_core::utils::fsutil::remove_dir(&dir);
