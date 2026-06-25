@@ -8,10 +8,10 @@
 
 pub mod app;
 pub mod chat;
+pub mod explorer;
 pub mod helpers;
 pub mod settings;
 pub mod theme;
-pub mod ui_explorer;
 pub mod ui_project_tasks;
 pub mod ui_todo;
 pub mod ui_todo_window;
