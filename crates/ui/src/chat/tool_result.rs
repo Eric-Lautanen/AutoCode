@@ -382,7 +382,7 @@ pub(crate) fn render_structured_tool_result(
             let done = meta.byte_count.unwrap_or(0);
             ui.label(
                 RichText::new(format!(
-                    "[todo] Task list updated -- {}/{} complete",
+                    "[session] Task list updated -- {}/{} complete",
                     done, total
                 ))
                 .size(12.0)
