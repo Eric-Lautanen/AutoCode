@@ -149,15 +149,15 @@ AutoCode ships with built-in configs for popular providers. You can also add any
 
 ## Project Structure
 
-**20,754 lines of Rust across 58 source files (5 crates).** See [`structure.md`](structure.md) for the full breakdown.
+**21,131 lines across 122 files (5 crates).** See [`structure.md`](structure.md) for the full file-by-file breakdown.
 
 | Crate | Lines | Role |
 |-------|-------|------|
-| `autocode` (bin) | 11 | Entry point, icon embedding |
-| `autocode-core` (lib) | 5,638 | State types, storage, helpers, token estimation, sysinfo, HTML extraction |
-| `autocode-ai` (lib) | 6,701 | Chat loop, HTTP/SSE client, tool dispatch, retry/backoff |
-| `autocode-fs` (lib) | 1,605 | Shell executor, file explorer, git status, skill loader |
-| `autocode-ui` (lib) | 6,799 | egui panels — chat, settings, explorer, toolbar, todo windows |
+| `autocode` (bin) | 23 | Entry point, icon embedding |
+| `autocode-core` (lib) | 5,650 | State types, storage, helpers, token estimation, sysinfo, HTML extraction |
+| `autocode-ai` (lib) | 6,808 | Chat loop, HTTP/SSE client, tool dispatch, retry/backoff |
+| `autocode-fs` (lib) | 1,689 | Shell executor, file explorer, git status, skill loader |
+| `autocode-ui` (lib) | 6,961 | egui panels — chat, settings, explorer, toolbar, todo windows |
 
 ---
 
