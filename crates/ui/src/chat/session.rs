@@ -152,7 +152,7 @@ pub(crate) fn restore_scroll_offset(
         }
         if let Some(ref next) = state.active_session_id {
             if let Some(saved_y) = panel_state.scroll_offsets.get(next) {
-                let next_sa_id = panel_state.chat_scroll_id;
+                let next_sa_id = ui.id().with(panel_state.chat_scroll_id);
                 let mut sid = ui.ctx().data_mut(|d| {
                     d.get_persisted::<egui::scroll_area::State>(next_sa_id)
                         .unwrap_or_default()

@@ -28,6 +28,8 @@ pub struct ChatPanelState {
     // --- Stable widget IDs (assigned once at creation) ---
     /// Unique ID for the chat input TextEdit.
     pub(crate) input_id: egui::Id,
+    /// Unique ID for the input row push_id scope (separate from input_id).
+    pub(crate) input_scope_id: egui::Id,
     /// Unique ID for the input scroll area.
     pub(crate) input_scroll_id: egui::Id,
     /// Unique ID for the chat messages scroll area.
@@ -51,6 +53,7 @@ impl Default for ChatPanelState {
             user_scrolled_up: false,
             oldest_disk_id: 0,
             input_id: next_id(),
+            input_scope_id: next_id(),
             input_scroll_id: next_id(),
             chat_scroll_id: next_id(),
             tabs_scroll_id: next_id(),

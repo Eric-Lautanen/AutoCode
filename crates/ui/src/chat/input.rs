@@ -26,7 +26,7 @@ pub(crate) fn show_input_row(
             bottom: 6,
         })
         .show(ui, |ui| {
-            ui.push_id(panel_state.input_id, |ui| {
+            ui.push_id(panel_state.input_scope_id, |ui| {
                 ui.horizontal(|ui| {
                     let active_sid = state.active_session_id.clone();
                     let busy = active_sid.as_ref().is_some_and(|sid| {
