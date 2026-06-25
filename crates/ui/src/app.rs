@@ -138,6 +138,8 @@ impl AutocodeApp {
             state.handoff_enabled = sess.handoff_enabled;
             state.show_explorer = sess.show_explorer;
             state.settings_open = sess.settings_open;
+            state.show_reasoning_inline = sess.show_reasoning_inline;
+            state.show_project_tasks = sess.show_project_tasks;
             if let Some(meta) = autocode_core::storage::load_project_meta(proj) {
                 state.project_task_list = meta.project_task_list;
             }
@@ -452,6 +454,8 @@ impl eframe::App for AutocodeApp {
             let handoff_enabled = self.state.handoff_enabled;
             let show_explorer = self.state.show_explorer;
             let settings_open = self.state.settings_open;
+            let show_reasoning_inline = self.state.show_reasoning_inline;
+            let show_project_tasks = self.state.show_project_tasks;
             let provider_params = self.state.active_provider().map(|p| {
                 (
                     p.temperature,
@@ -471,6 +475,9 @@ impl eframe::App for AutocodeApp {
                 sess.handoff_enabled = handoff_enabled;
                 sess.show_explorer = show_explorer;
                 sess.settings_open = settings_open;
+                sess.show_reasoning_inline = show_reasoning_inline;
+                sess.show_project_tasks = show_project_tasks;
+                sess.draft_input = self.chat_panel.input.clone();
                 if let Some((temp, top_p, freq, pres, rph, handoff)) = provider_params {
                     sess.temperature = temp;
                     sess.top_p = top_p;

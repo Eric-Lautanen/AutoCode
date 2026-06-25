@@ -57,6 +57,18 @@ pub struct SessionMeta {
     pub thinking_mode: bool,
     #[serde(default)]
     pub reasoning_effort: String,
+
+    /// Whether the reasoning content overlay is shown inline.
+    #[serde(default)]
+    pub show_reasoning_inline: bool,
+
+    /// Whether the project-task-list panel is open.
+    #[serde(default)]
+    pub show_project_tasks: bool,
+
+    /// Saved draft input text, restored on session switch.
+    #[serde(default)]
+    pub draft_input: String,
 }
 
 impl SessionMeta {
@@ -84,6 +96,9 @@ impl SessionMeta {
             handoff_percent: session.handoff_percent,
             thinking_mode: session.thinking_mode,
             reasoning_effort: session.reasoning_effort.clone(),
+            show_reasoning_inline: session.show_reasoning_inline,
+            show_project_tasks: session.show_project_tasks,
+            draft_input: session.draft_input.clone(),
         }
     }
 }

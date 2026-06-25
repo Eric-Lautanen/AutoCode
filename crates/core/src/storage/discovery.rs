@@ -198,6 +198,9 @@ pub fn discover_sessions_from_disk(project: &Project) -> Vec<Session> {
                     handoff_percent: meta.handoff_percent,
                     thinking_mode: meta.thinking_mode,
                     reasoning_effort: meta.reasoning_effort,
+                    show_reasoning_inline: meta.show_reasoning_inline,
+                    show_project_tasks: meta.show_project_tasks,
+                    draft_input: meta.draft_input,
                 });
             }
         }

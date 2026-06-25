@@ -69,6 +69,18 @@ pub struct Session {
     pub thinking_mode: bool,
     #[serde(default)]
     pub reasoning_effort: String,
+
+    /// Whether the reasoning content overlay is shown inline.
+    #[serde(default)]
+    pub show_reasoning_inline: bool,
+
+    /// Whether the project-task-list panel is open.
+    #[serde(default)]
+    pub show_project_tasks: bool,
+
+    /// Saved draft input text, restored on session switch.
+    #[serde(default)]
+    pub draft_input: String,
 }
 
 impl Session {
@@ -101,6 +113,9 @@ impl Session {
             handoff_percent: 80,
             thinking_mode: false,
             reasoning_effort: "medium".into(),
+            show_reasoning_inline: false,
+            show_project_tasks: false,
+            draft_input: String::new(),
         }
     }
 

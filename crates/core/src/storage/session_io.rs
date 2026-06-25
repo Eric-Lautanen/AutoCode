@@ -208,6 +208,9 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
                 session.handoff_percent = meta.handoff_percent;
                 session.thinking_mode = meta.thinking_mode;
                 session.reasoning_effort = meta.reasoning_effort;
+                session.show_reasoning_inline = meta.show_reasoning_inline;
+                session.show_project_tasks = meta.show_project_tasks;
+                session.draft_input = meta.draft_input;
                 // Recompute token estimates from loaded messages so the UI shows
                 // accurate context usage immediately after startup.
                 session.recompute_messages_tokens();

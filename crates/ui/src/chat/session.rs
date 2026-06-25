@@ -18,9 +18,12 @@ pub(crate) fn save_old_session(
         old_sess.todo_list = state.todo_list.clone();
         old_sess.show_todo = state.show_todo;
         old_sess.todo_user_dismissed = state.todo_user_dismissed;
+        old_sess.draft_input = panel_state.input.clone();
         old_sess.handoff_enabled = state.handoff_enabled;
         old_sess.show_explorer = state.show_explorer;
         old_sess.settings_open = state.settings_open;
+        old_sess.show_reasoning_inline = state.show_reasoning_inline;
+        old_sess.show_project_tasks = state.show_project_tasks;
         if let Some(old_proj) = state
             .projects
             .iter()
@@ -99,9 +102,12 @@ pub(crate) fn load_new_session(
                 state.todo_list = new_sess.todo_list.clone();
                 state.show_todo = new_sess.show_todo;
                 state.todo_user_dismissed = new_sess.todo_user_dismissed;
+                panel_state.input = new_sess.draft_input.clone();
                 state.handoff_enabled = new_sess.handoff_enabled;
                 state.show_explorer = new_sess.show_explorer;
                 state.settings_open = new_sess.settings_open;
+                state.show_reasoning_inline = new_sess.show_reasoning_inline;
+                state.show_project_tasks = new_sess.show_project_tasks;
                 if let Some(ref pid) = new_sess.project_id {
                     state.active_project_id = Some(pid.clone());
                 }
@@ -110,12 +116,15 @@ pub(crate) fn load_new_session(
     } else {
         panel_state.display_buffer.clear();
         panel_state.loaded_min_id = 0;
+        panel_state.input.clear();
         state.todo_list.clear();
         state.show_todo = false;
         state.todo_user_dismissed = false;
         state.handoff_enabled = false;
         state.show_explorer = true;
         state.settings_open = false;
+        state.show_reasoning_inline = false;
+        state.show_project_tasks = false;
     }
     purge_on_missing
 }
