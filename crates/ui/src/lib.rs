@@ -13,7 +13,7 @@ pub mod helpers;
 pub mod settings;
 pub mod tasks;
 pub mod theme;
-pub mod ui_toolbar;
+pub mod toolbar;
 
 /// Launch the egui/eframe application. Call this from `main()`.
 pub fn run() -> eframe::Result {

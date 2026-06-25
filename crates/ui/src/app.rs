@@ -15,7 +15,7 @@ use crate::chat::{self as ui_chat, ChatPanelState};
 use crate::explorer::{self, ExplorerPanelState};
 use crate::settings::{self, SettingsState};
 use crate::tasks;
-use crate::ui_toolbar;
+use crate::toolbar;
 
 /// Adapter: wraps an immutable `&dyn eframe::Storage` for loading state.
 pub struct EframeStorage<'a>(pub &'a dyn eframe::Storage);
@@ -414,7 +414,7 @@ impl eframe::App for AutocodeApp {
         Panel::top("toolbar")
             .frame(Frame::new().fill(crate::theme::Palette::BG_BASE))
             .show_inside(ui, |ui| {
-                ui_toolbar::show(ui, &mut self.state, &mut self.runtimes);
+                toolbar::show(ui, &mut self.state, &mut self.runtimes);
             });
 
         if self.state.show_explorer {
