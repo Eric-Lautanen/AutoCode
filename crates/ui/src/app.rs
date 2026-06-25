@@ -11,7 +11,7 @@ use autocode_core::state::AppState;
 use autocode_core::storage::PersistenceThread;
 use autocode_core::storage::{AppStorage, StorageLoad};
 
-use crate::ui_chat::{self, ChatPanelState};
+use crate::chat::{self as ui_chat, ChatPanelState};
 use crate::ui_explorer::{self, ExplorerPanelState};
 use crate::ui_project_tasks;
 use crate::ui_settings::{self, SettingsState};
