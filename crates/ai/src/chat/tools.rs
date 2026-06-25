@@ -1038,7 +1038,6 @@ pub fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
         }
 
         "todo_list" => {
-            let title = args["title"].as_str().unwrap_or("Task List").to_string();
             let items_val = match args["task_items"].as_array() {
                 Some(a) => a,
                 None => return "Error: missing 'task_items' array".to_string(),
@@ -1075,8 +1074,7 @@ pub fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                 ""
             };
             format!(
-                "Task list updated: \"{}\" -- {}/{} complete | {}{}",
-                title,
+                "Task list updated -- {}/{} complete | {}{}",
                 done,
                 total,
                 super::session_ops::format_context_usage(ctx_used, ctx_max, max_output),
@@ -1085,10 +1083,6 @@ pub fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
         }
 
         "project_task_list" => {
-            let title = args["title"]
-                .as_str()
-                .unwrap_or("Project Tasks")
-                .to_string();
             let items_val = match args["task_items"].as_array() {
                 Some(a) => a,
                 None => return "Error: missing 'task_items' array".to_string(),
@@ -1120,8 +1114,7 @@ pub fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                 .count();
             let total = items.len();
             format!(
-                "Project tasks updated: \"{}\" -- {}/{} complete | {}",
-                title,
+                "Project tasks updated -- {}/{} complete | {}",
                 done,
                 total,
                 super::session_ops::format_context_usage(ctx_used, ctx_max, max_output),

@@ -11,10 +11,8 @@ pub mod chat;
 pub mod explorer;
 pub mod helpers;
 pub mod settings;
+pub mod tasks;
 pub mod theme;
-pub mod ui_project_tasks;
-pub mod ui_todo;
-pub mod ui_todo_window;
 pub mod ui_toolbar;
 
 /// Launch the egui/eframe application. Call this from `main()`.

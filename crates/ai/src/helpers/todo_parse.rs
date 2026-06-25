@@ -1,12 +1,14 @@
 use autocode_core::state::{TodoItem, TodoStatus};
 
+/// Hardcoded title for session-scoped todo lists.
+pub const SESSION_TASKS_TITLE: &str = "Session tasks";
+
+/// Hardcoded title for project-scoped task lists.
+pub const PROJECT_TASKS_TITLE: &str = "Project tasks";
+
 /// Parse `task_items` from a tool-call JSON args value.
-/// `default_title` is used when the `title` field is absent.
-pub fn parse_todo_items(
-    args: &serde_json::Value,
-    default_title: &str,
-) -> Option<(String, Vec<TodoItem>)> {
-    let title = args["title"].as_str().unwrap_or(default_title).to_string();
+/// The title is always hardcoded — the model no longer provides it.
+pub fn parse_todo_items(args: &serde_json::Value, title: &str) -> Option<(String, Vec<TodoItem>)> {
     let items_val = args["task_items"].as_array()?;
     let items: Vec<TodoItem> = items_val
         .iter()
@@ -28,17 +30,17 @@ pub fn parse_todo_items(
             })
         })
         .collect();
-    Some((title, items))
+    Some((title.to_string(), items))
 }
 
-/// Convenience wrapper around [`parse_todo_items`] with default title `"Task List"`.
+/// Convenience wrapper around [`parse_todo_items`] with hardcoded session title.
 pub fn parse_todo_from_tool_args(args: &serde_json::Value) -> Option<(String, Vec<TodoItem>)> {
-    parse_todo_items(args, "Task List")
+    parse_todo_items(args, SESSION_TASKS_TITLE)
 }
 
-/// Convenience wrapper around [`parse_todo_items`] with default title `"Project Tasks"`.
+/// Convenience wrapper around [`parse_todo_items`] with hardcoded project title.
 pub fn parse_project_task_from_tool_args(
     args: &serde_json::Value,
 ) -> Option<(String, Vec<TodoItem>)> {
-    parse_todo_items(args, "Project Tasks")
+    parse_todo_items(args, PROJECT_TASKS_TITLE)
 }

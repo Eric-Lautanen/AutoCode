@@ -1,13 +1,26 @@
 use autocode_core::{state::AppState, storage};
 
-use crate::ui_todo_window::{TodoWindowConfig, show_todo_window};
+use crate::tasks::task_window::{TodoWindowConfig, show_todo_window};
+
+const SESSION_TASKS_CONFIG: TodoWindowConfig<'static> = TodoWindowConfig {
+    window_title: "Session tasks",
+    header_icon: "[=]",
+    default_y: 60.0,
+    open_id: "todo_open",
+    list_title: "Session tasks",
+    clear_hover: "Clear all tasks",
+    empty_icon: "[=]",
+    empty_title: "No tasks yet",
+    empty_line1: "Tasks will appear here when",
+    empty_line2: "the AI creates a todo list",
+};
 
 const PROJECT_TASKS_CONFIG: TodoWindowConfig<'static> = TodoWindowConfig {
-    window_title: "Project Tasks",
+    window_title: "Project tasks",
     header_icon: "[~]",
     default_y: 320.0,
     open_id: "project_tasks_open",
-    default_list_title: "Project Tasks",
+    list_title: "Project tasks",
     clear_hover: "Clear project tasks",
     empty_icon: "[~]",
     empty_title: "No project tasks yet",
@@ -15,7 +28,41 @@ const PROJECT_TASKS_CONFIG: TodoWindowConfig<'static> = TodoWindowConfig {
     empty_line2: "sessions for long-running goals",
 };
 
-pub fn show_window(ctx: &egui::Context, state: &mut AppState) {
+pub fn show_session_tasks(ctx: &egui::Context, state: &mut AppState) {
+    if !state.show_todo {
+        return;
+    }
+
+    let list = state.todo_list.clone();
+    let out = show_todo_window(ctx, &SESSION_TASKS_CONFIG, &list, state.show_todo);
+
+    if out.clear_clicked {
+        state.todo_list.clear();
+        let proj = state.active_project().cloned();
+        if let Some(sess) = state.active_session_mut() {
+            sess.todo_list.clear();
+            if let Some(proj) = proj.as_ref() {
+                let _ = storage::save_session_meta(proj, sess);
+            }
+        }
+    }
+
+    if out.all_done_triggered {
+        state.todo_list.clear();
+        state.todo_user_dismissed = false;
+        state.show_todo = true;
+        ctx.data_mut(|d| {
+            d.insert_temp(egui::Id::new("todo_open"), false);
+        });
+    }
+
+    if out.close_clicked {
+        state.show_todo = false;
+        state.todo_user_dismissed = true;
+    }
+}
+
+pub fn show_project_tasks(ctx: &egui::Context, state: &mut AppState) {
     if !state.show_project_tasks {
         return;
     }
@@ -25,7 +72,6 @@ pub fn show_window(ctx: &egui::Context, state: &mut AppState) {
 
     if out.clear_clicked {
         state.project_task_list.clear();
-        // Persist cleared list to project meta.
         if let Some(proj) = state.active_project_mut() {
             let mut meta = storage::load_project_meta(proj).unwrap_or_default();
             meta.version = 1;
@@ -37,7 +83,6 @@ pub fn show_window(ctx: &egui::Context, state: &mut AppState) {
     if out.all_done_triggered {
         state.project_task_list.clear();
         state.show_project_tasks = true;
-        // Persist cleared state to disk.
         let ptl = state.project_task_list.clone();
         if let Some(proj) = state.active_project_mut() {
             let mut meta = storage::load_project_meta(proj).unwrap_or_default();

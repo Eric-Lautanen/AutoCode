@@ -1,8 +1,3 @@
-// ui_todo_window.rs — Shared floating todo/task-list window component.
-//
-// Eliminates the ~300 lines of duplicated UI code that previously existed
-// between ui_todo.rs and ui_project_tasks.rs.
-
 use egui::{Color32, CornerRadius, Frame, Margin, RichText, Stroke, Vec2};
 
 use crate::helpers;
@@ -20,8 +15,8 @@ pub struct TodoWindowConfig<'a> {
     pub default_y: f32,
     /// egui temp-data key for "is this popup open?".
     pub open_id: &'a str,
-    /// Title used when the TodoList title is empty.
-    pub default_list_title: &'a str,
+    /// Hardcoded list title (always "Session tasks" or "Project tasks").
+    pub list_title: &'a str,
     /// Hover text for the "Clear" button.
     pub clear_hover: &'a str,
     /// Lines shown in the empty-state placeholder.
@@ -101,12 +96,7 @@ pub fn show_todo_window(
                                 .size(14.0)
                                 .color(Palette::ACCENT),
                         );
-                        let title = if list.title.is_empty() {
-                            config.default_list_title.to_string()
-                        } else {
-                            let t = list.title.clone();
-                            autocode_core::helpers::truncate_str(&t, 25)
-                        };
+                        let title = autocode_core::helpers::truncate_str(config.list_title, 25);
                         ui.label(
                             RichText::new(title)
                                 .size(13.0)

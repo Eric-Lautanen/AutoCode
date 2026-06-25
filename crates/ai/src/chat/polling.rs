@@ -427,7 +427,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 if tc.name.is_empty()
                     && let Ok(args) = serde_json::from_str::<serde_json::Value>(&tc.arguments)
                 {
-                    if args.get("task_items").is_some() && args.get("title").is_some() {
+                    if args.get("task_items").is_some() {
                         tc.name = "todo_list".into();
                     } else if args.get("command").and_then(|v| v.as_str()).is_some() {
                         tc.name = "run_shell".into();

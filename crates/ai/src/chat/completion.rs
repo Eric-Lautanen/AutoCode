@@ -480,8 +480,7 @@ pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
             "function": {
                 "name": "project_task_list",
                 "arguments": format!(
-                    "{{\"title\":\"{}\",\"task_items\":{}}}",
-                    ptl.title,
+                    "{{\"task_items\":{}}}",
                     serde_json::Value::Array(
                         ptl.items.iter().map(|item| {
                             serde_json::json!({
@@ -516,8 +515,7 @@ pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
             runtime.active_session_id.as_deref().unwrap_or(""),
         );
         let tool_result_content = format!(
-            "Project tasks updated: \"{}\" -- {}/{} complete | {}",
-            ptl.title,
+            "Project tasks updated -- {}/{} complete | {}",
             done,
             total,
             format_context_usage(ctx_used, ctx_max, max_output),
