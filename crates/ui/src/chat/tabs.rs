@@ -193,15 +193,16 @@ pub(crate) fn show_session_tabs(
     // Auto-scroll tabs to the right when content exceeds viewport
     // (new tabs are added at the right edge).
     if tab_scroll.content_size.x > tab_scroll.inner_rect.width() {
+        let tab_sa_id = tab_scroll.id;
         let mut sa_state = ui.ctx().data_mut(|d| {
-            d.get_persisted::<egui::scroll_area::State>(panel_state.tabs_scroll_id)
+            d.get_persisted::<egui::scroll_area::State>(tab_sa_id)
                 .unwrap_or_default()
         });
         let max_offset = tab_scroll.content_size.x - tab_scroll.inner_rect.width();
         if sa_state.offset.x < max_offset - 20.0 {
             sa_state.offset.x = max_offset;
             ui.ctx()
-                .data_mut(|d| d.insert_persisted(panel_state.tabs_scroll_id, sa_state));
+                .data_mut(|d| d.insert_persisted(tab_sa_id, sa_state));
         }
     }
 }

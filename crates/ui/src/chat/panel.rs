@@ -30,7 +30,7 @@ pub fn show(
     ui.separator();
 
     let chat_salt = state.active_session_id.as_deref().unwrap_or("").to_owned();
-    ui.push_id(("chat_panel", chat_salt), |ui| {
+    ui.push_id((panel_state.chat_panel_id, chat_salt), |ui| {
         // On session switch: persist old session, evict from RAM only if no live runtime.
         if panel_state.prev_session_id != state.active_session_id {
             save_old_session(state, runtimes, panel_state);
@@ -149,7 +149,10 @@ pub fn show(
                                 ui.add_space(8.0);
                             }
                             ui.push_id(
-                                ("chat_messages", active_sid.as_deref().unwrap_or("")),
+                                (
+                                    panel_state.chat_messages_id,
+                                    active_sid.as_deref().unwrap_or(""),
+                                ),
                                 |ui| {
                                     let show_reasoning = state.show_reasoning_inline;
                                     let sid = active_sid.as_deref().unwrap_or("");

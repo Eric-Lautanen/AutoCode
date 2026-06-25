@@ -11,12 +11,12 @@
 //
 // 2. **Cross-module data keys** — used with `ctx.data_mut(|d| d.insert_temp(..))`
 //    and `d.remove_temp(..)`.  These are written in one file and read in
-//    another, so they need a **stable, shared name**.  Use the `DATA::*`
+//    another, so they need a **stable, shared name**.  Use the `data::*`
 //    constants for these.
 //
 // Rule of thumb:
 //   - Widget `.id(..)` or `.id_salt(..)` → `next_id()` (store in state)
-//   - `ctx.data_mut` temp/persisted keys → `DATA::KEY_FOO` constant
+//   - `ctx.data_mut` temp/persisted keys → `data::KEY_FOO` constant
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -100,7 +100,7 @@ pub mod data {
     pub const PROJECT_TASKS_OPEN: &str = "ac::project_tasks_open";
 }
 
-/// Convenience: build an `egui::Id` from a `DATA` constant.
+/// Convenience: build an `egui::Id` from a `data` constant.
 #[inline]
 pub fn data_id(key: &str) -> egui::Id {
     egui::Id::new(key)
@@ -149,15 +149,15 @@ mod tests {
 
     #[test]
     fn data_id_deterministic() {
-        let a = data_id(DATA::POPUP_JUST_CLOSED);
-        let b = data_id(DATA::POPUP_JUST_CLOSED);
+        let a = data_id(data::POPUP_JUST_CLOSED);
+        let b = data_id(data::POPUP_JUST_CLOSED);
         assert_eq!(a, b);
     }
 
     #[test]
     fn data_id_different_keys() {
-        let a = data_id(DATA::POPUP_JUST_CLOSED);
-        let b = data_id(DATA::FILE_VIEWER_OPEN);
+        let a = data_id(data::POPUP_JUST_CLOSED);
+        let b = data_id(data::FILE_VIEWER_OPEN);
         assert_ne!(a, b);
     }
 

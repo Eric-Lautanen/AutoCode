@@ -7,8 +7,8 @@ use crate::theme::ROUND_SM;
 
 use super::theme::theme;
 
-pub(crate) fn render_code_block(ui: &mut egui::Ui, lang: &str, code: &str) {
-    render_code_block_impl(ui, lang, code, false, 0)
+pub(crate) fn render_code_block(ui: &mut egui::Ui, lang: &str, code: &str, uid: u64) {
+    render_code_block_impl(ui, lang, code, false, uid)
 }
 
 pub(crate) fn render_code_block_impl(

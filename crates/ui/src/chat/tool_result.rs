@@ -26,7 +26,7 @@ pub(crate) fn render_tool_result(ui: &mut egui::Ui, msg: &ChatMessage, idx: usiz
             .default_open(false)
             .show(ui, |ui| {
                 let body = helpers::get_tool_body(msg);
-                render_code_block(ui, "", &body);
+                render_code_block(ui, "", &body, msg.id);
             });
     } else {
         render_markdown(ui, content, false, false);
@@ -58,7 +58,7 @@ pub(crate) fn render_structured_tool_result(
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("file");
-                render_code_block(ui, name, &body);
+                render_code_block(ui, name, &body, msg.id);
             });
         }
         "read_entire_file" => {
@@ -81,7 +81,7 @@ pub(crate) fn render_structured_tool_result(
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("file");
-                render_code_block(ui, name, &body);
+                render_code_block(ui, name, &body, msg.id);
             });
         }
         "read_files" => {
@@ -105,7 +105,7 @@ pub(crate) fn render_structured_tool_result(
                     .strong(),
             );
             ui.push_id(format!("code_{}_{}", msg.id, idx), |ui| {
-                render_code_block(ui, "files", &body);
+                render_code_block(ui, "files", &body, msg.id);
             });
         }
         "write_file" => {
@@ -254,7 +254,7 @@ pub(crate) fn render_structured_tool_result(
             );
             let body = helpers::get_tool_body(msg);
             ui.push_id(format!("list_{}_{}", msg.id, idx), |ui| {
-                render_code_block(ui, path, &body);
+                render_code_block(ui, path, &body, msg.id);
             });
         }
         "delete_file" => {
@@ -340,7 +340,7 @@ pub(crate) fn render_structured_tool_result(
             if matches > 0 {
                 let body = helpers::get_tool_body(msg);
                 ui.push_id(format!("grep_{}_{}", msg.id, idx), |ui| {
-                    render_code_block(ui, "grep", &body);
+                    render_code_block(ui, "grep", &body, msg.id);
                 });
             } else {
                 // Show "Try grep again" suggestions if present in the tool result.
@@ -374,7 +374,7 @@ pub(crate) fn render_structured_tool_result(
                         .color(theme().accent)
                         .strong(),
                 );
-                render_code_block(ui, url, &sanitize_display_text(&msg.content));
+                render_code_block(ui, url, &sanitize_display_text(&msg.content), msg.id);
             }
         }
         "todo_list" => {
@@ -424,7 +424,7 @@ pub(crate) fn render_structured_tool_result(
             if matches > 0 {
                 let body = helpers::get_tool_body(msg);
                 ui.push_id(format!("glob_{}_{}", msg.id, idx), |ui| {
-                    render_code_block(ui, "glob", &body);
+                    render_code_block(ui, "glob", &body, msg.id);
                 });
             }
         }
@@ -441,7 +441,7 @@ pub(crate) fn render_structured_tool_result(
             if count > 0 {
                 let body = helpers::get_tool_body(msg);
                 ui.push_id(format!("tree_{}_{}", msg.id, idx), |ui| {
-                    render_code_block(ui, "tree", &body);
+                    render_code_block(ui, "tree", &body, msg.id);
                 });
             }
         }
@@ -466,7 +466,7 @@ pub(crate) fn render_structured_tool_result(
             if !meta.is_error {
                 let body = sanitize_display_text(&helpers::get_tool_body(msg));
                 ui.push_id(format!("skill_{}_{}", msg.id, idx), |ui| {
-                    render_code_block(ui, "markdown", &body);
+                    render_code_block(ui, "markdown", &body, msg.id);
                 });
             }
         }
