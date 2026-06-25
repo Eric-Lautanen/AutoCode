@@ -12,9 +12,9 @@ use autocode_core::storage::PersistenceThread;
 use autocode_core::storage::{AppStorage, StorageLoad};
 
 use crate::chat::{self as ui_chat, ChatPanelState};
+use crate::settings::{self, SettingsState};
 use crate::ui_explorer::{self, ExplorerPanelState};
 use crate::ui_project_tasks;
-use crate::ui_settings::{self, SettingsState};
 use crate::ui_todo;
 use crate::ui_toolbar;
 
@@ -407,7 +407,7 @@ impl eframe::App for AutocodeApp {
             });
         }
 
-        ui_settings::show_window(&ctx, &mut self.state, &mut self.settings);
+        settings::show_window(&ctx, &mut self.state, &mut self.settings);
         ui_explorer::show_file_viewer(&ctx, &mut self.explorer_panel);
         ui_todo::show_window(&ctx, &mut self.state);
         ui_project_tasks::show_window(&ctx, &mut self.state);
