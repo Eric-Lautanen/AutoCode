@@ -860,9 +860,10 @@ fn poll_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     if let Some(sid) = runtime.active_session_id.as_deref()
                         && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
                     {
-                        sess.recompute_messages_tokens();
-                        sess.estimated_full_tokens =
-                            sess.estimated_messages_tokens.saturating_add(tool_tokens);
+                        let (msg_tokens, full_tokens) =
+                            core_helpers::compute_request_estimate(&sess.messages, tool_tokens);
+                        sess.estimated_messages_tokens = msg_tokens;
+                        sess.estimated_full_tokens = full_tokens;
                     }
                     // Only start next completion if shell calls are also done.
                     if runtime.live_shell_rx.is_none() && runtime.pending_tool_remaining.is_empty()
@@ -1156,8 +1157,10 @@ fn commit_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) {
         if let Some(sid) = runtime.active_session_id.as_deref()
             && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
         {
-            sess.recompute_messages_tokens();
-            sess.estimated_full_tokens = sess.estimated_messages_tokens.saturating_add(tool_tokens);
+            let (msg_tokens, full_tokens) =
+                core_helpers::compute_request_estimate(&sess.messages, tool_tokens);
+            sess.estimated_messages_tokens = msg_tokens;
+            sess.estimated_full_tokens = full_tokens;
         }
 
         // Only continue if non-shell tools are also done.

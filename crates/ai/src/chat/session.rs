@@ -2,7 +2,10 @@
 
 use crate::helpers;
 use crate::provider::ApiMessage;
+use autocode_core::helpers::compute_request_estimate;
 use autocode_core::state::{AppState, ChatMessage, Role};
+
+use super::session_ops::tool_defs_tokens_for_session;
 
 /// Seed the system prompt into the active session if its messages are empty.
 /// Does NOT auto-create sessions — callers must create one first if needed.
@@ -108,22 +111,15 @@ pub fn prepare_request_messages_for_session(
         }
     }
 
-    // Compute estimated_messages_tokens from the full disk-backed list.
-    // estimated_full_tokens is kept in sync by push_to_session and turn-
-    // completion recomputes, so it doesn't need to be set here.
-    {
-        let mut messages_total: usize = 0;
-        for m in full_messages.iter().filter(|m| m.role != Role::Error) {
-            let est = if m.full_token_estimate > 0 {
-                m.full_token_estimate
-            } else {
-                autocode_core::helpers::estimate_single_message_json_tokens(m)
-            };
-            messages_total = messages_total.saturating_add(est);
-        }
-        if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == session_id) {
-            sess.estimated_messages_tokens = messages_total;
-        }
+    // Compute token estimates from the full disk-backed list using the unified
+    // pipeline. This sets both estimated_messages_tokens and estimated_full_tokens
+    // (including tool definitions) so the pre-flight check in start_completion
+    // has a correct baseline.
+    let tool_tokens = tool_defs_tokens_for_session(state, Some(session_id));
+    let (msg_tokens, full_tokens) = compute_request_estimate(&full_messages, tool_tokens);
+    if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == session_id) {
+        sess.estimated_messages_tokens = msg_tokens;
+        sess.estimated_full_tokens = full_tokens;
     }
 
     full_messages

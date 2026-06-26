@@ -223,25 +223,36 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
     };
     let reasoning_effort = session_reasoning_effort.to_string();
 
-    // Pre-flight context check: use the cached estimate (kept up-to-date
-    // by push_to_session on every message push). Only recompute if the value
-    // is 0 (fresh session or never computed) or the model changed.
+    // Pre-flight context check.
+    //
+    // estimated_full_tokens was already updated by
+    // prepare_request_messages_for_session (called above at line 163) using the
+    // unified pipeline, so it correctly reflects all disk-backed messages + tool
+    // definitions. We apply the learned correction ratio and try API counting when
+    // the cache is missing or the model changed (same strategy as the old full
+    // recompute — keeps the fast path fast).
     let _estimated = {
-        let (cached, model_changed) = state
+        let (cached, model_changed, correction) = state
             .sessions
             .iter()
             .find(|s| s.id == session_id)
             .map(|s| {
                 let changed = !s.model.is_empty() && s.model != provider.model;
-                (s.estimated_full_tokens, changed)
+                (s.estimated_full_tokens, changed, s.token_correction_ratio)
             })
-            .unwrap_or((0, false));
+            .unwrap_or((0, false, 1.0));
 
+        // Baseline from the unified pipeline estimate (includes tool tokens).
+        // Full recompute (including API counting) only when the cache is stale.
         let estimated = if cached > 0 && !model_changed {
-            cached
+            if correction > 0.0 && correction.is_finite() {
+                (cached as f32 * correction).round() as usize
+            } else {
+                cached
+            }
         } else {
-            // Full tiered computation needed — session was just created,
-            // loaded from disk, or the model changed since last compute.
+            // Cache is missing or the model changed — do a full recompute
+            // with the same two-tier strategy as before.
             let msgs: Vec<serde_json::Value> = messages
                 .iter()
                 .map(|m| {
@@ -265,46 +276,22 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
                 "messages": msgs,
             });
             let json_str = serde_json::to_string(&body).unwrap_or_default();
-            let count = 'block: {
-                // Tier 1: API-based counting (most accurate) with short timeout.
-                if provider.has_counting_api()
-                    && let Ok(c) = count_input_tokens(&provider, &json_str, &provider.model, 5)
-                {
-                    break 'block c;
-                }
-                // Tier 2: Heuristic fallback.
-                core_helpers::estimate_full_request_tokens(
-                    &messages
-                        .iter()
-                        .map(|m| autocode_core::state::ChatMessage {
-                            id: 0,
-                            role: match m.role.as_str() {
-                                "system" => autocode_core::state::Role::System,
-                                "user" => autocode_core::state::Role::User,
-                                "assistant" => autocode_core::state::Role::Assistant,
-                                "tool" => autocode_core::state::Role::Tool,
-                                _ => autocode_core::state::Role::User,
-                            },
-                            content: m.content.clone(),
-                            timestamp: 0,
-                            token_count: 0,
-                            full_token_estimate: 0,
-                            tool_call_id: m.tool_call_id.clone(),
-                            tool_calls: m.tool_calls.clone(),
-                            tool_meta: None,
-                            reasoning_content: m.reasoning_content.clone(),
-                        })
-                        .collect::<Vec<_>>(),
-                    None,
-                )
-            };
-            // Add tool definitions overhead computed dynamically.
             let tools_json = crate::provider::tool_definitions(
                 provider.supports_strict_tools(),
                 session_handoff,
             );
             let tool_tokens = core_helpers::estimate_tools_tokens(&tools_json);
-            let count = count.saturating_add(tool_tokens);
+
+            // Tier 1: API-based counting (most accurate) with short timeout.
+            // Tier 2: Heuristic fallback on the serialized JSON.
+            let count = if provider.has_counting_api()
+                && let Ok(api_count) = count_input_tokens(&provider, &json_str, &provider.model, 5)
+            {
+                api_count.saturating_add(tool_tokens)
+            } else {
+                core_helpers::estimate_tokens_json(&json_str).saturating_add(tool_tokens)
+            };
+
             if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == session_id) {
                 sess.estimated_full_tokens = count;
             }
@@ -381,6 +368,14 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
     }
     runtime.request_start = Some(std::time::Instant::now());
     runtime.last_delta_time = None;
+    // Snapshot the estimated token count at request time so that when the
+    // API responds with actual prompt_tokens (always 1 turn behind), we
+    // can compute the correction ratio against the right baseline.
+    if let Some(sid) = runtime.active_session_id.as_deref()
+        && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
+    {
+        sess.estimated_full_at_request = sess.estimated_full_tokens;
+    }
     let event_rx = ProviderClient::complete(provider, req);
     runtime.stream_rx = Some(event_rx);
     runtime.net_status.reset();
@@ -595,7 +590,7 @@ pub fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
                 })
                 .map(|p| p.max_context_tokens as usize)
                 .unwrap_or(128_000);
-            let used = s.estimated_full_tokens;
+            let used = s.corrected_full_tokens();
             (used, max)
         })
         .unwrap_or((0, 0));
@@ -695,8 +690,10 @@ fn auto_continue_impl(
     if let Some(sid) = runtime.active_session_id.as_deref()
         && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
     {
-        sess.recompute_messages_tokens();
-        sess.estimated_full_tokens = sess.estimated_messages_tokens.saturating_add(tool_tokens);
+        let (msg_tokens, full_tokens) =
+            core_helpers::compute_request_estimate(&sess.messages, tool_tokens);
+        sess.estimated_messages_tokens = msg_tokens;
+        sess.estimated_full_tokens = full_tokens;
     }
     start_completion(state, runtime);
 }

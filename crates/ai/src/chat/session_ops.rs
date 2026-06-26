@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use autocode_core::helpers::compute_request_estimate;
 use autocode_core::state::{AppState, ChatMessage, Role};
 
 use super::runtime::ChatRuntime;
@@ -29,10 +30,11 @@ pub fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: 
                 .push((sid.to_string(), msg.clone()));
         }
         sess.messages.push(msg);
-        let last_estimate = sess.messages.last().unwrap().full_token_estimate;
-        sess.estimated_messages_tokens =
-            sess.estimated_messages_tokens.saturating_add(last_estimate);
-        sess.estimated_full_tokens = sess.estimated_messages_tokens.saturating_add(tool_tokens);
+        // Full recompute from the unified pipeline (disk-backed messages in RAM
+        // mirror disk — pending writes flush before every API request).
+        let (msg_tokens, full_tokens) = compute_request_estimate(&sess.messages, tool_tokens);
+        sess.estimated_messages_tokens = msg_tokens;
+        sess.estimated_full_tokens = full_tokens;
     }
 }
 
@@ -59,6 +61,16 @@ pub fn tool_defs_tokens_for_session(state: &AppState, session_id: Option<&str>) 
         .unwrap_or(false);
     let tools_json = crate::provider::tool_definitions(strict, handoff_enabled);
     autocode_core::helpers::estimate_tools_tokens(&tools_json)
+}
+
+/// Unified session token estimate update using the single pipeline.
+/// Computes and sets both `estimated_messages_tokens` and `estimated_full_tokens`
+/// on the session, including tool-definition overhead.
+/// Call this after loading a session from disk, instead of the bare
+/// `update_full_estimate` which doesn't account for tool tokens.
+pub fn update_session_estimate(state: &AppState, session: &mut autocode_core::state::Session) {
+    let tool_tokens = tool_defs_tokens_for_session(state, Some(&session.id));
+    autocode_core::helpers::update_full_estimate(session, tool_tokens);
 }
 
 /// Replay from a user message: truncate the conversation at that message,
@@ -101,6 +113,9 @@ pub fn replay_to_message(
         }
     }
 
+    // Compute tool tokens before the mutable session borrow (avoids aliasing).
+    let tool_tokens = tool_defs_tokens_for_session(state, Some(session_id));
+
     // Truncate in-RAM and on-disk — remove the target message and everything after it.
     {
         let sess = &mut state.sessions[session_idx];
@@ -108,9 +123,8 @@ pub fn replay_to_message(
         sess.next_message_id = message_id;
         sess.actual_tokens_used = 0;
 
-        // Recompute token estimates from cached per-message estimates.
-        sess.recompute_messages_tokens();
-        sess.estimated_full_tokens = sess.estimated_messages_tokens;
+        // Recompute token estimates using the unified pipeline (includes tool tokens).
+        autocode_core::helpers::update_full_estimate(sess, tool_tokens);
 
         let proj = &state.projects[proj_idx];
         autocode_core::storage::truncate_messages_after(proj, sess, message_id.saturating_sub(1))
@@ -265,14 +279,9 @@ pub fn context_usage_info_for_session(
         .iter()
         .find(|s| s.id == session_id)
         .map(|s| {
-            // Always prefer estimated_full_tokens — it's kept up-to-date
-            // by push_to_session on every message push. actual_tokens_used
-            // is from the last API response and can be stale by 1 turn.
-            if s.estimated_full_tokens > 0 {
-                s.estimated_full_tokens
-            } else {
-                s.token_count()
-            }
+            // corrected_full_tokens is kept up-to-date by the unified estimation
+            // pipeline on every push, load, and pre-flight. Zero on empty sessions.
+            s.corrected_full_tokens()
         })
         .unwrap_or(0);
     let pct = (used * 100).checked_div(max).unwrap_or(0);
