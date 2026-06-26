@@ -69,6 +69,10 @@ pub struct SessionMeta {
     /// Saved draft input text, restored on session switch.
     #[serde(default)]
     pub draft_input: String,
+
+    /// Learned correction ratio for token estimation drift.
+    #[serde(default)]
+    pub token_correction_ratio: f32,
 }
 
 impl SessionMeta {
@@ -99,6 +103,7 @@ impl SessionMeta {
             show_reasoning_inline: session.show_reasoning_inline,
             show_project_tasks: session.show_project_tasks,
             draft_input: session.draft_input.clone(),
+            token_correction_ratio: session.token_correction_ratio,
         }
     }
 }
