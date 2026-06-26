@@ -847,24 +847,8 @@ fn poll_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 } else {
                     push_tool_results_to_state(state, runtime, &results);
                     runtime.status = format!("{} tool(s) complete.", results.len());
-                    // Refresh token estimate after tool results are added.
-                    // The per-message full_token_estimate was already computed
-                    // on push, so we only need to recompute the running totals.
-                    let tool_tokens = runtime
-                        .active_session_id
-                        .as_deref()
-                        .map(|sid| {
-                            super::session_ops::tool_defs_tokens_for_session(state, Some(sid))
-                        })
-                        .unwrap_or(0);
-                    if let Some(sid) = runtime.active_session_id.as_deref()
-                        && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
-                    {
-                        let (msg_tokens, full_tokens) =
-                            core_helpers::compute_request_estimate(&sess.messages, tool_tokens);
-                        sess.estimated_messages_tokens = msg_tokens;
-                        sess.estimated_full_tokens = full_tokens;
-                    }
+                    // Token estimate refreshed from disk by push_tool_results_to_state
+                    // → push_to_session → recompute_estimate_from_disk.
                     // Only start next completion if shell calls are also done.
                     if runtime.live_shell_rx.is_none() && runtime.pending_tool_remaining.is_empty()
                     {
@@ -1145,23 +1129,8 @@ fn commit_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) {
         push_tool_results_to_state(state, runtime, &runtime.pending_tool_results);
         runtime.pending_tool_results.clear();
         runtime.status = format!("{} tool(s) complete.", count);
-
-        // Refresh token estimate after tool results are added.
-        // Per-message full_token_estimate was computed on push, so
-        // recompute running totals from cached per-message estimates.
-        let tool_tokens = runtime
-            .active_session_id
-            .as_deref()
-            .map(|sid| super::session_ops::tool_defs_tokens_for_session(state, Some(sid)))
-            .unwrap_or(0);
-        if let Some(sid) = runtime.active_session_id.as_deref()
-            && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
-        {
-            let (msg_tokens, full_tokens) =
-                core_helpers::compute_request_estimate(&sess.messages, tool_tokens);
-            sess.estimated_messages_tokens = msg_tokens;
-            sess.estimated_full_tokens = full_tokens;
-        }
+        // Token estimate refreshed from disk by push_tool_results_to_state
+        // → push_to_session → recompute_estimate_from_disk.
 
         // Only continue if non-shell tools are also done.
         if runtime.tool_rx.is_none() {

@@ -14,11 +14,11 @@ pub fn still_owns_session(runtime: &ChatRuntime, state: &AppState) -> bool {
 }
 
 pub fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: ChatMessage) {
-    // Compute tool defs tokens before the mutable session borrow.
-    let tool_tokens = tool_defs_tokens_for_session(state, session_id);
-    if let Some(sid) = session_id
-        && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
-    {
+    let Some(sid) = session_id.map(|s| s.to_string()) else {
+        return;
+    };
+    // Push to in-memory display window first.
+    if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
         msg.id = sess.next_message_id;
         sess.next_message_id += 1;
         msg.full_token_estimate = autocode_core::helpers::estimate_single_message_json_tokens(&msg);
@@ -27,12 +27,44 @@ pub fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: 
             state
                 .pending_writes
                 .pending
-                .push((sid.to_string(), msg.clone()));
+                .push((sid.clone(), msg.clone()));
         }
         sess.messages.push(msg);
-        // Full recompute from the unified pipeline (disk-backed messages in RAM
-        // mirror disk — pending writes flush before every API request).
-        let (msg_tokens, full_tokens) = compute_request_estimate(&sess.messages, tool_tokens);
+    }
+    // Recompute token estimates from disk (source of truth).
+    recompute_estimate_from_disk(state, &sid);
+}
+
+/// Flush pending writes, load the full message history from disk JSONL,
+/// and recompute token estimates. Disk is source of truth — the in-memory
+/// display window may be missing evicted messages.
+/// Falls back to the in-memory window only when no project is assigned yet.
+pub fn recompute_estimate_from_disk(state: &mut AppState, session_id: &str) {
+    state.flush_pending_writes(true);
+    let tool_tokens = tool_defs_tokens_for_session(state, Some(session_id));
+    let messages = {
+        let sess = state.sessions.iter().find(|s| s.id == session_id);
+        sess.and_then(|s| {
+            s.project_id.as_ref().and_then(|pid| {
+                state
+                    .projects
+                    .iter()
+                    .find(|p| p.id == *pid)
+                    .map(|proj| autocode_core::storage::load_all_messages(proj, s))
+            })
+        })
+        .unwrap_or_else(|| {
+            // No project yet — use in-memory window as best effort.
+            state
+                .sessions
+                .iter()
+                .find(|s| s.id == session_id)
+                .map(|s| s.messages.clone())
+                .unwrap_or_default()
+        })
+    };
+    if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == session_id) {
+        let (msg_tokens, full_tokens) = compute_request_estimate(&messages, tool_tokens);
         sess.estimated_messages_tokens = msg_tokens;
         sess.estimated_full_tokens = full_tokens;
     }
@@ -113,24 +145,25 @@ pub fn replay_to_message(
         }
     }
 
-    // Compute tool tokens before the mutable session borrow (avoids aliasing).
-    let tool_tokens = tool_defs_tokens_for_session(state, Some(session_id));
-
     // Truncate in-RAM and on-disk — remove the target message and everything after it.
     {
         let sess = &mut state.sessions[session_idx];
         sess.messages.retain(|m| m.id < message_id);
         sess.next_message_id = message_id;
         sess.actual_tokens_used = 0;
+    }
 
-        // Recompute token estimates using the unified pipeline (includes tool tokens).
-        autocode_core::helpers::update_full_estimate(sess, tool_tokens);
-
+    // Truncate disk and save meta (separate borrow from the RAM truncation above).
+    {
+        let sess = &state.sessions[session_idx];
         let proj = &state.projects[proj_idx];
         autocode_core::storage::truncate_messages_after(proj, sess, message_id.saturating_sub(1))
             .ok()?;
         autocode_core::storage::save_session_meta(proj, sess).ok()?;
     }
+
+    // Recompute token estimates from disk (source of truth).
+    recompute_estimate_from_disk(state, session_id);
 
     // Discard any pending disk writes for this session (anything queued
     // after the flush is already in RAM and will be re-flushed later).

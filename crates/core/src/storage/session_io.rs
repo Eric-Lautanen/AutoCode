@@ -212,13 +212,9 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
                 session.show_project_tasks = meta.show_project_tasks;
                 session.draft_input = meta.draft_input;
                 session.token_correction_ratio = meta.token_correction_ratio;
-                // Recompute token estimates from loaded messages so the UI shows
-                // accurate context usage immediately after startup.
-                // NOTE: estimated_full_tokens is set by callers (restore_active_session,
-                // load_new_session, prepare_request_messages_for_session) which have
-                // access to tool-definition token counts. This bare value is overwritten
-                // before the user sees it.
-                session.recompute_messages_tokens();
+                // estimated_full_tokens is set by callers (restore_active_session,
+                // load_new_session, prepare_request_messages_for_session) via
+                // update_full_estimate which always does a full serialized estimate.
             }
             Err(_e) => {}
         },

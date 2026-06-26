@@ -200,24 +200,34 @@ pub fn estimate_full_request_tokens(
 /// load_session, replay, display) route through this function. The only
 /// difference between callers is **when** they call and where messages come from.
 ///
-/// Strategy:
-/// - Uses each message's cached `full_token_estimate` when available (fast path).
-/// - Falls back to full JSON serialization + heuristic when missing.
-/// - `estimated_full_tokens` = messages + `tools_tokens`. Tool definitions are a
-///   fixed per-request overhead that never changes within a session, so callers
-///   compute it once via `estimate_tools_tokens` and pass it here.
+/// Always does a full serialization of all messages into a single JSON body
+/// so the heuristic sees the complete request structure (message separators,
+/// JSON array overhead, all tool_calls in one pass). Never relies on
+/// per-message cached estimates which diverge from the full picture.
 pub fn compute_request_estimate(messages: &[ChatMessage], tools_tokens: usize) -> (usize, usize) {
-    let msg_tokens: usize = messages
+    let msgs: Vec<serde_json::Value> = messages
         .iter()
         .filter(|m| m.role != Role::Error)
         .map(|m| {
-            if m.full_token_estimate > 0 {
-                m.full_token_estimate
-            } else {
-                estimate_single_message_json_tokens(m)
+            let mut obj = serde_json::json!({
+                "role": m.role.label(),
+                "content": m.content,
+            });
+            if let Some(id) = &m.tool_call_id {
+                obj["tool_call_id"] = serde_json::json!(id);
             }
+            if let Some(tc) = &m.tool_calls {
+                obj["tool_calls"] = tc.clone();
+            }
+            if let Some(rc) = &m.reasoning_content {
+                obj["reasoning_content"] = serde_json::json!(rc);
+            }
+            obj
         })
-        .sum();
+        .collect();
+    let body = serde_json::json!({ "messages": msgs });
+    let json_str = serde_json::to_string(&body).unwrap_or_default();
+    let msg_tokens = estimate_tokens_json(&json_str);
     let full_tokens = msg_tokens.saturating_add(tools_tokens);
     (msg_tokens, full_tokens)
 }

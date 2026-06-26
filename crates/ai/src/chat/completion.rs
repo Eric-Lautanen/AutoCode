@@ -576,31 +576,26 @@ pub fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     // so the threshold check never works with stale data.
     // Uses cached per-message full_token_estimate for O(n) sum instead of
     // re-serializing all messages.
-    let (used, max) = state
-        .sessions
-        .iter()
-        .find(|s| s.id == *sid)
-        .map(|s| {
-            let max = state
-                .providers
-                .get(if !s.provider_label.is_empty() {
-                    &s.provider_label
-                } else {
-                    &state.active_provider
-                })
-                .map(|p| p.max_context_tokens as usize)
-                .unwrap_or(128_000);
-            let used = s.corrected_full_tokens();
-            (used, max)
-        })
-        .unwrap_or((0, 0));
+    // Derive values from the session's own provider (not the UI-active one)
+    // and bail out if the provider can't be found — no hardcoded fallbacks
+    // since context windows vary wildly across models (128K to 1M+).
+    let Some(sess) = state.sessions.iter().find(|s| s.id == *sid) else {
+        return;
+    };
+    let label = if !sess.provider_label.is_empty() {
+        &sess.provider_label
+    } else {
+        &state.active_provider
+    };
+    let Some(p) = state.providers.get(label) else {
+        return;
+    };
+    let max = p.max_context_tokens as usize;
+    let handoff_pct = p.handoff_percent.min(100) as usize;
+    let used = sess.corrected_full_tokens();
     if max == 0 {
         return;
     }
-    let handoff_pct = state
-        .active_provider()
-        .map(|p| p.handoff_percent.min(100) as usize)
-        .unwrap_or(80);
     let threshold = (max * handoff_pct) / 100;
     if used < threshold {
         runtime.handoff_trigger_sent = false;
@@ -679,21 +674,10 @@ fn auto_continue_impl(
 
     push_runtime(state, runtime, ChatMessage::new(Role::User, msg));
     // After pushing the continue message, refresh the full token estimate
-    // so the toolbar meter and auto-handoff threshold stay accurate.
-    // Per-message full_token_estimate was computed on push, so recompute
-    // running totals from cached per-message estimates.
-    let tool_tokens = runtime
-        .active_session_id
-        .as_deref()
-        .map(|sid| super::session_ops::tool_defs_tokens_for_session(state, Some(sid)))
-        .unwrap_or(0);
-    if let Some(sid) = runtime.active_session_id.as_deref()
-        && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
-    {
-        let (msg_tokens, full_tokens) =
-            core_helpers::compute_request_estimate(&sess.messages, tool_tokens);
-        sess.estimated_messages_tokens = msg_tokens;
-        sess.estimated_full_tokens = full_tokens;
+    // from disk (source of truth) so the toolbar meter and auto-handoff
+    // threshold stay accurate.
+    if let Some(sid) = runtime.active_session_id.as_deref() {
+        super::session_ops::recompute_estimate_from_disk(state, sid);
     }
     start_completion(state, runtime);
 }

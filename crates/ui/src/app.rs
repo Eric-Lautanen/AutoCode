@@ -119,34 +119,41 @@ impl AutocodeApp {
             },
             None => return,
         };
-        let proj = &state.projects[proj_idx];
+        let (sid, proj_idx) = (sid, proj_idx);
 
-        // Compute tool tokens before the mutable session borrow (avoids aliasing).
-        let tool_tokens = autocode_ai::chat::tool_defs_tokens_for_session(state, Some(&sid));
-
-        if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
-            sess.closed = false;
-            autocode_core::storage::load_session(proj, sess);
-            sess.messages.shrink_to_fit();
-            autocode_core::helpers::update_full_estimate(sess, tool_tokens);
-            let window = state.ui_display_window;
-            let total = sess.messages.len();
-            if total > window * 2 {
-                let keep = window;
-                sess.messages = sess.messages.split_off(total - keep);
-                sess.messages.shrink_to(0);
+        {
+            let proj = &state.projects[proj_idx];
+            if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
+                sess.closed = false;
+                autocode_core::storage::load_session(proj, sess);
             }
-            state.todo_list = sess.todo_list.clone();
-            state.show_todo = sess.show_todo;
-            state.todo_user_dismissed = sess.todo_user_dismissed;
-            state.handoff_enabled = sess.handoff_enabled;
-            state.show_explorer = sess.show_explorer;
-            state.settings_open = sess.settings_open;
-            state.show_reasoning_inline = sess.show_reasoning_inline;
-            state.show_project_tasks = sess.show_project_tasks;
         }
-        if let Some(meta) = autocode_core::storage::load_project_meta(proj) {
-            state.project_task_list = meta.project_task_list;
+        // Token estimate from disk (releases proj borrow first).
+        autocode_ai::chat::recompute_estimate_from_disk(state, &sid);
+        // Window eviction and state sync.
+        {
+            let proj = &state.projects[proj_idx];
+            if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
+                sess.messages.shrink_to_fit();
+                let window = state.ui_display_window;
+                let total = sess.messages.len();
+                if total > window * 2 {
+                    let keep = window;
+                    sess.messages = sess.messages.split_off(total - keep);
+                    sess.messages.shrink_to(0);
+                }
+                state.todo_list = sess.todo_list.clone();
+                state.show_todo = sess.show_todo;
+                state.todo_user_dismissed = sess.todo_user_dismissed;
+                state.handoff_enabled = sess.handoff_enabled;
+                state.show_explorer = sess.show_explorer;
+                state.settings_open = sess.settings_open;
+                state.show_reasoning_inline = sess.show_reasoning_inline;
+                state.show_project_tasks = sess.show_project_tasks;
+            }
+            if let Some(meta) = autocode_core::storage::load_project_meta(proj) {
+                state.project_task_list = meta.project_task_list;
+            }
         }
 
         let restore_provider = state.active_session().and_then(|s| {

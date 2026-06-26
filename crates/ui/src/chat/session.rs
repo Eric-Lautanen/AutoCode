@@ -55,25 +55,40 @@ pub(crate) fn load_new_session(
                 .any(|s| s.id == *new_id && Some(&p.id) == s.project_id.as_ref())
         }) {
             Some(idx) => (new_id.clone(), idx),
-            None => return purge_on_missing,
+            None => {
+                panel_state.display_buffer.clear();
+                panel_state.loaded_min_id = 0;
+                panel_state.input.clear();
+                return purge_on_missing;
+            }
         },
-        None => return purge_on_missing,
+        None => {
+            panel_state.display_buffer.clear();
+            panel_state.loaded_min_id = 0;
+            panel_state.input.clear();
+            return purge_on_missing;
+        }
     };
-    let new_proj = &state.projects[new_proj];
-
-    // Compute tool tokens before the mutable session borrow (avoids aliasing).
-    let tool_tokens = autocode_ai::chat::tool_defs_tokens_for_session(state, Some(&new_id));
-
     // Single session lookup — covers both loading from disk and display setup.
-    if let Some(new_sess) = state.sessions.iter_mut().find(|s| s.id == new_id) {
-        if new_sess.next_message_id > 1 && new_sess.messages.is_empty() {
+    {
+        let new_proj = &state.projects[new_proj];
+        if let Some(new_sess) = state.sessions.iter_mut().find(|s| s.id == new_id)
+            && new_sess.next_message_id > 1
+            && new_sess.messages.is_empty()
+        {
             let found = autocode_core::storage::load_session(new_proj, new_sess);
             if !found {
                 purge_on_missing = Some(new_id.clone());
-            } else {
-                autocode_core::helpers::update_full_estimate(new_sess, tool_tokens);
             }
         }
+    }
+    // Recompute token estimates from disk after loading (releases new_proj borrow).
+    if purge_on_missing.is_none() {
+        autocode_ai::chat::recompute_estimate_from_disk(state, &new_id);
+    }
+    // Re-borrow for display-window setup.
+    if let Some(new_sess) = state.sessions.iter_mut().find(|s| s.id == new_id) {
+        let new_proj = &state.projects[new_proj];
 
         if purge_on_missing.is_none() {
             // Keep session RAM small — full history is on disk.
