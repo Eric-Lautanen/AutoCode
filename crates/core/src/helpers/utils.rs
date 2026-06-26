@@ -144,12 +144,15 @@ pub fn unique_data_dir_name(projects: &[Project], desired: &str) -> String {
     candidate
 }
 
-/// Recompute estimated_full_tokens on a session after loading messages
-/// from disk so the toolbar meter shows an accurate value from the start.
-/// Uses heuristic counting.
-pub fn update_full_estimate(session: &mut crate::state::Session) {
-    session.recompute_messages_tokens();
-    session.estimated_full_tokens = session.estimated_messages_tokens;
+/// Recompute token estimates on a session using the unified pipeline.
+/// Callers must pass the tool-definition token count for the session's
+/// provider (0 if unknown — the meter will undercount until the first
+/// push_to_session or start_completion corrects it).
+pub fn update_full_estimate(session: &mut crate::state::Session, tool_tokens: usize) {
+    let (msg_tokens, full_tokens) =
+        crate::helpers::compute_request_estimate(&session.messages, tool_tokens);
+    session.estimated_messages_tokens = msg_tokens;
+    session.estimated_full_tokens = full_tokens;
 }
 
 /// Replace or strip Unicode characters that the UI framework's default fonts don't support
@@ -270,11 +273,9 @@ fn session_messages_usage(state: &AppState) -> (usize, Option<usize>) {
     state
         .active_session()
         .map(|s| {
-            let estimated = if s.estimated_full_tokens > 0 {
-                s.estimated_full_tokens
-            } else {
-                s.token_count()
-            };
+            // The unified pipeline keeps estimated_full_tokens up-to-date on every
+            // push, load, and pre-flight. Zero on empty sessions.
+            let estimated = s.corrected_full_tokens();
             let actual = if s.actual_tokens_used > 0 {
                 Some(s.actual_tokens_used)
             } else {

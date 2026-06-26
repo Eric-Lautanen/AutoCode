@@ -81,6 +81,21 @@ pub struct Session {
     /// Saved draft input text, restored on session switch.
     #[serde(default)]
     pub draft_input: String,
+
+    /// Correction ratio: actual API prompt_tokens / heuristic estimate.
+    /// Learned from each API response and applied to future estimates so
+    /// the heuristic drift is compensated. Starts at 1.0 (no correction).
+    /// Uses exponential moving average so it adapts to model changes.
+    #[serde(default)]
+    pub token_correction_ratio: f32,
+
+    /// Snapshot of estimated_full_tokens at the time the last API request
+    /// was sent. Used to compute the correction ratio when the API responds
+    /// with actual prompt_tokens — since actual is always 1 turn behind
+    /// (it reflects the request, not the messages pushed after), we must
+    /// compare it against the estimate at request time, not the current one.
+    #[serde(default)]
+    pub estimated_full_at_request: usize,
 }
 
 impl Session {
@@ -116,6 +131,8 @@ impl Session {
             show_reasoning_inline: false,
             show_project_tasks: false,
             draft_input: String::new(),
+            token_correction_ratio: 1.0,
+            estimated_full_at_request: 0,
         }
     }
 
@@ -149,7 +166,39 @@ impl Session {
     }
 
     pub fn record_actual_usage(&mut self, prompt: usize, _completion: usize) {
-        self.actual_tokens_used = prompt;
+        // Only overwrite actual_tokens_used when the provider actually returned
+        // a real count. Many streaming responses omit usage entirely in the last
+        // chunk (prompt == 0), and overwriting would silently lose the last known
+        // value and hide the "actual" column from the display.
+        if prompt > 0 {
+            self.actual_tokens_used = prompt;
+        }
+        // Learn a correction ratio from the API's actual prompt_tokens
+        // vs our heuristic estimate at the time the request was sent.
+        // The API's actual is always 1 turn behind — it reflects the
+        // request context, not the messages pushed after. So we compare
+        // against the snapshot taken at request time, not the current total.
+        // Exponential moving average (α=0.3) adapts quickly but doesn't
+        // thrash on a single outlier. Only updates when the provider
+        // actually reports prompt_tokens (> 0).
+        if prompt > 0 && self.estimated_full_at_request > 0 {
+            let observed = prompt as f32 / self.estimated_full_at_request as f32;
+            if observed > 0.0 && observed.is_finite() {
+                let alpha = 0.3;
+                self.token_correction_ratio =
+                    alpha * observed + (1.0 - alpha) * self.token_correction_ratio;
+            }
+        }
+    }
+
+    /// Return the estimated full tokens with the learned correction ratio applied.
+    /// Falls back to the raw estimate if the ratio hasn't been learned yet (≈1.0).
+    pub fn corrected_full_tokens(&self) -> usize {
+        if self.token_correction_ratio > 0.0 && self.token_correction_ratio.is_finite() {
+            (self.estimated_full_tokens as f32 * self.token_correction_ratio).round() as usize
+        } else {
+            self.estimated_full_tokens
+        }
     }
 
     fn safe_label(&self) -> String {

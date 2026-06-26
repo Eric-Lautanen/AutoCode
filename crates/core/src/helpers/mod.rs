@@ -14,8 +14,9 @@ pub use sanitize::sanitize_tool_calls;
 pub use id::{ID_COUNTER, generate_id, generate_session_id, unix_now};
 
 pub use tokens::{
-    estimate_full_request_tokens, estimate_message_tokens, estimate_single_message_json_tokens,
-    estimate_tokens, estimate_tools_tokens, is_cjk,
+    compute_request_estimate, estimate_full_request_tokens, estimate_message_tokens,
+    estimate_single_message_json_tokens, estimate_tokens, estimate_tokens_json,
+    estimate_tools_tokens, is_cjk,
 };
 
 pub use paths::{

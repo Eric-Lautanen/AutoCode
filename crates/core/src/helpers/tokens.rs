@@ -1,4 +1,4 @@
-use crate::state::ChatMessage;
+use crate::state::{ChatMessage, Role};
 
 /// Estimate token count for text using a heuristic.
 /// Accuracy: ~10-15% for code, ~5-10% for English prose.
@@ -192,8 +192,38 @@ pub fn estimate_full_request_tokens(
     estimate_tokens_json(&json_str)
 }
 
+/// Unified token estimation: given messages and tool-definition token count,
+/// returns `(estimated_messages_tokens, estimated_full_tokens)`.
+///
+/// This is THE single pipeline for all token estimation. All callers
+/// (push_to_session, start_completion pre-flight, prepare_request_messages,
+/// load_session, replay, display) route through this function. The only
+/// difference between callers is **when** they call and where messages come from.
+///
+/// Strategy:
+/// - Uses each message's cached `full_token_estimate` when available (fast path).
+/// - Falls back to full JSON serialization + heuristic when missing.
+/// - `estimated_full_tokens` = messages + `tools_tokens`. Tool definitions are a
+///   fixed per-request overhead that never changes within a session, so callers
+///   compute it once via `estimate_tools_tokens` and pass it here.
+pub fn compute_request_estimate(messages: &[ChatMessage], tools_tokens: usize) -> (usize, usize) {
+    let msg_tokens: usize = messages
+        .iter()
+        .filter(|m| m.role != Role::Error)
+        .map(|m| {
+            if m.full_token_estimate > 0 {
+                m.full_token_estimate
+            } else {
+                estimate_single_message_json_tokens(m)
+            }
+        })
+        .sum();
+    let full_tokens = msg_tokens.saturating_add(tools_tokens);
+    (msg_tokens, full_tokens)
+}
+
 /// Heuristic token estimation optimized for JSON text.
-fn estimate_tokens_json(text: &str) -> usize {
+pub fn estimate_tokens_json(text: &str) -> usize {
     if text.is_empty() {
         return 0;
     }
