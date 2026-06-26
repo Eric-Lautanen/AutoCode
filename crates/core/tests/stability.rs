@@ -58,6 +58,7 @@ fn make_session_dir(project: &Project, label: &str) -> (SessionMeta, PathBuf) {
         show_reasoning_inline: false,
         show_project_tasks: false,
         draft_input: String::new(),
+        token_correction_ratio: 1.0,
     };
     let sess_dir = storage::project_sessions_dir(project);
     // Create the session subdirectory with metadata inside.
