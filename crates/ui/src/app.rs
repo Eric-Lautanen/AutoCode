@@ -105,26 +105,30 @@ impl AutocodeApp {
     }
 
     fn restore_active_session(state: &mut AppState) {
-        if let Some(ref sid) = state.active_session_id
-            && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == *sid)
-            && let Some(proj) = state
-                .projects
-                .iter()
-                .find(|p| Some(&p.id) == sess.project_id.as_ref())
-        {
+        // Resolve session_id and project upfront (shared borrow only).
+        let (sid, proj_idx) = match state.active_session_id.as_ref() {
+            Some(sid) => match state.sessions.iter().find(|s| s.id == *sid) {
+                Some(sess) => match sess.project_id.as_ref() {
+                    Some(pid) => match state.projects.iter().position(|p| p.id == *pid) {
+                        Some(proj_idx) => (sid.clone(), proj_idx),
+                        None => return,
+                    },
+                    None => return,
+                },
+                None => return,
+            },
+            None => return,
+        };
+        let proj = &state.projects[proj_idx];
+
+        // Compute tool tokens before the mutable session borrow (avoids aliasing).
+        let tool_tokens = autocode_ai::chat::tool_defs_tokens_for_session(state, Some(&sid));
+
+        if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
             sess.closed = false;
             autocode_core::storage::load_session(proj, sess);
-            let prov_label = if sess.provider_label.is_empty() {
-                &state.active_provider
-            } else {
-                &sess.provider_label
-            };
-            let _strict = state
-                .providers
-                .get(prov_label)
-                .map(|p| p.supports_strict_tools())
-                .unwrap_or(true);
-            autocode_core::helpers::update_full_estimate(sess);
+            sess.messages.shrink_to_fit();
+            autocode_core::helpers::update_full_estimate(sess, tool_tokens);
             let window = state.ui_display_window;
             let total = sess.messages.len();
             if total > window * 2 {
@@ -140,10 +144,11 @@ impl AutocodeApp {
             state.settings_open = sess.settings_open;
             state.show_reasoning_inline = sess.show_reasoning_inline;
             state.show_project_tasks = sess.show_project_tasks;
-            if let Some(meta) = autocode_core::storage::load_project_meta(proj) {
-                state.project_task_list = meta.project_task_list;
-            }
         }
+        if let Some(meta) = autocode_core::storage::load_project_meta(proj) {
+            state.project_task_list = meta.project_task_list;
+        }
+
         let restore_provider = state.active_session().and_then(|s| {
             if !s.provider_label.is_empty() {
                 Some((s.provider_label.clone(), s.model.clone()))

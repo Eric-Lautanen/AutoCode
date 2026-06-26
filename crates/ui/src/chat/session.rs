@@ -45,72 +45,86 @@ pub(crate) fn load_new_session(
     panel_state: &mut ChatPanelState,
 ) -> Option<String> {
     let mut purge_on_missing: Option<String> = None;
-    if let Some(ref new_id) = state.active_session_id {
-        if let Some(new_sess) = state.sessions.iter_mut().find(|s| s.id == *new_id)
-            && let Some(new_proj) = state
-                .projects
+    // Resolve project index upfront so we can hold &Project alongside
+    // &mut Session (different fields, no aliasing).
+    let (new_id, new_proj) = match state.active_session_id.clone() {
+        Some(ref new_id) => match state.projects.iter().position(|p| {
+            state
+                .sessions
                 .iter()
-                .find(|p| Some(&p.id) == new_sess.project_id.as_ref())
-        {
-            if new_sess.next_message_id > 1 && new_sess.messages.is_empty() {
-                let found = autocode_core::storage::load_session(new_proj, new_sess);
-                if !found {
-                    purge_on_missing = Some(new_id.clone());
-                } else {
-                    autocode_core::helpers::update_full_estimate(new_sess);
+                .any(|s| s.id == *new_id && Some(&p.id) == s.project_id.as_ref())
+        }) {
+            Some(idx) => (new_id.clone(), idx),
+            None => return purge_on_missing,
+        },
+        None => return purge_on_missing,
+    };
+    let new_proj = &state.projects[new_proj];
+
+    // Compute tool tokens before the mutable session borrow (avoids aliasing).
+    let tool_tokens = autocode_ai::chat::tool_defs_tokens_for_session(state, Some(&new_id));
+
+    // Single session lookup — covers both loading from disk and display setup.
+    if let Some(new_sess) = state.sessions.iter_mut().find(|s| s.id == new_id) {
+        if new_sess.next_message_id > 1 && new_sess.messages.is_empty() {
+            let found = autocode_core::storage::load_session(new_proj, new_sess);
+            if !found {
+                purge_on_missing = Some(new_id.clone());
+            } else {
+                autocode_core::helpers::update_full_estimate(new_sess, tool_tokens);
+            }
+        }
+
+        if purge_on_missing.is_none() {
+            // Keep session RAM small — full history is on disk.
+            let window = state.ui_display_window;
+            let total = new_sess.messages.len();
+            if total > window * 2 {
+                let keep = window;
+                new_sess.messages = new_sess.messages.split_off(total - keep);
+                new_sess.messages.shrink_to(0);
+            }
+            // Find the oldest non-Error message ID on disk for the
+            // "Load full history" button check.
+            let sess_dir = autocode_core::storage::session_messages_dir(new_proj, new_sess);
+            if autocode_core::storage::chunked_jsonl::has_chunked_files(&sess_dir) {
+                let on_disk = autocode_core::storage::load_all_messages(new_proj, new_sess);
+                panel_state.oldest_disk_id = on_disk
+                    .iter()
+                    .filter(|m| m.role != Role::Error && m.role != Role::System)
+                    .map(|m| m.id)
+                    .min()
+                    .unwrap_or(0);
+            } else {
+                panel_state.oldest_disk_id = 0;
+            }
+            panel_state.display_buffer = new_sess.messages.to_vec();
+            panel_state.loaded_min_id = panel_state
+                .display_buffer
+                .first()
+                .map(|m| m.id)
+                .unwrap_or(0);
+            panel_state.prev_message_count = new_sess.messages.len();
+            if !new_sess.provider_label.is_empty()
+                && state.providers.contains_key(&new_sess.provider_label)
+            {
+                state.active_provider = new_sess.provider_label.clone();
+                if let Some(prov) = state.providers.get_mut(&state.active_provider) {
+                    prov.model = new_sess.model.clone();
+                    prov.fill_from_config();
                 }
             }
-            if purge_on_missing.is_none() {
-                // Keep session RAM small — full history is on disk.
-                let window = state.ui_display_window;
-                let total = new_sess.messages.len();
-                if total > window * 2 {
-                    let keep = window;
-                    new_sess.messages = new_sess.messages.split_off(total - keep);
-                    new_sess.messages.shrink_to(0);
-                }
-                // Find the oldest non-Error message ID on disk for the
-                // "Load full history" button check.
-                let sess_dir = autocode_core::storage::session_messages_dir(new_proj, new_sess);
-                if autocode_core::storage::chunked_jsonl::has_chunked_files(&sess_dir) {
-                    let on_disk = autocode_core::storage::load_all_messages(new_proj, new_sess);
-                    panel_state.oldest_disk_id = on_disk
-                        .iter()
-                        .filter(|m| m.role != Role::Error && m.role != Role::System)
-                        .map(|m| m.id)
-                        .min()
-                        .unwrap_or(0);
-                } else {
-                    panel_state.oldest_disk_id = 0;
-                }
-                panel_state.display_buffer = new_sess.messages.to_vec();
-                panel_state.loaded_min_id = panel_state
-                    .display_buffer
-                    .first()
-                    .map(|m| m.id)
-                    .unwrap_or(0);
-                panel_state.prev_message_count = new_sess.messages.len();
-                if !new_sess.provider_label.is_empty()
-                    && state.providers.contains_key(&new_sess.provider_label)
-                {
-                    state.active_provider = new_sess.provider_label.clone();
-                    if let Some(prov) = state.providers.get_mut(&state.active_provider) {
-                        prov.model = new_sess.model.clone();
-                        prov.fill_from_config();
-                    }
-                }
-                state.todo_list = new_sess.todo_list.clone();
-                state.show_todo = new_sess.show_todo;
-                state.todo_user_dismissed = new_sess.todo_user_dismissed;
-                panel_state.input = new_sess.draft_input.clone();
-                state.handoff_enabled = new_sess.handoff_enabled;
-                state.show_explorer = new_sess.show_explorer;
-                state.settings_open = new_sess.settings_open;
-                state.show_reasoning_inline = new_sess.show_reasoning_inline;
-                state.show_project_tasks = new_sess.show_project_tasks;
-                if let Some(ref pid) = new_sess.project_id {
-                    state.active_project_id = Some(pid.clone());
-                }
+            state.todo_list = new_sess.todo_list.clone();
+            state.show_todo = new_sess.show_todo;
+            state.todo_user_dismissed = new_sess.todo_user_dismissed;
+            panel_state.input = new_sess.draft_input.clone();
+            state.handoff_enabled = new_sess.handoff_enabled;
+            state.show_explorer = new_sess.show_explorer;
+            state.settings_open = new_sess.settings_open;
+            state.show_reasoning_inline = new_sess.show_reasoning_inline;
+            state.show_project_tasks = new_sess.show_project_tasks;
+            if let Some(ref pid) = new_sess.project_id {
+                state.active_project_id = Some(pid.clone());
             }
         }
     } else {
