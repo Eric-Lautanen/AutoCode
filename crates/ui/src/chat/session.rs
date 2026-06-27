@@ -15,6 +15,12 @@ pub(crate) fn save_old_session(
     if let Some(ref old_id) = panel_state.prev_session_id
         && let Some(old_sess) = state.sessions.iter_mut().find(|s| s.id == *old_id)
     {
+        // If the old session belongs to a different project than the active one,
+        // a project switch already saved the session data to disk in
+        // switch_to_project. Skip to avoid overwriting with empty working copies.
+        if old_sess.project_id.as_ref() != state.active_project_id.as_ref() {
+            return;
+        }
         old_sess.todo_list = state.todo_list.clone();
         old_sess.project_task_list = state.project_task_list.clone();
         old_sess.show_todo = state.show_todo;
