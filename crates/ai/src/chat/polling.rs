@@ -26,7 +26,8 @@ const MAX_REASONING_SIZE: usize = 512 * 1024; // 512KB cap
 fn append_to_pending(pending_response: &mut String, text: &str) {
     let remaining = MAX_RESPONSE_SIZE.saturating_sub(pending_response.len());
     if remaining > 0 {
-        pending_response.push_str(&text[..text.len().min(remaining)]);
+        let end = text.floor_char_boundary(text.len().min(remaining));
+        pending_response.push_str(&text[..end]);
     }
     if pending_response.len() >= MAX_RESPONSE_SIZE {
         pending_response.truncate(MAX_RESPONSE_SIZE);
@@ -39,7 +40,8 @@ fn append_to_pending(pending_response: &mut String, text: &str) {
 fn append_to_reasoning(reasoning_buf: &mut String, text: &str) {
     let remaining = MAX_REASONING_SIZE.saturating_sub(reasoning_buf.len());
     if remaining > 0 {
-        reasoning_buf.push_str(&text[..text.len().min(remaining)]);
+        let end = text.floor_char_boundary(text.len().min(remaining));
+        reasoning_buf.push_str(&text[..end]);
     }
     if reasoning_buf.len() >= MAX_REASONING_SIZE {
         reasoning_buf.truncate(MAX_REASONING_SIZE);
