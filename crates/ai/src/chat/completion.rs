@@ -675,8 +675,7 @@ fn auto_continue_impl(
     } else if truncated {
         "Your last response was cut off by the output token limit. Continue exactly where you left off.".to_string()
     } else {
-        "Continue working. Update session todo_list with your next steps."
-            .to_string()
+        "Continue working. Update session todo_list with your next steps.".to_string()
     };
 
     push_runtime(state, runtime, ChatMessage::new(Role::User, msg));
