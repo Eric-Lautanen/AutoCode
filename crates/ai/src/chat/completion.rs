@@ -435,7 +435,12 @@ pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     // Carry forward the handoff setting so the chain continues.
     if let Some(sess) = state.active_session_mut() {
         sess.handoff_enabled = handoff_was_enabled;
+        // Carry forward project tasks to the new session; session tasks start fresh.
+        sess.project_task_list = old_ptl.clone();
     }
+    state.project_task_list = old_ptl.clone();
+    state.todo_list.clear();
+    state.show_todo = false;
 
     // Point the runtime at the new session before pushing messages.
     runtime.active_session_id = state.active_session_id.clone();
