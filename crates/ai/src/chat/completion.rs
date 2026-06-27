@@ -527,6 +527,8 @@ pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
         tool_msg.tool_call_id = Some(tool_call_id);
         tool_msg.tool_meta = Some(ToolMeta {
             tool_name: "project_task_list".to_string(),
+            line_count: Some(total),
+            byte_count: Some(done),
             ..Default::default()
         });
         push_runtime(state, runtime, tool_msg);
