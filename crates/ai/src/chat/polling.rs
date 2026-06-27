@@ -331,7 +331,8 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     return true;
                 }
                 let mut removed = false;
-                let mut orphaned_ids: std::collections::HashSet<u64> = std::collections::HashSet::new();
+                let mut orphaned_ids: std::collections::HashSet<u64> =
+                    std::collections::HashSet::new();
                 runtime.retry_count = 0;
                 runtime.status =
                     "Orphaned tool calls detected -- removing and retrying...".to_string();
@@ -383,16 +384,18 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 }
                 // Remove orphaned messages from disk too — the JSONL is the
                 // source of truth and must stay consistent with RAM.
-                if !orphaned_ids.is_empty() {
-                    if let Some(sid) = runtime.active_session_id.as_deref()
-                        && let Some(sess) = state.sessions.iter().find(|s| s.id == sid)
-                        && let Some(pid) = sess.project_id.as_ref()
-                        && let Some(proj) = state.projects.iter().find(|p| p.id == *pid)
-                    {
-                        if let Err(e) = autocode_core::storage::remove_messages_after(proj, sess, &orphaned_ids) {
-                            eprintln!("[polling] Failed to remove orphaned messages from disk: {}", e);
-                        }
-                    }
+                if !orphaned_ids.is_empty()
+                    && let Some(sid) = runtime.active_session_id.as_deref()
+                    && let Some(sess) = state.sessions.iter().find(|s| s.id == sid)
+                    && let Some(pid) = sess.project_id.as_ref()
+                    && let Some(proj) = state.projects.iter().find(|p| p.id == *pid)
+                    && let Err(e) =
+                        autocode_core::storage::remove_messages_after(proj, sess, &orphaned_ids)
+                {
+                    eprintln!(
+                        "[polling] Failed to remove orphaned messages from disk: {}",
+                        e
+                    );
                 }
                 if !removed {
                     runtime.orphaned_retry_count = 0;

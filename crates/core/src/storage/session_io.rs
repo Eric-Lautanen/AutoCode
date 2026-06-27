@@ -170,7 +170,7 @@ pub fn save_session_meta(project: &Project, session: &Session) -> std::io::Resul
                         let file_name = old_entry.file_name();
                         let dest = new_path.join(&file_name);
                         if !dest.exists() {
-                            let _ = std::fs::rename(&old_entry.path(), &dest);
+                            let _ = std::fs::rename(old_entry.path(), &dest);
                         }
                     }
                 }
@@ -322,14 +322,13 @@ fn cleanup_stale_temp_dirs(dir: &Path, max_age_secs: u64) {
             if let Some(ts_str) = name.rsplit('_').next()
                 && let Ok(ts) = ts_str.parse::<u64>()
                 && now.saturating_sub(ts) > max_age_secs
+                && let Err(e) = fsutil::remove_dir(&entry.path())
             {
-                if let Err(e) = fsutil::remove_dir(&entry.path()) {
-                    eprintln!(
-                        "[session_storage] Failed to remove stale temp dir {:?}: {}",
-                        entry.path(),
-                        e
-                    );
-                }
+                eprintln!(
+                    "[session_storage] Failed to remove stale temp dir {:?}: {}",
+                    entry.path(),
+                    e
+                );
             }
         }
     }

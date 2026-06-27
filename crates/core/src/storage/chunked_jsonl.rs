@@ -178,13 +178,13 @@ pub fn truncate_messages_chunked(dir: &Path, keep_up_to_id: u64) -> std::io::Res
     for path in chunks.iter().rev() {
         if let Ok(content) = fsutil::read_to_string(path) {
             for line in content.lines().filter(|l| !l.is_empty()) {
-                if let Ok(msg) = serde_json::from_str::<ChatMessage>(line) {
-                    if msg.id <= keep_up_to_id {
-                        // This chunk contains at least one message to keep.
-                        boundary_chunk_idx = Some(chunks.iter().position(|p| p == path).unwrap());
-                        boundary_path = Some(path.clone());
-                        break;
-                    }
+                if let Ok(msg) = serde_json::from_str::<ChatMessage>(line)
+                    && msg.id <= keep_up_to_id
+                {
+                    // This chunk contains at least one message to keep.
+                    boundary_chunk_idx = Some(chunks.iter().position(|p| p == path).unwrap());
+                    boundary_path = Some(path.clone());
+                    break;
                 }
             }
         }
@@ -199,10 +199,7 @@ pub fn truncate_messages_chunked(dir: &Path, keep_up_to_id: u64) -> std::io::Res
             // No messages to keep — delete all chunk files.
             for path in &chunks {
                 if let Err(e) = fsutil::remove_file(path) {
-                    eprintln!(
-                        "[chunked_jsonl] Failed to remove chunk {:?}: {}",
-                        path, e
-                    );
+                    eprintln!("[chunked_jsonl] Failed to remove chunk {:?}: {}", path, e);
                 }
             }
             return Ok(());
@@ -224,10 +221,10 @@ pub fn truncate_messages_chunked(dir: &Path, keep_up_to_id: u64) -> std::io::Res
             .open(fsutil::extended_path(&tmp_path))?;
         let mut writer = std::io::BufWriter::new(tmp_file);
         for line in content.lines().filter(|l| !l.is_empty()) {
-            if let Ok(msg) = serde_json::from_str::<ChatMessage>(line) {
-                if msg.id <= keep_up_to_id {
-                    writeln!(writer, "{}", line)?;
-                }
+            if let Ok(msg) = serde_json::from_str::<ChatMessage>(line)
+                && msg.id <= keep_up_to_id
+            {
+                writeln!(writer, "{}", line)?;
             }
         }
         writer.flush()?;
@@ -259,7 +256,10 @@ pub fn truncate_messages_chunked(dir: &Path, keep_up_to_id: u64) -> std::io::Res
 /// is then atomically renamed into place. Unaffected chunks are left untouched.
 ///
 /// Returns the number of messages actually removed.
-pub fn remove_messages_by_id(dir: &Path, ids_to_remove: &std::collections::HashSet<u64>) -> std::io::Result<usize> {
+pub fn remove_messages_by_id(
+    dir: &Path,
+    ids_to_remove: &std::collections::HashSet<u64>,
+) -> std::io::Result<usize> {
     if ids_to_remove.is_empty() {
         return Ok(0);
     }
@@ -277,11 +277,11 @@ pub fn remove_messages_by_id(dir: &Path, ids_to_remove: &std::collections::HashS
         let mut removed_count = 0;
 
         for line in content.lines().filter(|l| !l.is_empty()) {
-            if let Ok(msg) = serde_json::from_str::<ChatMessage>(line) {
-                if ids_to_remove.contains(&msg.id) {
-                    removed_count += 1;
-                    continue;
-                }
+            if let Ok(msg) = serde_json::from_str::<ChatMessage>(line)
+                && ids_to_remove.contains(&msg.id)
+            {
+                removed_count += 1;
+                continue;
             }
             kept_lines.push(line);
         }

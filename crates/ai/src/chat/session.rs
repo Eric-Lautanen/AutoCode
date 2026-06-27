@@ -119,13 +119,17 @@ pub fn prepare_request_messages_for_session(
             // Remove orphaned messages from disk — the JSONL is the source of
             // truth and must stay consistent with what we send to the API.
             let sess = state.sessions.iter().find(|s| s.id == session_id);
-            let proj = sess.and_then(|s| s.project_id.as_ref()).and_then(|pid| {
-                state.projects.iter().find(|p| p.id == *pid)
-            });
-            if let (Some(sess), Some(proj)) = (sess, proj) {
-                if let Err(e) = autocode_core::storage::remove_messages_after(proj, sess, &orphaned_ids) {
-                    eprintln!("[session] Failed to remove orphaned messages from disk: {}", e);
-                }
+            let proj = sess
+                .and_then(|s| s.project_id.as_ref())
+                .and_then(|pid| state.projects.iter().find(|p| p.id == *pid));
+            if let (Some(sess), Some(proj)) = (sess, proj)
+                && let Err(e) =
+                    autocode_core::storage::remove_messages_after(proj, sess, &orphaned_ids)
+            {
+                eprintln!(
+                    "[session] Failed to remove orphaned messages from disk: {}",
+                    e
+                );
             }
         }
     }

@@ -215,7 +215,11 @@ fn test_truncate_preserves_early_messages() {
     let msgs: Vec<ChatMessage> = (1..=100u64)
         .map(|i| ChatMessage {
             id: i,
-            role: if i % 2 == 0 { Role::Assistant } else { Role::User },
+            role: if i % 2 == 0 {
+                Role::Assistant
+            } else {
+                Role::User
+            },
             content: format!("Message {}", i),
             timestamp: 0,
             token_count: 5,
@@ -234,9 +238,16 @@ fn test_truncate_preserves_early_messages() {
 
     // Verify: messages 1-50 survive, 51-100 are gone.
     let remaining = chunked_jsonl::read_all_messages_chunked(&msg_dir);
-    assert_eq!(remaining.len(), 50, "should have 50 messages after truncate");
+    assert_eq!(
+        remaining.len(),
+        50,
+        "should have 50 messages after truncate"
+    );
     assert_eq!(remaining[0].id, 1, "first message must survive truncate");
-    assert_eq!(remaining[0].content, "Message 1", "first message content must be intact");
+    assert_eq!(
+        remaining[0].content, "Message 1",
+        "first message content must be intact"
+    );
     assert_eq!(remaining[49].id, 50, "last kept message must be id 50");
 
     // Verify early messages are truly untouched by checking the first chunk file.
@@ -261,7 +272,11 @@ fn test_remove_messages_by_id() {
     let msgs: Vec<ChatMessage> = (1..=50u64)
         .map(|i| ChatMessage {
             id: i,
-            role: if i % 2 == 0 { Role::Assistant } else { Role::User },
+            role: if i % 2 == 0 {
+                Role::Assistant
+            } else {
+                Role::User
+            },
             content: format!("Message {}", i),
             timestamp: 0,
             token_count: 5,
@@ -283,9 +298,17 @@ fn test_remove_messages_by_id() {
     // Verify: 47 messages remain, messages 10/20/30 are gone, all others intact.
     let remaining = chunked_jsonl::read_all_messages_chunked(&msg_dir);
     assert_eq!(remaining.len(), 47, "should have 47 messages after removal");
-    assert!(remaining.iter().all(|m| ![10, 20, 30].contains(&m.id)),
-        "removed IDs must not appear");
+    assert!(
+        remaining.iter().all(|m| ![10, 20, 30].contains(&m.id)),
+        "removed IDs must not appear"
+    );
     assert_eq!(remaining[0].id, 1, "first message must survive removal");
-    assert_eq!(remaining[8].id, 9, "message 9 must survive (before removed 10)");
-    assert_eq!(remaining[9].id, 11, "message 11 must survive (after removed 10)");
+    assert_eq!(
+        remaining[8].id, 9,
+        "message 9 must survive (before removed 10)"
+    );
+    assert_eq!(
+        remaining[9].id, 11,
+        "message 11 must survive (after removed 10)"
+    );
 }

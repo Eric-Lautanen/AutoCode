@@ -374,14 +374,15 @@ pub fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Se
                                                                      thinking_api: defs.thinking_api.clone(),
                                                                      reasoning_efforts: defs.reasoning_efforts.clone(),
                                                                      supports_cache_control: defs.supports_cache_control,
-                                                                     requests_per_hour: defs.requests_per_hour,
-                                                                     handoff_percent: p.handoff_percent,
-                                                                     temperature: p.temperature,
-                                                                     top_p: p.top_p,
-                                                                     frequency_penalty: p.frequency_penalty,
-                                                                     presence_penalty: p.presence_penalty,
-                                                                 };
-                                                                let cm = p.models_config.get_or_insert_with(std::collections::HashMap::new);
+                                                                      requests_per_hour: defs.requests_per_hour,
+                                                                      thinking_overrides: defs.thinking_overrides.clone(),
+                                                                      handoff_percent: p.handoff_percent,
+                                                                      temperature: p.temperature,
+                                                                      top_p: p.top_p,
+                                                                      frequency_penalty: p.frequency_penalty,
+                                                                      presence_penalty: p.presence_penalty,
+                                                                  };
+                                                                 let cm = p.models_config.get_or_insert_with(std::collections::HashMap::new);
                                                                 cm.insert(m.clone(), entry);
                                                                 provider_dirty = true;
                                                             }
@@ -440,14 +441,15 @@ pub fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Se
                                                  thinking_api: defs.thinking_api.clone(),
                                                  reasoning_efforts: defs.reasoning_efforts.clone(),
                                                  supports_cache_control: defs.supports_cache_control,
-                                                 requests_per_hour: defs.requests_per_hour,
-                                                 handoff_percent: p.handoff_percent,
-                                                 temperature: p.temperature,
-                                                 top_p: p.top_p,
-                                                 frequency_penalty: p.frequency_penalty,
-                                                 presence_penalty: p.presence_penalty,
-                                             }
-                                        });
+                                                  requests_per_hour: defs.requests_per_hour,
+                                                  thinking_overrides: defs.thinking_overrides.clone(),
+                                                  handoff_percent: p.handoff_percent,
+                                                  temperature: p.temperature,
+                                                  top_p: p.top_p,
+                                                  frequency_penalty: p.frequency_penalty,
+                                                  presence_penalty: p.presence_penalty,
+                                              }
+                                         });
                                     let mut cfg_changed = false;
 
                                     ui.group(|ui| {
