@@ -428,6 +428,27 @@ impl ThinkTagFilter {
     /// Feed raw delta text in; get back (visible_text, reasoning_text).
     /// Either may be empty. Call once per content delta, in order.
     fn process(&mut self, chunk: &str) -> (String, String) {
+        self._process(chunk)
+    }
+
+    /// Flush any remaining carry buffer content at stream end.
+    /// Returns (visible_text, reasoning_text) for text held back while
+    /// waiting for a potential split tag that never arrived.
+    fn flush(&mut self) -> (String, String) {
+        let mut visible = String::new();
+        let mut reasoning = String::new();
+        if !self.carry.is_empty() {
+            let flushed = std::mem::take(&mut self.carry);
+            if self.in_think {
+                reasoning = flushed;
+            } else {
+                visible = flushed;
+            }
+        }
+        (visible, reasoning)
+    }
+
+    fn _process(&mut self, chunk: &str) -> (String, String) {
         self.carry.push_str(chunk);
         let mut visible = String::new();
         let mut reasoning = String::new();
@@ -636,9 +657,6 @@ pub(crate) fn parse_sse_stream_from_reader<R: BufRead>(
                 saw_finish = true;
             }
             if reason == "content_filter" {
-                let _ = tx.send(ProviderEvent::Error(
-                    "Response filtered by provider content policy (content_filter)".to_string(),
-                ));
                 had_error = true;
                 saw_finish = true;
             }
@@ -689,7 +707,20 @@ pub(crate) fn parse_sse_stream_from_reader<R: BufRead>(
         return Ok(());
     }
 
+    // Flush any text held back in the tag_filter carry buffer before
+    // terminating — otherwise the last ~6 characters of the response
+    // are silently dropped (they were held waiting for a potential split
+    // <think> / </think> tag across chunks).
+    let (carry_visible, carry_reasoning) = tag_filter.flush();
+    if !carry_visible.is_empty() && tx.send(ProviderEvent::Delta(carry_visible)).is_err() {
+        return Err("channel closed".into());
+    }
+    if !carry_reasoning.is_empty() && tx.send(ProviderEvent::Reasoning(carry_reasoning)).is_err() {
+        return Err("channel closed".into());
+    }
+
     if !saw_finish && saw_data_line {
+        // Connection lost — the carry was already flushed above.
         let _ = tx.send(ProviderEvent::Error(
             "Connection lost mid-stream — response may be truncated".to_string(),
         ));
@@ -702,6 +733,10 @@ pub(crate) fn parse_sse_stream_from_reader<R: BufRead>(
             completion_tokens,
             finish_reason,
         });
+    } else {
+        let _ = tx.send(ProviderEvent::Error(
+            "Response filtered by provider content policy (content_filter)".to_string(),
+        ));
     }
     Ok(())
 }

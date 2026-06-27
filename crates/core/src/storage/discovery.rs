@@ -11,17 +11,19 @@ pub fn switch_to_project(state: &mut AppState, project_id: &str) {
     // before clearing. This ensures task lists and per-session flags are not lost
     // when the caller switches to a different project.
     if let Some(ref sid) = state.active_session_id.clone()
-        && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == *sid) {
-            sess.todo_list = std::mem::take(&mut state.todo_list);
-            sess.project_task_list = std::mem::take(&mut state.project_task_list);
-            sess.show_todo = state.show_todo;
-            sess.todo_user_dismissed = state.todo_user_dismissed;
-            sess.show_project_tasks = state.show_project_tasks;
-            if let Some(ref pid) = sess.project_id.clone()
-                && let Some(proj) = state.projects.iter().find(|p| p.id == *pid) {
-                    let _ = save_session_meta(proj, sess);
-                }
+        && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == *sid)
+    {
+        sess.todo_list = std::mem::take(&mut state.todo_list);
+        sess.project_task_list = std::mem::take(&mut state.project_task_list);
+        sess.show_todo = state.show_todo;
+        sess.todo_user_dismissed = state.todo_user_dismissed;
+        sess.show_project_tasks = state.show_project_tasks;
+        if let Some(ref pid) = sess.project_id.clone()
+            && let Some(proj) = state.projects.iter().find(|p| p.id == *pid)
+        {
+            let _ = save_session_meta(proj, sess);
         }
+    }
 
     // Show welcome screen — never auto-activate a session on project switch.
     // The user picks a session from the dropdown or clicks "+ Session".
