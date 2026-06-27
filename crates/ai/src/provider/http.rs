@@ -409,6 +409,63 @@ pub(crate) fn process_http_response<R: BufRead>(
 
 // -- SSE stream parsing --------------------------------------------------------
 
+/// Splits inline `<think>...</think>` content out of a text stream, even when
+/// tags are split across multiple chunks. One instance per stream; state must
+/// persist across calls for the lifetime of that stream.
+struct ThinkTagFilter {
+    in_think: bool,
+    carry: String,
+}
+
+impl ThinkTagFilter {
+    fn new() -> Self {
+        Self {
+            in_think: false,
+            carry: String::new(),
+        }
+    }
+
+    /// Feed raw delta text in; get back (visible_text, reasoning_text).
+    /// Either may be empty. Call once per content delta, in order.
+    fn process(&mut self, chunk: &str) -> (String, String) {
+        self.carry.push_str(chunk);
+        let mut visible = String::new();
+        let mut reasoning = String::new();
+
+        loop {
+            let tag = if self.in_think { "</think>" } else { "<think>" };
+            match self.carry.find(tag) {
+                Some(idx) => {
+                    let (before, after) = self.carry.split_at(idx);
+                    if self.in_think {
+                        reasoning.push_str(before);
+                    } else {
+                        visible.push_str(before);
+                    }
+                    let rest = after[tag.len()..].to_string();
+                    self.carry = rest;
+                    self.in_think = !self.in_think;
+                }
+                None => {
+                    // No full tag in the buffer yet. Hold back a suffix that
+                    // could be the start of a split tag, flush the rest now.
+                    let hold = tag.len().saturating_sub(1);
+                    let flush_len = self.carry.len().saturating_sub(hold);
+                    let flush_len = self.carry.floor_char_boundary(flush_len);
+                    let flushed: String = self.carry.drain(..flush_len).collect();
+                    if self.in_think {
+                        reasoning.push_str(&flushed);
+                    } else {
+                        visible.push_str(&flushed);
+                    }
+                    break;
+                }
+            }
+        }
+        (visible, reasoning)
+    }
+}
+
 pub(crate) fn parse_sse_stream_from_reader<R: BufRead>(
     reader: R,
     tx: &Sender<ProviderEvent>,
@@ -425,6 +482,7 @@ pub(crate) fn parse_sse_stream_from_reader<R: BufRead>(
     let mut finish_reason: Option<String> = None;
     let mut raw_buf = String::new();
     let mut last_log = std::time::Instant::now();
+    let mut tag_filter = ThinkTagFilter::new();
 
     // Validate tool call arguments as valid JSON; repair if possible.
     fn fix_args(args: &mut String) -> bool {
@@ -494,14 +552,27 @@ pub(crate) fn parse_sse_stream_from_reader<R: BufRead>(
             completion_tokens = c as usize;
         }
         let delta = &v["choices"][0]["delta"];
-        if let Some(text) = delta["content"].as_str().filter(|s| !s.is_empty())
-            && tx.send(ProviderEvent::Delta(text.to_string())).is_err()
-        {
-            return Err("channel closed".into());
+        if let Some(text) = delta["content"].as_str().filter(|s| !s.is_empty()) {
+            let (visible, reasoning) = tag_filter.process(text);
+            if !visible.is_empty() && tx.send(ProviderEvent::Delta(visible)).is_err() {
+                return Err("channel closed".into());
+            }
+            if !reasoning.is_empty() && tx.send(ProviderEvent::Reasoning(reasoning)).is_err() {
+                return Err("channel closed".into());
+            }
         }
         if let Some(reasoning) = delta["reasoning_content"]
             .as_str()
             .filter(|s| !s.is_empty())
+            && tx
+                .send(ProviderEvent::Reasoning(reasoning.to_string()))
+                .is_err()
+        {
+            return Err("channel closed".into());
+        }
+        // OpenRouter (and possibly others) use "reasoning" instead of
+        // "reasoning_content" as the delta field name.
+        if let Some(reasoning) = delta["reasoning"].as_str().filter(|s| !s.is_empty())
             && tx
                 .send(ProviderEvent::Reasoning(reasoning.to_string()))
                 .is_err()
@@ -824,4 +895,9 @@ pub(crate) struct RequestBody<'a> {
     pub thinking: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<&'a str>,
+    /// Raw JSON merged into the request body root when a per-model
+    /// thinking_overrides entry matches the active effort/off key.
+    /// Bypasses the ThinkingApi convention entirely when set.
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub extra: Option<serde_json::Value>,
 }

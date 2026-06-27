@@ -203,7 +203,9 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
             }
         });
 
-    let thinking = session_thinking_mode && provider.thinking_api.supports_thinking();
+    let can_think = provider.thinking_api.supports_thinking()
+        || provider.thinking_overrides.iter().any(|(k, _)| k != "off");
+    let thinking = session_thinking_mode && can_think;
     let defs = autocode_core::helpers::model_or_safe(&provider.kind, &provider.model);
     let thinking_api = provider.thinking_api.clone();
     // Some providers always do reasoning through their proxy — can't disable.
@@ -351,6 +353,7 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
         thinking_mode: thinking,
         reasoning_effort,
         thinking_api,
+        thinking_overrides: provider.thinking_overrides.clone(),
         top_p,
         frequency_penalty: provider.frequency_penalty.clamp(-2.0, 2.0),
         presence_penalty: provider.presence_penalty.clamp(-2.0, 2.0),
@@ -455,7 +458,11 @@ pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     // Inject synthetic bootstrap messages so the model sees the project task list
     // from the previous session. Source of truth is the old session's SessionMeta,
     // which was just saved above.
-    let ptl_opt = if old_ptl.is_empty() { None } else { Some(old_ptl) };
+    let ptl_opt = if old_ptl.is_empty() {
+        None
+    } else {
+        Some(old_ptl)
+    };
     if let Some(ptl) = ptl_opt {
         let tool_call_id = crate::helpers::gen_tool_call_id();
 

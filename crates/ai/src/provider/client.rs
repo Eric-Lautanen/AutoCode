@@ -77,10 +77,18 @@ fn run_request(
     req: CompletionRequest,
     tx: Sender<ProviderEvent>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let thinking_key: &str = if req.thinking_mode {
+        req.reasoning_effort.as_str()
+    } else {
+        "off"
+    };
+    let thinking_override = req.thinking_overrides.get(thinking_key).cloned();
+
     let body = build_request_body(
         &req,
         provider.kind.supports_cache_control(),
         provider.supports_strict_tools(),
+        thinking_override,
     )?;
     let url = provider.chat_endpoint_url();
 
@@ -130,6 +138,7 @@ fn build_request_body(
     req: &CompletionRequest,
     supports_cache: bool,
     supports_strict: bool,
+    thinking_override: Option<serde_json::Value>,
 ) -> Result<String, serde_json::Error> {
     use super::http::{ReqMsg, RequestBody};
 
@@ -186,26 +195,43 @@ fn build_request_body(
         parallel_tool_calls: None,
         thinking: None,
         reasoning_effort: None,
+        extra: None,
     };
 
-    match &req.thinking_api {
-        autocode_core::state::ThinkingApi::DeepSeek if req.thinking_mode => {
-            body.thinking = Some(serde_json::json!({"type": "enabled"}));
-            body.reasoning_effort = Some(&req.reasoning_effort);
+    match thinking_override {
+        // A manifest-supplied override for the active effort/off key always
+        // wins over the built-in convention below.
+        Some(v) => {
+            body.extra = Some(v);
         }
-        autocode_core::state::ThinkingApi::OpenAI if req.thinking_mode => {
-            body.reasoning_effort = Some(&req.reasoning_effort);
-        }
-        autocode_core::state::ThinkingApi::Anthropic if req.thinking_mode => {
-            body.thinking = Some(serde_json::json!({"type": "enabled", "budget_tokens": 16000}));
-        }
-        autocode_core::state::ThinkingApi::Gemini if req.thinking_mode => {
-            body.thinking = Some(serde_json::json!({"type": "enabled"}));
-        }
-        autocode_core::state::ThinkingApi::Grok if req.thinking_mode => {
-            body.thinking = Some(serde_json::json!({"type": "enabled"}));
-        }
-        _ => {}
+        None => match &req.thinking_api {
+            autocode_core::state::ThinkingApi::DeepSeek if req.thinking_mode => {
+                body.thinking = Some(serde_json::json!({"type": "enabled"}));
+                body.reasoning_effort = Some(&req.reasoning_effort);
+            }
+            autocode_core::state::ThinkingApi::OpenAI if req.thinking_mode => {
+                body.reasoning_effort = Some(&req.reasoning_effort);
+            }
+            autocode_core::state::ThinkingApi::Anthropic if req.thinking_mode => {
+                body.thinking =
+                    Some(serde_json::json!({"type": "enabled", "budget_tokens": 16000}));
+            }
+            autocode_core::state::ThinkingApi::Gemini if req.thinking_mode => {
+                body.thinking = Some(serde_json::json!({"type": "enabled"}));
+            }
+            autocode_core::state::ThinkingApi::Grok if req.thinking_mode => {
+                body.thinking = Some(serde_json::json!({"type": "enabled"}));
+            }
+            autocode_core::state::ThinkingApi::OpenRouter => {
+                let effort = if req.thinking_mode {
+                    req.reasoning_effort.as_str()
+                } else {
+                    "none"
+                };
+                body.extra = Some(serde_json::json!({"reasoning": {"effort": effort}}));
+            }
+            _ => {}
+        },
     }
 
     if req.stream {

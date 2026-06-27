@@ -200,6 +200,7 @@ pub fn fix_provider_params(state: &mut autocode_core::state::AppState, err_msg: 
                         reasoning_efforts: defs.reasoning_efforts.clone(),
                         supports_cache_control: defs.supports_cache_control,
                         requests_per_hour: defs.requests_per_hour,
+                        thinking_overrides: defs.thinking_overrides.clone(),
                         handoff_percent: prov.handoff_percent,
                         temperature: prov.temperature,
                         top_p: prov.top_p,
