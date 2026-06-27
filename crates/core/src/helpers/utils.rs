@@ -92,6 +92,7 @@ pub fn safe_model_defaults() -> ModelManifest {
         reasoning_efforts: vec!["high".into()],
         supports_cache_control: false,
         requests_per_hour: None,
+        thinking_overrides: std::collections::HashMap::new(),
     }
 }
 
@@ -114,6 +115,7 @@ pub fn parse_thinking_api(s: &str) -> ThinkingApi {
         "anthropic" => ThinkingApi::Anthropic,
         "gemini" => ThinkingApi::Gemini,
         "grok" => ThinkingApi::Grok,
+        "openrouter" => ThinkingApi::OpenRouter,
         _ => ThinkingApi::Off,
     }
 }

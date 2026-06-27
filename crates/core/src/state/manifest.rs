@@ -44,4 +44,12 @@ pub struct ModelManifest {
     /// Max API requests allowed per hour (0 or None = unlimited).
     #[serde(default)]
     pub requests_per_hour: Option<u32>,
+    /// Per-effort raw JSON overrides for gateways with non-standard thinking
+    /// knobs (e.g. NVIDIA NIM's chat_template_kwargs). Keyed by effort label,
+    /// "off" for the disabled state. When the active key has an entry here,
+    /// this JSON is merged into the request body verbatim instead of running
+    /// ThinkingApi's built-in convention for that request. Add a new
+    /// gateway's quirk here — never in Rust.
+    #[serde(default)]
+    pub thinking_overrides: std::collections::HashMap<String, serde_json::Value>,
 }

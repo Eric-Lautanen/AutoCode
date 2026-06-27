@@ -123,6 +123,12 @@ pub enum ThinkingApi {
     Anthropic,
     Gemini,
     Grok,
+    /// OpenRouter's unified reasoning wrapper: {"reasoning": {"effort": ...}}.
+    /// Applies regardless of the underlying model (Anthropic, OpenAI, Gemini,
+    /// Grok, DeepSeek, etc) — OpenRouter translates this on their end. Use
+    /// this for any model routed through OpenRouter instead of that model's
+    /// native convention.
+    OpenRouter,
 }
 
 impl ThinkingApi {
@@ -134,6 +140,7 @@ impl ThinkingApi {
             Self::Anthropic => "Anthropic",
             Self::Gemini => "Gemini",
             Self::Grok => "Grok",
+            Self::OpenRouter => "OpenRouter",
         }
     }
 
@@ -145,6 +152,7 @@ impl ThinkingApi {
             ThinkingApi::Anthropic,
             ThinkingApi::Gemini,
             ThinkingApi::Grok,
+            ThinkingApi::OpenRouter,
         ]
     }
 
@@ -203,6 +211,11 @@ pub struct ApiProvider {
     /// Set from providers.json on first load; user can override in settings.
     #[serde(default)]
     pub requests_per_hour: Option<u32>,
+
+    /// Per-effort raw JSON overrides for non-standard gateway thinking knobs.
+    /// See ModelManifest::thinking_overrides for the full explanation.
+    #[serde(default)]
+    pub thinking_overrides: std::collections::HashMap<String, serde_json::Value>,
 
     /// Separate URL for fetching model lists (e.g. "https://api.example.com/v1/models").
     /// If empty, defaults to `{base_url}/models`.
@@ -282,6 +295,7 @@ impl ApiProvider {
                         reasoning_efforts: defs.reasoning_efforts.clone(),
                         supports_cache_control: defs.supports_cache_control,
                         requests_per_hour: defs.requests_per_hour,
+                        thinking_overrides: defs.thinking_overrides.clone(),
                         handoff_percent: 80,
                         temperature: 0.2,
                         top_p: 1.0,
@@ -310,6 +324,7 @@ impl ApiProvider {
                 .max_output_tokens_thinking
                 .unwrap_or(defs.max_output_tokens * 2),
             requests_per_hour: defs.requests_per_hour,
+            thinking_overrides: defs.thinking_overrides.clone(),
             temperature: 0.2,
             top_p: 1.0,
             frequency_penalty: 0.0,
@@ -362,6 +377,7 @@ impl ApiProvider {
             .unwrap_or(defs.max_output_tokens * 2);
         self.thinking_api = parse_thinking_api(&defs.thinking_api);
         self.requests_per_hour = defs.requests_per_hour;
+        self.thinking_overrides = defs.thinking_overrides.clone();
         if let Some(effort) = defs.reasoning_efforts.first() {
             self.reasoning_effort.clone_from(effort);
         }
@@ -404,6 +420,7 @@ impl ApiProvider {
             .cloned()
             .unwrap_or_else(|| "high".into());
         self.requests_per_hour = mc.requests_per_hour;
+        self.thinking_overrides = mc.thinking_overrides.clone();
         self.handoff_percent = mc.handoff_percent;
         self.temperature = mc.temperature;
         self.top_p = mc.top_p;

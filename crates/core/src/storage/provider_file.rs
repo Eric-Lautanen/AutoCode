@@ -42,6 +42,12 @@ pub struct ModelEntry {
     /// Rate per hour (0 or None = unlimited).
     #[serde(default)]
     pub requests_per_hour: Option<u32>,
+
+    /// Per-effort raw JSON overrides for non-standard gateway thinking knobs.
+    /// See ModelManifest::thinking_overrides for the full explanation.
+    #[serde(default)]
+    pub thinking_overrides: std::collections::HashMap<String, serde_json::Value>,
+
     /// Handoff threshold percentage (10-95). Defaults to 80.
     #[serde(default = "default_handoff_pct")]
     pub handoff_percent: u8,
@@ -148,6 +154,7 @@ fn convert_to_providers(file: &ProviderFile) -> HashMap<String, ApiProvider> {
             max_output_tokens: 0,
             max_output_tokens_thinking: 0,
             requests_per_hour: None,
+            thinking_overrides: std::collections::HashMap::new(),
             temperature: 0.2,
             top_p: 1.0,
             frequency_penalty: 0.0,
@@ -204,6 +211,7 @@ fn convert_from_providers(providers: &HashMap<String, ApiProvider>) -> ProviderF
                         reasoning_efforts: defs.reasoning_efforts.clone(),
                         supports_cache_control: defs.supports_cache_control,
                         requests_per_hour: defs.requests_per_hour,
+                        thinking_overrides: defs.thinking_overrides.clone(),
                         handoff_percent: ap.handoff_percent,
                         temperature: ap.temperature,
                         top_p: ap.top_p,
@@ -228,6 +236,7 @@ fn convert_from_providers(providers: &HashMap<String, ApiProvider>) -> ProviderF
                         reasoning_efforts: defs.reasoning_efforts.clone(),
                         supports_cache_control: defs.supports_cache_control,
                         requests_per_hour: defs.requests_per_hour,
+                        thinking_overrides: defs.thinking_overrides.clone(),
                         handoff_percent: ap.handoff_percent,
                         temperature: ap.temperature,
                         top_p: ap.top_p,

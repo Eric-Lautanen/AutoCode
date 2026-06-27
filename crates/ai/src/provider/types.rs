@@ -17,6 +17,7 @@ pub struct CompletionRequest {
     pub thinking_mode: bool,
     pub reasoning_effort: String,
     pub thinking_api: autocode_core::state::ThinkingApi,
+    pub thinking_overrides: std::collections::HashMap<String, serde_json::Value>,
     pub top_p: f32,
     pub frequency_penalty: f32,
     pub presence_penalty: f32,
