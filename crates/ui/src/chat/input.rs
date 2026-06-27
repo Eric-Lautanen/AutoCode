@@ -78,7 +78,10 @@ pub(crate) fn show_input_row(
                         {
                             let p = state.active_provider();
                             let supported = p
-                                .map(|p| p.thinking_api.supports_thinking())
+                                .map(|p| {
+                                    p.thinking_api.supports_thinking()
+                                        || p.thinking_overrides.iter().any(|(k, _)| k != "off")
+                                })
                                 .unwrap_or(false);
                             let kind = p.map(|p| p.kind.clone()).unwrap_or_else(|| {
                                 autocode_core::state::ProviderKind::new(
@@ -104,7 +107,10 @@ pub(crate) fn show_input_row(
                                 .map(|p| p.reasoning_effort.clone())
                                 .unwrap_or_else(|| "high".into()),
                             p.as_ref()
-                                .map(|p| p.thinking_api.supports_thinking())
+                                .map(|p| {
+                                    p.thinking_api.supports_thinking()
+                                        || p.thinking_overrides.iter().any(|(k, _)| k != "off")
+                                })
                                 .unwrap_or(false),
                             p.map(|p| p.kind.clone()).unwrap_or_else(|| {
                                 autocode_core::state::ProviderKind::new(
@@ -237,6 +243,11 @@ pub(crate) fn show_input_row(
                                 &provider_kind,
                                 &model,
                             );
+                        let effort = if available_efforts.contains(&effort) {
+                            effort
+                        } else {
+                            available_efforts.first().cloned().unwrap_or(effort)
+                        };
                         egui::Popup::menu(&effort_resp).show(|ui| {
                             ui.set_min_width(80.0);
                             ui.spacing_mut().button_padding = Vec2::new(8.0, 4.0);
