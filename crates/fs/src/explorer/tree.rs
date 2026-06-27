@@ -1,13 +1,26 @@
 // tree.rs -- Recursive project tree listing.
 
+use std::io::BufRead;
 use std::path::Path;
 
 use super::gitignore::{Gitignore, find_project_root};
 use autocode_core::utils::fsutil;
 
+const LINE_COUNT_SIZE_LIMIT: u64 = 10 * 1024 * 1024; // skip files > 10 MB
+
+fn count_lines(path: &Path) -> Option<usize> {
+    let meta = std::fs::metadata(path).ok()?;
+    if meta.len() > LINE_COUNT_SIZE_LIMIT {
+        return None;
+    }
+    let file = std::fs::File::open(path).ok()?;
+    let reader = std::io::BufReader::new(file);
+    Some(reader.lines().count())
+}
+
 /// Recursively list all files and directories under `dir`, respecting .gitignore.
 /// Returns relative paths (forward slashes) sorted alphabetically.
-/// Directories include a trailing /.
+/// Directories include a trailing /, files append `{lines:N}`.
 pub fn project_tree(dir: &Path) -> Vec<String> {
     let root = find_project_root(dir).unwrap_or_else(|| dir.to_path_buf());
     let root = fsutil::extended_path(&root);
@@ -57,7 +70,10 @@ fn walk_tree(
             results.push(format!("{}/", rel));
             walk_tree(&full_path, root, gitignore, results, depth + 1);
         } else {
-            results.push(rel);
+            match count_lines(&full_path) {
+                Some(n) => results.push(format!("{}  {{lines:{}}}", rel, n)),
+                None => results.push(rel),
+            }
         }
     }
 }
