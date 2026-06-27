@@ -132,7 +132,6 @@ impl AutocodeApp {
         autocode_ai::chat::recompute_estimate_from_disk(state, &sid);
         // Window eviction and state sync.
         {
-            let proj = &state.projects[proj_idx];
             if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
                 sess.messages.shrink_to_fit();
                 let window = state.ui_display_window;
@@ -143,6 +142,7 @@ impl AutocodeApp {
                     sess.messages.shrink_to(0);
                 }
                 state.todo_list = sess.todo_list.clone();
+                state.project_task_list = sess.project_task_list.clone();
                 state.show_todo = sess.show_todo;
                 state.todo_user_dismissed = sess.todo_user_dismissed;
                 state.handoff_enabled = sess.handoff_enabled;
@@ -150,9 +150,6 @@ impl AutocodeApp {
                 state.settings_open = sess.settings_open;
                 state.show_reasoning_inline = sess.show_reasoning_inline;
                 state.show_project_tasks = sess.show_project_tasks;
-            }
-            if let Some(meta) = autocode_core::storage::load_project_meta(proj) {
-                state.project_task_list = meta.project_task_list;
             }
         }
 
@@ -478,10 +475,12 @@ impl eframe::App for AutocodeApp {
                     p.handoff_percent,
                 )
             });
+            let ptl = self.state.project_task_list.clone();
             if let Some(sess) = self.state.active_session_mut() {
                 sess.provider_label = prov_label;
                 sess.model = model;
                 sess.todo_list = todo_list;
+                sess.project_task_list = ptl;
                 sess.show_todo = show_todo;
                 sess.todo_user_dismissed = todo_user_dismissed;
                 sess.handoff_enabled = handoff_enabled;
@@ -498,15 +497,6 @@ impl eframe::App for AutocodeApp {
                     sess.requests_per_hour = rph;
                     sess.handoff_percent = handoff;
                 }
-            }
-        }
-        let ptl = self.state.project_task_list.clone();
-        if let Some(proj) = self.state.active_project_mut() {
-            let mut meta = autocode_core::storage::load_project_meta(proj).unwrap_or_default();
-            meta.version = 1;
-            meta.project_task_list = ptl;
-            if let Err(e) = autocode_core::storage::save_project_meta(proj, &meta) {
-                eprintln!("[app] Failed to save project meta: {}", e);
             }
         }
         self.save_sessions();
@@ -537,13 +527,8 @@ impl eframe::App for AutocodeApp {
             }
         }
         let ptl = self.state.project_task_list.clone();
-        if let Some(proj) = self.state.active_project_mut() {
-            let mut meta = autocode_core::storage::load_project_meta(proj).unwrap_or_default();
-            meta.version = 1;
-            meta.project_task_list = ptl;
-            if let Err(e) = autocode_core::storage::save_project_meta(proj, &meta) {
-                eprintln!("[app] Failed to save project meta on exit: {}", e);
-            }
+        if let Some(sess) = self.state.active_session_mut() {
+            sess.project_task_list = ptl;
         }
         self.save_sessions();
 

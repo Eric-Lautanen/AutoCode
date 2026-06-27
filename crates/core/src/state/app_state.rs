@@ -187,7 +187,7 @@ pub struct AppState {
     #[serde(default)]
     pub todo_user_dismissed: bool,
 
-    /// Working copy of the project task list. Source of truth is ProjectMeta on disk.
+    /// Working copy of the session project task list. Source of truth is SessionMeta on disk.
     #[serde(default, skip)]
     pub project_task_list: ProjectTaskList,
 

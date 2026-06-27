@@ -154,92 +154,170 @@ pub fn load_messages_chunked_before(dir: &Path, before_id: u64, count: usize) ->
 }
 
 /// Truncate messages, keeping only those with `id <= keep_up_to_id`.
-/// Rewrites all chunk files, removing excess messages.
 ///
-/// Crash-safe: new chunks are written to a temp subdirectory first, old
-/// files are deleted only after the new data is safely on disk, then temp
-/// files are renamed into place.
+/// This is an append-only-safe operation: it never rewrites chunk files from
+/// RAM. Instead, it:
+///   1. Scans chunks from newest to oldest to find the boundary chunk that
+///      contains the last message to keep.
+///   2. Rewrites only the boundary chunk (keeping lines with `id <= keep_up_to_id`).
+///   3. Deletes all chunks after the boundary.
+///   4. Leaves all earlier chunks untouched — they are never read, rewritten,
+///      or modified in any way.
+///
+/// Crash-safe: the boundary chunk is rewritten to a temp file first, then
+/// atomically renamed into place. Old tail chunks are deleted only after
+/// the new boundary chunk is safely on disk.
 pub fn truncate_messages_chunked(dir: &Path, keep_up_to_id: u64) -> std::io::Result<()> {
-    let all = read_all_messages_chunked(dir);
-    let mut keep: Vec<ChatMessage> = all.into_iter().filter(|m| m.id <= keep_up_to_id).collect();
-    for msg in &mut keep {
-        msg.reasoning_content = None;
+    let chunks = find_chunk_files(dir);
+
+    // Find the boundary chunk: the one that contains the last message to keep.
+    // Walk from newest chunk to oldest.
+    let mut boundary_chunk_idx: Option<usize> = None;
+    let mut boundary_path: Option<PathBuf> = None;
+
+    for path in chunks.iter().rev() {
+        if let Ok(content) = fsutil::read_to_string(path) {
+            for line in content.lines().filter(|l| !l.is_empty()) {
+                if let Ok(msg) = serde_json::from_str::<ChatMessage>(line) {
+                    if msg.id <= keep_up_to_id {
+                        // This chunk contains at least one message to keep.
+                        boundary_chunk_idx = Some(chunks.iter().position(|p| p == path).unwrap());
+                        boundary_path = Some(path.clone());
+                        break;
+                    }
+                }
+            }
+        }
+        if boundary_chunk_idx.is_some() {
+            break;
+        }
     }
 
-    // Write new chunks to a temp subdirectory first so that a crash during
-    // writing does not destroy the original data.
+    let (boundary_idx, boundary_path) = match (boundary_chunk_idx, boundary_path) {
+        (Some(i), Some(p)) => (i, p),
+        _ => {
+            // No messages to keep — delete all chunk files.
+            for path in &chunks {
+                if let Err(e) = fsutil::remove_file(path) {
+                    eprintln!(
+                        "[chunked_jsonl] Failed to remove chunk {:?}: {}",
+                        path, e
+                    );
+                }
+            }
+            return Ok(());
+        }
+    };
+
+    // Rewrite the boundary chunk, keeping only lines with id <= keep_up_to_id.
+    // Write to a temp file first for crash safety.
     let pid = std::process::id();
     let n = crate::helpers::ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let tmp_dir = dir.join(format!(".tmp_truncate_{}_{}", pid, n));
-    fsutil::create_dir_all(&tmp_dir)?;
-    write_messages_chunked(&tmp_dir, &keep)?;
+    let tmp_path = dir.join(format!(".tmp_truncate_{}_{}.jsonl", pid, n));
 
-    // Old files can now be safely removed - the new data is on disk.
-    for path in find_chunk_files(dir) {
-        if let Err(e) = fsutil::remove_file(&path) {
+    {
+        use std::io::Write;
+        let content = fsutil::read_to_string(&boundary_path)?;
+        let tmp_file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(fsutil::extended_path(&tmp_path))?;
+        let mut writer = std::io::BufWriter::new(tmp_file);
+        for line in content.lines().filter(|l| !l.is_empty()) {
+            if let Ok(msg) = serde_json::from_str::<ChatMessage>(line) {
+                if msg.id <= keep_up_to_id {
+                    writeln!(writer, "{}", line)?;
+                }
+            }
+        }
+        writer.flush()?;
+    }
+
+    // Delete all chunks after the boundary first (they are entirely past the
+    // cutoff point). Do this before replacing the boundary chunk so that a
+    // crash at any point leaves either the old or new state intact.
+    for path in chunks.iter().skip(boundary_idx + 1) {
+        if let Err(e) = fsutil::remove_file(path) {
             eprintln!(
-                "[chunked_jsonl] Failed to remove old chunk {:?}: {}",
+                "[chunked_jsonl] Failed to remove tail chunk {:?}: {}",
                 path, e
             );
         }
     }
 
-    // Rename temp files into place so find_chunk_files can see them.
-    for tmp_path in find_chunk_files(&tmp_dir) {
-        let name = tmp_path.file_name().unwrap();
-        let dest = dir.join(name);
-        fsutil::rename(&tmp_path, &dest)?;
-    }
+    // Now atomically replace the boundary chunk with the truncated version.
+    fsutil::rename(&tmp_path, &boundary_path)?;
 
-    // Clean up the temp subdirectory.
-    if let Err(e) = fsutil::remove_dir(&tmp_dir) {
-        eprintln!(
-            "[chunked_jsonl] Failed to remove temp dir {:?}: {}",
-            tmp_dir, e
-        );
-    }
     Ok(())
 }
 
-fn write_messages_to_chunk(dir: &Path, chunk_idx: usize, lines: &[String]) -> std::io::Result<()> {
-    use std::io::Write;
-    if lines.is_empty() {
-        return Ok(());
+/// Remove messages with the given IDs from the chunked JSONL files.
+///
+/// This is an append-only-safe operation: it never rewrites a chunk from RAM.
+/// Instead, for each affected chunk, it reads the file, filters out the
+/// unwanted message IDs, and writes the remaining lines to a temp file that
+/// is then atomically renamed into place. Unaffected chunks are left untouched.
+///
+/// Returns the number of messages actually removed.
+pub fn remove_messages_by_id(dir: &Path, ids_to_remove: &std::collections::HashSet<u64>) -> std::io::Result<usize> {
+    if ids_to_remove.is_empty() {
+        return Ok(0);
     }
-    let path = chunk_path(dir, chunk_idx);
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(fsutil::extended_path(&path))?;
-    for line in lines {
-        writeln!(file, "{}", line)?;
-    }
-    file.flush()?;
-    Ok(())
-}
 
-fn write_messages_chunked(dir: &Path, messages: &[ChatMessage]) -> std::io::Result<()> {
-    if messages.is_empty() {
-        return Ok(());
-    }
-    let mut chunk_idx = 0;
-    let mut chunk_lines: Vec<String> = Vec::with_capacity(MESSAGES_PER_CHUNK);
+    let chunks = find_chunk_files(dir);
+    let mut total_removed = 0;
 
-    for msg in messages {
-        let line = serde_json::to_string(msg)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        chunk_lines.push(line);
+    for path in &chunks {
+        let content = match fsutil::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
 
-        if chunk_lines.len() >= MESSAGES_PER_CHUNK {
-            write_messages_to_chunk(dir, chunk_idx, &chunk_lines)?;
-            chunk_lines.clear();
-            chunk_idx += 1;
+        let mut kept_lines: Vec<&str> = Vec::new();
+        let mut removed_count = 0;
+
+        for line in content.lines().filter(|l| !l.is_empty()) {
+            if let Ok(msg) = serde_json::from_str::<ChatMessage>(line) {
+                if ids_to_remove.contains(&msg.id) {
+                    removed_count += 1;
+                    continue;
+                }
+            }
+            kept_lines.push(line);
+        }
+
+        if removed_count == 0 {
+            continue;
+        }
+
+        total_removed += removed_count;
+
+        // Write filtered chunk to a temp file, then atomically rename.
+        let pid = std::process::id();
+        let n = crate::helpers::ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp_path = dir.join(format!(".tmp_remove_{}_{}.jsonl", pid, n));
+
+        {
+            use std::io::Write;
+            let tmp_file = std::fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(fsutil::extended_path(&tmp_path))?;
+            let mut writer = std::io::BufWriter::new(tmp_file);
+            for line in &kept_lines {
+                writeln!(writer, "{}", line)?;
+            }
+            writer.flush()?;
+        }
+
+        // If all lines were removed, delete the chunk instead of leaving an empty file.
+        if kept_lines.is_empty() {
+            let _ = fsutil::remove_file(&tmp_path);
+            fsutil::remove_file(path)?;
+        } else {
+            fsutil::rename(&tmp_path, path)?;
         }
     }
 
-    if !chunk_lines.is_empty() {
-        write_messages_to_chunk(dir, chunk_idx, &chunk_lines)?;
-    }
-
-    Ok(())
+    Ok(total_removed)
 }

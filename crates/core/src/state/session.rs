@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::chat::{ChatMessage, Role};
-use super::todo::TodoList;
+use super::todo::{ProjectTaskList, TodoList};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
@@ -23,6 +23,8 @@ pub struct Session {
     pub model: String,
     #[serde(default)]
     pub todo_list: TodoList,
+    #[serde(default)]
+    pub project_task_list: ProjectTaskList,
     #[serde(default)]
     pub show_todo: bool,
     #[serde(default)]
@@ -111,6 +113,7 @@ impl Session {
             provider_label,
             model,
             todo_list: TodoList::default(),
+            project_task_list: ProjectTaskList::default(),
             show_todo: false,
             todo_user_dismissed: false,
             session_named: false,

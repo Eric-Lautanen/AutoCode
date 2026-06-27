@@ -1,4 +1,4 @@
-use crate::state::TodoList;
+use crate::state::{ProjectTaskList, TodoList};
 
 fn default_sess_temperature() -> f32 {
     0.2
@@ -24,6 +24,8 @@ pub struct SessionMeta {
     pub model: String,
     #[serde(default)]
     pub todo_list: TodoList,
+    #[serde(default)]
+    pub project_task_list: ProjectTaskList,
     #[serde(default)]
     pub show_todo: bool,
     #[serde(default)]
@@ -85,6 +87,7 @@ impl SessionMeta {
             provider_label: session.provider_label.clone(),
             model: session.model.clone(),
             todo_list: session.todo_list.clone(),
+            project_task_list: session.project_task_list.clone(),
             show_todo: session.show_todo,
             todo_user_dismissed: session.todo_user_dismissed,
             handoff_enabled: session.handoff_enabled,

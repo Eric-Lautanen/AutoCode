@@ -88,7 +88,10 @@ pub fn prepare_request_messages_for_session(
     // count doesn't match the number of consecutive tool-result messages
     // that follow it. This handles both disk state that predates an
     // in-memory cleanup and the normal case (no-op).
+    // When orphans are found, also remove them from the JSONL files on disk
+    // so the source of truth stays consistent.
     {
+        let mut orphaned_ids = std::collections::HashSet::new();
         let mut i = full_messages.len();
         while i > 0 {
             i -= 1;
@@ -106,7 +109,23 @@ pub fn prepare_request_messages_for_session(
                 j += 1;
             }
             if j - i - 1 != tool_calls_count {
+                for msg in &full_messages[i..j] {
+                    orphaned_ids.insert(msg.id);
+                }
                 full_messages.splice(i..j, std::iter::empty());
+            }
+        }
+        if !orphaned_ids.is_empty() {
+            // Remove orphaned messages from disk — the JSONL is the source of
+            // truth and must stay consistent with what we send to the API.
+            let sess = state.sessions.iter().find(|s| s.id == session_id);
+            let proj = sess.and_then(|s| s.project_id.as_ref()).and_then(|pid| {
+                state.projects.iter().find(|p| p.id == *pid)
+            });
+            if let (Some(sess), Some(proj)) = (sess, proj) {
+                if let Err(e) = autocode_core::storage::remove_messages_after(proj, sess, &orphaned_ids) {
+                    eprintln!("[session] Failed to remove orphaned messages from disk: {}", e);
+                }
             }
         }
     }

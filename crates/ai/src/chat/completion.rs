@@ -420,6 +420,11 @@ pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     {
         eprintln!("[chat] Failed to save session meta before handoff: {}", e);
     }
+    // Capture the old session's project_task_list before creating the new session.
+    let old_ptl = state
+        .active_session()
+        .map(|s| s.project_task_list.clone())
+        .unwrap_or_default();
     state.flush_pending_writes(true);
     let handoff_was_enabled = state.handoff_enabled;
     state.new_session_for_project(state.active_project_id.clone());
@@ -448,15 +453,10 @@ pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     push_runtime(state, runtime, sys);
 
     // Inject synthetic bootstrap messages so the model sees the project task list
-    // via the `project_task_list` tool rather than as static text in the system
-    // prompt. This prevents the model from deleting/corrupting the list when it
-    // tries to update it, because it now connects the tool result to the tool.
-    let ptl_from_disk = state.active_project().and_then(|proj| {
-        let meta = autocode_core::storage::load_project_meta(proj).unwrap_or_default();
-        let ptl = meta.project_task_list;
-        if ptl.is_empty() { None } else { Some(ptl) }
-    });
-    if let Some(ptl) = ptl_from_disk {
+    // from the previous session. Source of truth is the old session's SessionMeta,
+    // which was just saved above.
+    let ptl_opt = if old_ptl.is_empty() { None } else { Some(old_ptl) };
+    if let Some(ptl) = ptl_opt {
         let tool_call_id = crate::helpers::gen_tool_call_id();
 
         // 1. Synthetic user message — uses the continuation prompt from settings

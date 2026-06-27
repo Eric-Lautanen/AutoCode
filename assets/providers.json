@@ -54,8 +54,8 @@
       "default_model": "z-ai/glm-5.1",
       "counting_endpoint": "{base_url}/tokenize",
       "models": {
-        "z-ai/glm-5.1": { "context_window": 131072, "max_output_tokens": 8192, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": false, "requests_per_hour": 30 },
-        "moonshotai/kimi-k2.6": { "context_window": 262144, "max_output_tokens": 8192, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": false, "requests_per_hour": 30 },
+        "z-ai/glm-5.1": { "context_window": 200000, "max_output_tokens": 16384, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": false, "requests_per_hour": 30 },
+        "moonshotai/kimi-k2.6": { "context_window": 262144, "max_output_tokens": 16384, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": false, "requests_per_hour": 30 },
         "deepseek-ai/deepseek-v4-flash": { "context_window": 1048576, "max_output_tokens": 65536, "max_output_tokens_thinking": 16384, "thinking_api": "deepseek", "reasoning_efforts": ["high", "max"], "supports_cache_control": false, "requests_per_hour": 30 },
         "deepseek-ai/deepseek-v4-pro": { "context_window": 1048576, "max_output_tokens": 192000, "max_output_tokens_thinking": 16384, "thinking_api": "deepseek", "reasoning_efforts": ["high", "max"], "supports_cache_control": false, "requests_per_hour": 30 },
         "minimaxai/minimax-m2.7": { "context_window": 204800, "max_output_tokens": 32768, "thinking_api": "off", "reasoning_efforts": [], "supports_cache_control": false, "requests_per_hour": 30 },

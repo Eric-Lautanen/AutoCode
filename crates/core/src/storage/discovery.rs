@@ -11,15 +11,12 @@ pub fn switch_to_project(state: &mut AppState, project_id: &str) {
     // The user picks a session from the dropdown or clicks "+ Session".
     state.active_project_id = Some(project_id.to_string());
     state.active_session_id = None;
-    // Load project metadata from disk.
-    if let Some(proj) = state.active_project() {
-        if let Some(meta) = load_project_meta(proj) {
-            state.project_task_list = meta.project_task_list;
-        } else {
-            state.project_task_list.clear();
-            state.show_project_tasks = false;
-        }
-    }
+    // Clear session-level state — the active session's data is loaded on session restore.
+    state.project_task_list.clear();
+    state.show_project_tasks = false;
+    state.todo_list.clear();
+    state.show_todo = false;
+    state.todo_user_dismissed = false;
 }
 
 pub fn project_meta_path(project: &Project) -> PathBuf {
@@ -181,6 +178,7 @@ pub fn discover_sessions_from_disk(project: &Project) -> Vec<Session> {
                     provider_label: meta.provider_label,
                     model: meta.model,
                     todo_list: meta.todo_list,
+                    project_task_list: meta.project_task_list,
                     show_todo: meta.show_todo,
                     todo_user_dismissed: meta.todo_user_dismissed,
                     session_named: meta.session_named,

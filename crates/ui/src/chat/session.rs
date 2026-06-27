@@ -16,6 +16,7 @@ pub(crate) fn save_old_session(
         && let Some(old_sess) = state.sessions.iter_mut().find(|s| s.id == *old_id)
     {
         old_sess.todo_list = state.todo_list.clone();
+        old_sess.project_task_list = state.project_task_list.clone();
         old_sess.show_todo = state.show_todo;
         old_sess.todo_user_dismissed = state.todo_user_dismissed;
         old_sess.draft_input = panel_state.input.clone();
@@ -130,6 +131,7 @@ pub(crate) fn load_new_session(
                 }
             }
             state.todo_list = new_sess.todo_list.clone();
+            state.project_task_list = new_sess.project_task_list.clone();
             state.show_todo = new_sess.show_todo;
             state.todo_user_dismissed = new_sess.todo_user_dismissed;
             panel_state.input = new_sess.draft_input.clone();
@@ -147,6 +149,7 @@ pub(crate) fn load_new_session(
         panel_state.loaded_min_id = 0;
         panel_state.input.clear();
         state.todo_list.clear();
+        state.project_task_list.clear();
         state.show_todo = false;
         state.todo_user_dismissed = false;
         state.handoff_enabled = false;

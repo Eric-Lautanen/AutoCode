@@ -259,20 +259,21 @@ pub fn push_tool_results_to_state(
                 state.todo_user_dismissed = sess.todo_user_dismissed;
             }
         }
-        if let Some((title, items)) = &tr.project_todo_update {
-            state
-                .project_task_list
+        if let Some((title, items)) = &tr.project_todo_update
+            && let Some(sid) = sess_id
+            && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
+        {
+            sess.project_task_list
                 .set_items(title.clone(), items.clone());
             state.show_project_tasks = true;
-            // Persist to disk immediately.
-            let ptl = state.project_task_list.clone();
-            if let Some(proj) = state.active_project_mut() {
-                let mut meta = autocode_core::storage::load_project_meta(proj).unwrap_or_default();
-                meta.version = 1;
-                meta.project_task_list = ptl;
-                if let Err(e) = autocode_core::storage::save_project_meta(proj, &meta) {
-                    eprintln!("[chat] Failed to save project meta: {}", e);
-                }
+            if state.active_session_id.as_deref() == Some(sid) {
+                state.project_task_list = sess.project_task_list.clone();
+            }
+            // Persist to disk immediately — session meta is the source of truth.
+            if let Some(pid) = sess.project_id.as_ref()
+                && let Some(proj) = state.projects.iter().find(|p| &p.id == pid)
+            {
+                let _ = autocode_core::storage::save_session_meta(proj, sess);
             }
         }
     }

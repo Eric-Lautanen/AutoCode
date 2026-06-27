@@ -311,10 +311,10 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 return true;
             }
 
-            let orphaned = err_msg.contains("insufficient tool messages")
+            let is_orphaned = err_msg.contains("insufficient tool messages")
                 || err_msg.contains("tool_calls")
                     && err_msg.contains("must be followed by tool messages");
-            if orphaned {
+            if is_orphaned {
                 runtime.orphaned_retry_count = runtime.orphaned_retry_count.saturating_add(1);
                 if runtime.orphaned_retry_count > 3 {
                     runtime.status = format!("Provider error: {}", shorten_err(&err_msg));
@@ -331,6 +331,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                     return true;
                 }
                 let mut removed = false;
+                let mut orphaned_ids: std::collections::HashSet<u64> = std::collections::HashSet::new();
                 runtime.retry_count = 0;
                 runtime.status =
                     "Orphaned tool calls detected -- removing and retrying...".to_string();
@@ -362,6 +363,11 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                         }
                         let tool_count = j - i - 1;
                         if tool_count != tool_calls_count {
+                            // Collect IDs of messages being removed so we can
+                            // also remove them from the on-disk JSONL files.
+                            for msg in &sess.messages[i..j] {
+                                orphaned_ids.insert(msg.id);
+                            }
                             // Remove the assistant message and all adjacent
                             // tool results (they belong to this orphaned block).
                             sess.messages.splice(i..j, std::iter::empty());
@@ -371,11 +377,22 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 }
                 // Clear pending writes for this session — the stripped messages
                 // were already queued there and would be re-appended to the
-                // append-only JSONL on the next flush. Instead, the stripping
-                // logic in prepare_request_messages_for_session will clean up
-                // the on-disk messages when loaded for the retry.
+                // append-only JSONL on the next flush.
                 if let Some(sid) = runtime.active_session_id.as_deref() {
                     state.pending_writes.pending.retain(|(s, _)| s != sid);
+                }
+                // Remove orphaned messages from disk too — the JSONL is the
+                // source of truth and must stay consistent with RAM.
+                if !orphaned_ids.is_empty() {
+                    if let Some(sid) = runtime.active_session_id.as_deref()
+                        && let Some(sess) = state.sessions.iter().find(|s| s.id == sid)
+                        && let Some(pid) = sess.project_id.as_ref()
+                        && let Some(proj) = state.projects.iter().find(|p| p.id == *pid)
+                    {
+                        if let Err(e) = autocode_core::storage::remove_messages_after(proj, sess, &orphaned_ids) {
+                            eprintln!("[polling] Failed to remove orphaned messages from disk: {}", e);
+                        }
+                    }
                 }
                 if !removed {
                     runtime.orphaned_retry_count = 0;
@@ -588,10 +605,23 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 if let Some(name) = name_arg
                     && let Some(safe) = sanitize_session_name(name)
                 {
-                    sess.label = safe.clone();
-                    sess.session_named = true;
+                    // IMPORTANT: save_session_meta (which renames the session directory)
+                    // must be called BEFORE push_to_session writes messages to the new
+                    // directory path. Otherwise the new directory is created empty by the
+                    // write, the rename is skipped (new dir already exists), and the old
+                    // directory with early messages becomes orphaned.
                     let meta_pid = sess.project_id.clone();
                     let meta_sid = sess.id.clone();
+                    sess.label = safe.clone();
+                    sess.session_named = true;
+                    // Rename the directory first so existing messages move to the new path.
+                    if let Some(pid) = &meta_pid
+                        && let Some(proj) = state.projects.iter().find(|p| p.id == *pid)
+                        && let Some(s) = state.sessions.iter().find(|s| s.id == meta_sid)
+                        && let Err(e) = autocode_core::storage::save_session_meta(proj, s)
+                    {
+                        eprintln!("[chat] Failed to save session meta: {}", e);
+                    }
                     let content = format!("Session named as '{}'.", safe);
                     let mut msg = ChatMessage::new(Role::Tool, content);
                     msg.tool_call_id = Some(tc.id.clone());
@@ -601,7 +631,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                         ..Default::default()
                     });
                     push_to_session(state, runtime.active_session_id.as_deref(), msg);
-                    // Save metadata after the push so next_message_id is up to date.
+                    // Save metadata again after the push so next_message_id is up to date.
                     if let Some(pid) = meta_pid
                         && let Some(proj) = state.projects.iter().find(|p| p.id == pid)
                         && let Some(s) = state.sessions.iter().find(|s| s.id == meta_sid)

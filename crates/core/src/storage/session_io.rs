@@ -60,11 +60,12 @@ pub fn ensure_project_dirs(project: &Project) -> std::io::Result<()> {
     let dir = project_sessions_dir(project);
     fsutil::create_dir_all(&dir)?;
     cleanup_orphan_temp_files(&dir, 3600);
-    // Also clean temp files in any session subdirectories.
+    // Also clean temp files and stale temp directories in any session subdirectories.
     if let Ok(entries) = fsutil::read_dir(&dir) {
         for entry in entries.flatten() {
             if entry.path().is_dir() {
                 cleanup_orphan_temp_files(&entry.path(), 3600);
+                cleanup_stale_temp_dirs(&entry.path(), 3600);
             }
         }
     }
@@ -142,17 +143,43 @@ pub fn save_session_meta(project: &Project, session: &Session) -> std::io::Resul
         fsutil::create_dir_all(&parent)?;
     }
 
+    let new_path = parent.join(&new_dirname);
+
     // Scan for any stale subdirectory with this session's ID prefix and rename it.
     let prefix = format!("{}_", session.id);
     if let Ok(entries) = fsutil::read_dir(&parent) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if entry.path().is_dir() && name.starts_with(&prefix) && name != new_dirname {
-                let new_path = parent.join(&new_dirname);
-                if !new_path.exists()
-                    && let Err(e) = fsutil::rename(&entry.path(), &new_path)
-                {
+            if !entry.path().is_dir() || !name.starts_with(&prefix) || name == new_dirname {
+                continue;
+            }
+            let old_path = entry.path();
+            if !new_path.exists() {
+                // Simple rename — new directory doesn't exist yet.
+                if let Err(e) = fsutil::rename(&old_path, &new_path) {
                     eprintln!("[session_storage] Failed to rename session dir: {}", e);
+                }
+            } else {
+                // New directory already exists (e.g. created by a concurrent message write
+                // after the label changed). Move any files from the old directory that don't
+                // exist in the new one, then remove the old directory. This prevents early
+                // messages (system prompt, first user message, etc.) from being orphaned in
+                // the old directory when the rename was skipped.
+                if let Ok(old_entries) = fsutil::read_dir(&old_path) {
+                    for old_entry in old_entries.flatten() {
+                        let file_name = old_entry.file_name();
+                        let dest = new_path.join(&file_name);
+                        if !dest.exists() {
+                            let _ = std::fs::rename(&old_entry.path(), &dest);
+                        }
+                    }
+                }
+                // Remove the now-empty old directory (best-effort).
+                if let Err(e) = fsutil::remove_dir(&old_path) {
+                    eprintln!(
+                        "[session_storage] Failed to remove old session dir after merge: {}",
+                        e
+                    );
                 }
             }
         }
@@ -239,6 +266,18 @@ pub fn truncate_messages_after(
     chunked_jsonl::truncate_messages_chunked(&dir, keep_up_to_id)
 }
 
+/// Remove specific messages from the session's chunked JSONL files by ID.
+/// This is an append-only-safe operation: it rewrites only the affected
+/// chunk files, leaving all other chunks untouched.
+pub fn remove_messages_after(
+    project: &Project,
+    session: &Session,
+    ids_to_remove: &std::collections::HashSet<u64>,
+) -> std::io::Result<usize> {
+    let dir = session_messages_dir(project, session);
+    chunked_jsonl::remove_messages_by_id(&dir, ids_to_remove)
+}
+
 fn read_jsonl_messages_from_dir(project: &Project, session: &Session) -> Vec<ChatMessage> {
     let dir = session_messages_dir(project, session);
     chunked_jsonl::read_all_messages_chunked(&dir)
@@ -260,6 +299,37 @@ pub fn delete_session_file(project: &Project, session: &Session) {
                     entry.path(),
                     e
                 );
+            }
+        }
+    }
+}
+
+/// Clean up stale `.tmp_truncate_*` directories left behind by crashes
+/// during truncate operations. Only removes directories older than
+/// `max_age_secs` to avoid interfering with active truncates.
+fn cleanup_stale_temp_dirs(dir: &Path, max_age_secs: u64) {
+    let now = crate::helpers::unix_now();
+    if let Ok(entries) = fsutil::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if !name.starts_with(".tmp_truncate_") {
+                continue;
+            }
+            if !entry.path().is_dir() {
+                continue;
+            }
+            // Extract timestamp from .tmp_truncate_{pid}_{timestamp}
+            if let Some(ts_str) = name.rsplit('_').next()
+                && let Ok(ts) = ts_str.parse::<u64>()
+                && now.saturating_sub(ts) > max_age_secs
+            {
+                if let Err(e) = fsutil::remove_dir(&entry.path()) {
+                    eprintln!(
+                        "[session_storage] Failed to remove stale temp dir {:?}: {}",
+                        entry.path(),
+                        e
+                    );
+                }
             }
         }
     }
@@ -287,6 +357,11 @@ fn cleanup_orphan_temp_files(dir: &Path, max_age_secs: u64) {
             if !name_str.starts_with(prefix) {
                 continue;
             }
+            // Only clean up regular files, not directories (which may be
+            // active truncate operations still in progress).
+            if entry.path().is_dir() {
+                continue;
+            }
             let suffix = if name_str.ends_with(".jsonl") {
                 ".jsonl"
             } else if name_str.ends_with(".json") {
@@ -294,6 +369,8 @@ fn cleanup_orphan_temp_files(dir: &Path, max_age_secs: u64) {
             } else {
                 continue;
             };
+            // Temp files are named .tmp_{kind}_{pid}_{timestamp}.{ext}
+            // where timestamp is unix_now() at creation time.
             if let Some(ts_str) = name_str
                 .rsplit('_')
                 .next()

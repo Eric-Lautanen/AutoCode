@@ -111,8 +111,6 @@ impl From<ProjectTaskList> for TodoList {
 pub struct ProjectMeta {
     pub version: u32,
     #[serde(default)]
-    pub project_task_list: ProjectTaskList,
-    #[serde(default)]
     pub project_id: String,
     #[serde(default)]
     pub project_name: String,
@@ -126,7 +124,6 @@ impl Default for ProjectMeta {
     fn default() -> Self {
         Self {
             version: 1,
-            project_task_list: ProjectTaskList::default(),
             project_id: String::new(),
             project_name: String::new(),
             root_path: String::new(),

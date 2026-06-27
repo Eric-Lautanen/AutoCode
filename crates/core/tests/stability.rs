@@ -40,6 +40,7 @@ fn make_session_dir(project: &Project, label: &str) -> (SessionMeta, PathBuf) {
         provider_label: "test".into(),
         model: "test-model".into(),
         todo_list: Default::default(),
+        project_task_list: Default::default(),
         show_todo: false,
         todo_user_dismissed: false,
         handoff_enabled: false,
@@ -199,4 +200,92 @@ fn test_crash_recovery() {
     assert_eq!(all_msgs.len(), 50, "all 50 messages must survive crash");
     assert_eq!(sess.messages[0].content, "Message 1");
     assert_eq!(sess.label, "main_session");
+}
+
+// ── 4.3 Truncate Preserves Early Messages Test ──────────────────────
+
+#[test]
+fn test_truncate_preserves_early_messages() {
+    let _dir = init_test_dir("truncate_preserves");
+
+    let project = make_project("truncate_test");
+    let (meta, msg_dir) = make_session_dir(&project, "truncate_session");
+
+    // Write 100 messages.
+    let msgs: Vec<ChatMessage> = (1..=100u64)
+        .map(|i| ChatMessage {
+            id: i,
+            role: if i % 2 == 0 { Role::Assistant } else { Role::User },
+            content: format!("Message {}", i),
+            timestamp: 0,
+            token_count: 5,
+            full_token_estimate: 0,
+            tool_call_id: None,
+            tool_calls: None,
+            tool_meta: None,
+            reasoning_content: None,
+        })
+        .collect();
+
+    chunked_jsonl::append_messages_chunked(&msg_dir, &meta.id, &meta.label, &msgs).unwrap();
+
+    // Truncate to keep only messages with id <= 50.
+    chunked_jsonl::truncate_messages_chunked(&msg_dir, 50).unwrap();
+
+    // Verify: messages 1-50 survive, 51-100 are gone.
+    let remaining = chunked_jsonl::read_all_messages_chunked(&msg_dir);
+    assert_eq!(remaining.len(), 50, "should have 50 messages after truncate");
+    assert_eq!(remaining[0].id, 1, "first message must survive truncate");
+    assert_eq!(remaining[0].content, "Message 1", "first message content must be intact");
+    assert_eq!(remaining[49].id, 50, "last kept message must be id 50");
+
+    // Verify early messages are truly untouched by checking the first chunk file.
+    let chunk_files = std::fs::read_dir(&msg_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().starts_with("messages_"))
+        .collect::<Vec<_>>();
+    assert!(!chunk_files.is_empty(), "chunk files must exist");
+}
+
+// ── 4.4 Remove Messages By ID Test ──────────────────────────────────
+
+#[test]
+fn test_remove_messages_by_id() {
+    let _dir = init_test_dir("remove_by_id");
+
+    let project = make_project("remove_test");
+    let (meta, msg_dir) = make_session_dir(&project, "remove_session");
+
+    // Write 50 messages.
+    let msgs: Vec<ChatMessage> = (1..=50u64)
+        .map(|i| ChatMessage {
+            id: i,
+            role: if i % 2 == 0 { Role::Assistant } else { Role::User },
+            content: format!("Message {}", i),
+            timestamp: 0,
+            token_count: 5,
+            full_token_estimate: 0,
+            tool_call_id: None,
+            tool_calls: None,
+            tool_meta: None,
+            reasoning_content: None,
+        })
+        .collect();
+
+    chunked_jsonl::append_messages_chunked(&msg_dir, &meta.id, &meta.label, &msgs).unwrap();
+
+    // Remove messages 10, 20, 30.
+    let ids_to_remove: std::collections::HashSet<u64> = [10, 20, 30].into_iter().collect();
+    let removed = chunked_jsonl::remove_messages_by_id(&msg_dir, &ids_to_remove).unwrap();
+    assert_eq!(removed, 3, "should remove exactly 3 messages");
+
+    // Verify: 47 messages remain, messages 10/20/30 are gone, all others intact.
+    let remaining = chunked_jsonl::read_all_messages_chunked(&msg_dir);
+    assert_eq!(remaining.len(), 47, "should have 47 messages after removal");
+    assert!(remaining.iter().all(|m| ![10, 20, 30].contains(&m.id)),
+        "removed IDs must not appear");
+    assert_eq!(remaining[0].id, 1, "first message must survive removal");
+    assert_eq!(remaining[8].id, 9, "message 9 must survive (before removed 10)");
+    assert_eq!(remaining[9].id, 11, "message 11 must survive (after removed 10)");
 }
