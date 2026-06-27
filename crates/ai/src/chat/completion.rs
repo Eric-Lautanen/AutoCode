@@ -665,17 +665,17 @@ fn auto_continue_impl(
     let msg = if has_todo_incomplete {
         let (done, total) = state.todo_list.progress();
         format!(
-            "You have unfinished tasks ({done}/{total} complete). Update the todo list and continue working.",
+            "Session tasks remain ({done}/{total} complete). Update the todo list with your next concrete steps and continue working.",
         )
     } else if has_project_tasks_incomplete {
         let (done, total) = state.project_task_list.progress();
         format!(
-            "Project tasks remain ({done}/{total} complete). Update the task list and continue working.",
+            "Project milestones remain ({done}/{total} complete). Update project_task_list when a phase is finished and continue working.",
         )
     } else if truncated {
         "Your last response was cut off by the output token limit. Continue exactly where you left off.".to_string()
     } else {
-        "If you were working on something, continue now. Otherwise update or clear the task list."
+        "Continue working. Update session todo_list with your next steps."
             .to_string()
     };
 
