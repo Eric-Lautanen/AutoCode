@@ -210,7 +210,8 @@ pub fn show(
                                 );
                                 ui.add_space(8.0);
                             } else {
-                                if !r.reasoning_buf.is_empty() {
+                                let has_reasoning = !r.reasoning_buf.is_empty();
+                                if state.show_reasoning_inline && has_reasoning {
                                     show_live_reasoning(ui, &r.reasoning_buf);
                                     ui.add_space(6.0);
                                 }
@@ -226,6 +227,14 @@ pub fn show(
                                         &r.live_shell_buf,
                                         active_sid.as_deref().unwrap_or(""),
                                     );
+                                } else if has_reasoning {
+                                    ui.add_space(8.0);
+                                    ui.label(
+                                        RichText::new("Thinking...")
+                                            .size(12.0)
+                                            .color(theme().text_muted),
+                                    );
+                                    ui.add_space(4.0);
                                 }
                             }
                         }
