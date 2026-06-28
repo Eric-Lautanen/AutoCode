@@ -208,6 +208,18 @@ pub(crate) fn show_input_row(
                             && let Some(sess) = state.sessions.iter_mut().find(|s| &s.id == sid)
                         {
                             sess.thinking_mode = !sess.thinking_mode;
+                            if sess.thinking_mode {
+                                let available = autocode_core::helpers::reasoning_efforts_for_provider(
+                                    &provider_kind,
+                                    &model,
+                                );
+                                if !available.contains(&sess.reasoning_effort) {
+                                    sess.reasoning_effort = available
+                                        .first()
+                                        .cloned()
+                                        .unwrap_or_else(|| "high".into());
+                                }
+                            }
                         }
 
                         // Reasoning effort selector (always visible, greyed if unsupported/off)
