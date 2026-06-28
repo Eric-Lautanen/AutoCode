@@ -1,6 +1,7 @@
 use egui::RichText;
 
 use crate::theme::Palette;
+use autocode_core::helpers::reasoning_efforts_for_provider;
 use autocode_core::state::{AppState, Project};
 
 pub fn show_project_picker(ui: &mut egui::Ui, state: &mut AppState) {
@@ -114,16 +115,20 @@ pub fn show_provider_picker(ui: &mut egui::Ui, state: &mut AppState) {
                 ui.push_id(("prov_sel", key.clone()), |ui| {
                     let sel = state.active_provider == key;
                     if ui.selectable_label(sel, &key).clicked() {
-                        let model = state
-                            .providers
-                            .get(&key)
-                            .map(|p| p.model.clone())
-                            .unwrap_or_default();
+                        let prov = state.providers.get(&key).cloned();
                         state.active_provider = key.clone();
-                        if let Some(sess) = state.active_session_mut() {
-                            sess.provider_label = key;
-                            sess.model = model;
-                            state.session_meta_dirty = true;
+                        if let Some(ref prov) = prov {
+                            let model = prov.model.clone();
+                            if let Some(sess) = state.active_session_mut() {
+                                sess.provider_label = key;
+                                sess.model = model.clone();
+                                let available = reasoning_efforts_for_provider(&prov.kind, &model);
+                                if !available.contains(&sess.reasoning_effort) {
+                                    sess.reasoning_effort =
+                                        available.first().cloned().unwrap_or_else(|| "high".into());
+                                }
+                                state.session_meta_dirty = true;
+                            }
                         }
                     }
                 });
@@ -163,12 +168,20 @@ pub fn show_model_picker(ui: &mut egui::Ui, state: &mut AppState) {
                 ui.push_id(("model_sel", model_id.clone()), |ui| {
                     let sel = current_model == *model_id;
                     if ui.selectable_label(sel, model_id).clicked() {
+                        let kind = state.active_provider().map(|p| p.kind.clone());
                         if let Some(prov) = state.providers.get_mut(&state.active_provider) {
                             prov.model.clone_from(model_id);
                             prov.fill_from_config();
                         }
                         if let Some(sess) = state.active_session_mut() {
                             sess.model.clone_from(model_id);
+                            if let Some(ref kind) = kind {
+                                let available = reasoning_efforts_for_provider(kind, model_id);
+                                if !available.contains(&sess.reasoning_effort) {
+                                    sess.reasoning_effort =
+                                        available.first().cloned().unwrap_or_else(|| "high".into());
+                                }
+                            }
                             state.session_meta_dirty = true;
                         }
                     }
