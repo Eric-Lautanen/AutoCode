@@ -723,10 +723,14 @@ pub(crate) fn parse_sse_stream_from_reader<R: BufRead>(
     }
 
     if !saw_finish && saw_data_line {
-        // Connection lost — the carry was already flushed above.
-        let _ = tx.send(ProviderEvent::Error(
-            "Connection lost mid-stream — response may be truncated".to_string(),
-        ));
+        // Stream ended without [DONE] or finish_reason (clean EOF).
+        // Many providers don't send a terminal signal; treat as Done
+        // rather than an error so the response isn't discarded.
+        let _ = tx.send(ProviderEvent::Done {
+            prompt_tokens,
+            completion_tokens,
+            finish_reason: None,
+        });
         return Ok(());
     }
 
