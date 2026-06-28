@@ -199,7 +199,7 @@ pub fn show(
                                 None => return,
                             };
                             let has_streaming =
-                                !r.pending_response.is_empty() || !r.live_shell_buf.is_empty();
+                                !r.pending_response.is_empty() || !r.live_shell_buf.is_empty() || !r.reasoning_buf.is_empty();
 
                             if (r.is_busy() && !has_streaming) || r.retry_after.is_some() {
                                 ui.add_space(8.0);
@@ -210,7 +210,7 @@ pub fn show(
                                 );
                                 ui.add_space(8.0);
                             } else {
-                                if state.show_reasoning_inline && !r.reasoning_buf.is_empty() {
+                                if !r.reasoning_buf.is_empty() {
                                     show_live_reasoning(ui, &r.reasoning_buf);
                                     ui.add_space(6.0);
                                 }
