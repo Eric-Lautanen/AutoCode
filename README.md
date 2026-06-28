@@ -7,6 +7,10 @@
 > **⚠️ WARNING — You're piloting a chainsaw**
 > AutoCode reads, writes, deletes, and runs code with **zero confirmation prompts**. No "Are you sure?" popup. No safety rail. If you tell it to `rm -rf /`, it will try its hardest. Use at your own risk.
 
+Most agentic coding tools assume you have a datacenter in your laptop. AutoCode takes the opposite approach — it's built for older hardware, limited RAM, and long sessions that run for hours or days without caving in. No async runtime, no Electron, no background services. One binary, a few MB of RAM, and the disk.
+
+It's not trying to be clever. It's trying to be durable. Transient errors retry forever. Streams reconnect. Sessions survive crashes. The disk is the source of truth — if the process disappears mid-write, the data comes back intact on restart. Built like a tank, not a race car.
+
 ![Screenshot](assets/screenshot.png)
 
 ## Features
@@ -127,7 +131,7 @@ Settings are persisted across restarts. Most settings in `app.ron`; **provider c
 | `patch_file` | Surgical find-and-replace with 7-strategy fuzzy matching |
 | `patch_lines` | Replace a range of lines by line number |
 | `list_dir` | Directory listing (gitignore-aware) |
-| `project_tree` | Recursively list project tree |
+| `project_tree` | Recursively list project tree with line counts for text files |
 | `create_dir` | Create directories (mkdir -p) |
 | `delete_file` | Delete files or empty directories |
 | `rename_file` | Move/rename files or directories |
@@ -149,15 +153,15 @@ AutoCode ships with built-in configs for popular providers. You can also add any
 
 ## Project Structure
 
-**21,131 lines across 122 files (5 crates).** See [`structure.md`](structure.md) for the full file-by-file breakdown.
+**23,719 lines across 130 files (5 crates).** See [`structure.md`](structure.md) for the full file-by-file breakdown.
 
 | Crate | Lines | Role |
 |-------|-------|------|
-| `autocode` (bin) | 23 | Entry point, icon embedding |
-| `autocode-core` (lib) | 5,650 | State types, storage, helpers, token estimation, sysinfo, HTML extraction |
-| `autocode-ai` (lib) | 6,808 | Chat loop, HTTP/SSE client, tool dispatch, retry/backoff |
-| `autocode-fs` (lib) | 1,689 | Shell executor, file explorer, git status, skill loader |
-| `autocode-ui` (lib) | 6,961 | egui panels — chat, settings, explorer, toolbar, todo windows |
+| `autocode` (bin) | 27 | Entry point, icon embedding |
+| `autocode-core` (lib) | 6,496 | State types, storage, helpers, token estimation, sysinfo, HTML extraction |
+| `autocode-ai` (lib) | 7,493 | Chat loop, HTTP/SSE client, tool dispatch, retry/backoff |
+| `autocode-fs` (lib) | 1,886 | Shell executor, file explorer, git status, skill loader |
+| `autocode-ui` (lib) | 7,793 | egui panels — chat, settings, explorer, toolbar, todo windows |
 
 ---
 
