@@ -90,7 +90,6 @@ pub(crate) fn connect_tcp(host: &str, port: u16, timeout_secs: u64) -> std::io::
 
 pub(crate) struct TimeoutConfig {
     pub request: u64,
-    pub stream_idle: u64,
 }
 
 pub(crate) fn apply_timeouts(
@@ -98,8 +97,12 @@ pub(crate) fn apply_timeouts(
     is_stream: bool,
     cfg: &TimeoutConfig,
 ) -> std::io::Result<()> {
+    // Use the longer request timeout for streaming reads so that normal
+    // gaps between reasoning chunks don't trigger a premature TCP timeout.
+    // The application-level stall detector (poll_stream) is the first line
+    // of defense against idle streams and uses the shorter stream_idle value.
     let read_timeout = if is_stream {
-        cfg.stream_idle
+        cfg.request
     } else {
         cfg.request
     };

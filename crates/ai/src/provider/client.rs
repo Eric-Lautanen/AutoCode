@@ -98,7 +98,6 @@ fn run_request(
 
     let timeouts = TimeoutConfig {
         request: req.request_timeout_secs,
-        stream_idle: req.stream_idle_timeout_secs,
     };
     if use_tls {
         let conn = HttpConn {
