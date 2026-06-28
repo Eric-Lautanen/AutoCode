@@ -1,147 +1,19 @@
-use std::collections::HashMap;
-
 use crate::provider::{ProviderEvent, ToolCall};
-use autocode_core::{
-    helpers as core_helpers,
-    state::{AppState, ChatMessage, Role, ToolMeta},
-};
-use autocode_fs::shell::{self, ShellEvent};
+use autocode_core::state::{AppState, ChatMessage, Role, ToolMeta};
 
-use super::completion::{
-    auto_continue, auto_execute, check_auto_handoff, handle_handoff, start_completion,
-};
-use super::errors::{fix_provider_params, is_transient_error, shorten_err};
-use super::runtime::{ChatRuntime, ToolResult};
-use super::session_ops::{
+use super::super::completion::{auto_continue, auto_execute, start_completion};
+use super::super::errors::{fix_provider_params, is_transient_error, shorten_err};
+use super::super::runtime::{ChatRuntime, ToolResult};
+use super::super::session_ops::{
     context_usage_info_for_session, project_root_for_session, push_error, push_runtime,
-    push_to_session, push_tool_results_to_state, sanitize_session_name, still_owns_session,
+    push_to_session, sanitize_session_name,
 };
-use super::tools::{ToolExecCtx, build_tool_meta, execute_tool_with_cache, kill_process};
+use super::super::tools::{ToolExecCtx, build_tool_meta, execute_tool_with_cache};
 
-// -- Buffer size caps --------------------------------------------------------
+use super::shell::start_next_live_shell;
+use super::{append_to_pending, append_to_reasoning};
 
-const MAX_RESPONSE_SIZE: usize = 1024 * 1024; // 1MB cap
-const MAX_REASONING_SIZE: usize = 512 * 1024; // 512KB cap
-
-fn append_to_pending(pending_response: &mut String, text: &str) {
-    let remaining = MAX_RESPONSE_SIZE.saturating_sub(pending_response.len());
-    if remaining > 0 {
-        let end = text.floor_char_boundary(text.len().min(remaining));
-        pending_response.push_str(&text[..end]);
-    }
-    if pending_response.len() >= MAX_RESPONSE_SIZE {
-        pending_response.truncate(MAX_RESPONSE_SIZE);
-        if !pending_response.ends_with("[Response truncated due to size limit]") {
-            pending_response.push_str("\n[Response truncated due to size limit]");
-        }
-    }
-}
-
-fn append_to_reasoning(reasoning_buf: &mut String, text: &str) {
-    let remaining = MAX_REASONING_SIZE.saturating_sub(reasoning_buf.len());
-    if remaining > 0 {
-        let end = text.floor_char_boundary(text.len().min(remaining));
-        reasoning_buf.push_str(&text[..end]);
-    }
-    if reasoning_buf.len() >= MAX_REASONING_SIZE {
-        reasoning_buf.truncate(MAX_REASONING_SIZE);
-        if !reasoning_buf.ends_with("[Reasoning truncated due to size limit]") {
-            reasoning_buf.push_str("\n[Reasoning truncated due to size limit]");
-        }
-    }
-}
-
-// -- Per-frame update ----------------------------------------------------------
-
-pub fn update_runtime(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
-    let mut repaint = false;
-
-    repaint |= poll_stream(state, runtime);
-    repaint |= poll_shell_tasks(state, runtime);
-    repaint |= poll_tool_results(state, runtime);
-    repaint |= poll_live_shell(state, runtime);
-    repaint |= poll_network(runtime);
-
-    // Auto-handoff: if token usage exceeds the configured threshold and the
-    // model hasn't initiated a handoff, trigger one automatically.
-    check_auto_handoff(state, runtime);
-
-    // Deferred start: fire completion the frame after send_message so the
-    // user message bubble renders before the disk read + API call begins.
-    if runtime.pending_start > 0 && !runtime.is_busy() {
-        runtime.pending_start -= 1;
-        if runtime.pending_start == 0 {
-            start_completion(state, runtime);
-        }
-        return true;
-    }
-
-    // Retry backoff: non-blocking timer. Retries forever for transient errors,
-    // only stopped by user interaction (stop button → drain()).
-    if let Some(after) = runtime.retry_after {
-        repaint = true;
-        let remaining = after
-            .checked_duration_since(std::time::Instant::now())
-            .unwrap_or_default();
-        let remaining_secs = (remaining.as_millis() + 500) / 1000;
-        // Live countdown — only overwrite status if it's a rate-limit wait
-        // (set by start_completion), not a retry backoff (set by error handler).
-        if remaining_secs > 0 && runtime.status.starts_with("Rate limit") {
-            runtime.status = format!(
-                "Rate limit: waiting ~{}s before next request...",
-                remaining_secs
-            );
-        }
-        if remaining.is_zero()
-            && runtime.stream_rx.is_none()
-            && runtime.tool_rx.is_none()
-            && runtime.live_shell_rx.is_none()
-        {
-            runtime.retry_after = None;
-            runtime.status = "Starting request...".into();
-            start_completion(state, runtime);
-        }
-    }
-
-    repaint
-}
-
-pub fn update_all(state: &mut AppState, runtimes: &mut HashMap<String, ChatRuntime>) -> bool {
-    let mut repaint = false;
-    let keys: Vec<String> = runtimes.keys().cloned().collect();
-    let mut rekeys: Vec<(String, String)> = Vec::new();
-    for key in keys {
-        if let Some(runtime) = runtimes.get_mut(&key) {
-            repaint |= update_runtime(state, runtime);
-            if let Some(ref new_sid) = runtime.active_session_id
-                && new_sid != &key
-            {
-                rekeys.push((key.clone(), new_sid.clone()));
-            }
-        }
-    }
-    for (old_key, new_key) in rekeys {
-        if let Some(runtime) = runtimes.remove(&old_key) {
-            runtimes.insert(new_key, runtime);
-        }
-    }
-    // Prune zombie runtimes for sessions deleted elsewhere (e.g. Settings UI).
-    let valid_ids: std::collections::HashSet<String> =
-        state.sessions.iter().map(|s| s.id.clone()).collect();
-    runtimes.retain(|id, runtime| {
-        if !valid_ids.contains(id) {
-            runtime.drain();
-            false
-        } else {
-            true
-        }
-    });
-    repaint
-}
-
-// -- Stream polling ------------------------------------------------------------
-
-fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
+pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
     let stream_idle_timeout_secs = state.stream_idle_timeout_secs;
 
     let rx = match runtime.stream_rx.as_ref() {
@@ -289,7 +161,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
         }
 
         if let Some(err_msg) = runtime.provider_error.take() {
-            // Stream drops are transient errors — clear state and let the
+            // Stream drops are transient errors -- clear state and let the
             // retry logic below re-send the full context without a continue
             // message. The task/todo list state is already in the conversation
             // from prior create/update tool calls.
@@ -299,13 +171,9 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
 
             // Only retry transient errors (network issues, rate limits, etc).
             // Permanent errors (auth, content filter, invalid model) are not
-            // retryable — show them and let the user take action.
+            // retryable -- show them and let the user take action.
             // Transient errors retry forever with capped exponential backoff,
-            // only stopped by user interaction (stop button → drain()).
-            // Try to fix provider parameter errors gracefully
-            // (e.g. top_p out of range, temperature unsupported, etc.)
-            // When a fix is applied, reset retry count so the next attempt
-            // uses fresh backoff rather than accumulating from the bad-param attempts.
+            // only stopped by user interaction (stop button -> drain()).
             if fix_provider_params(state, &err_msg) {
                 runtime.retry_count = 0;
                 runtime.retry_after = Some(std::time::Instant::now());
@@ -324,7 +192,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                         state,
                         runtime,
                         format!(
-                            "Orphaned tool calls persist after {} retries — giving up.\n\nError: {}",
+                            "Orphaned tool calls persist after {} retries -- giving up.\n\nError: {}",
                             runtime.orphaned_retry_count - 1,
                             err_msg,
                         ),
@@ -343,10 +211,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 {
                     // Walk backwards, removing any assistant tool_calls message
                     // whose tool_calls count doesn't match the number of following
-                    // tool-result messages. This handles both "no results at all"
-                    // and "partial results" (fewer tool messages than tool calls).
-                    // We also remove the orphaned tool results so they don't
-                    // pollute the conversation on retry.
+                    // tool-result messages.
                     let mut i = sess.messages.len();
                     while i > 0 {
                         i -= 1;
@@ -378,13 +243,13 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                         }
                     }
                 }
-                // Clear pending writes for this session — the stripped messages
+                // Clear pending writes for this session -- the stripped messages
                 // were already queued there and would be re-appended to the
                 // append-only JSONL on the next flush.
                 if let Some(sid) = runtime.active_session_id.as_deref() {
                     state.pending_writes.pending.retain(|(s, _)| s != sid);
                 }
-                // Remove orphaned messages from disk too — the JSONL is the
+                // Remove orphaned messages from disk too -- the JSONL is the
                 // source of truth and must stay consistent with RAM.
                 if !orphaned_ids.is_empty()
                     && let Some(sid) = runtime.active_session_id.as_deref()
@@ -407,7 +272,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                 }
                 start_completion(state, runtime);
             } else if is_transient_error(&err_msg) {
-                // Cap retries for JSON parse errors — the data was already
+                // Cap retries for JSON parse errors -- the data was already
                 // sanitized on the first retry; further retries won't help.
                 if err_msg.contains("unterminated string") && runtime.retry_count >= 1 {
                     runtime.retry_count = 0;
@@ -415,25 +280,25 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
                         state,
                         runtime,
                         format!(
-                            "Provider error: {} — data was sanitized but provider still rejects it",
+                            "Provider error: {} -- data was sanitized but provider still rejects it",
                             err_msg,
                         ),
                     );
                     return true;
                 }
-                // Forever retry: exponential backoff 5s → 180s cap, never gives up.
+                // Forever retry: exponential backoff 5s -> 180s cap, never gives up.
                 let backoff_secs = (5u64 << runtime.retry_count.min(6)).min(180);
                 runtime.retry_count = runtime.retry_count.saturating_add(1);
                 runtime.retry_after =
                     Some(std::time::Instant::now() + std::time::Duration::from_secs(backoff_secs));
                 runtime.status = format!(
-                    "{} — retry {} in {}s...",
+                    "{} -- retry {} in {}s...",
                     shorten_err(&err_msg),
                     runtime.retry_count,
                     backoff_secs,
                 );
             } else {
-                // Permanent error — show and stop. User can fix and retry manually.
+                // Permanent error -- show and stop. User can fix and retry manually.
                 runtime.retry_count = 0;
                 push_error(state, runtime, format!("Provider error: {}", err_msg));
             }
@@ -501,20 +366,20 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
             // Step 3: handle the case where ALL tool calls were invalid.
             if tool_calls.is_empty() {
                 if runtime.pending_response.trim().is_empty() {
-                    // No text and no valid tool calls — treat like an empty
+                    // No text and no valid tool calls -- treat like an empty
                     // response and retry. We do NOT push an assistant message
                     // (the orphaned tool_calls json would confuse the model).
                     runtime.reasoning_buf.clear();
                     runtime.pending_response.clear();
                     runtime.retry_count += 1;
                     runtime.status = format!(
-                        "Invalid tool calls — retrying (attempt {})...",
+                        "Invalid tool calls -- retrying (attempt {})...",
                         runtime.retry_count,
                     );
                     start_completion(state, runtime);
                     return true;
                 } else {
-                    // Has text but no valid tool calls — treat as text message.
+                    // Has text but no valid tool calls -- treat as text message.
                     let response = std::mem::take(&mut runtime.pending_response);
                     let reasoning = std::mem::take(&mut runtime.reasoning_buf);
                     runtime.reasoning_buf.shrink_to(256);
@@ -531,7 +396,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
             }
 
             // Step 4: rebuild tool_calls JSON from the full set (including
-            // name_session — filtering is done only in the UI).
+            // name_session -- filtering is done only in the UI).
             let filtered_json = serde_json::Value::Array(
                 tool_calls
                     .iter()
@@ -791,7 +656,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
             let response = std::mem::take(&mut runtime.pending_response);
             let reasoning = std::mem::take(&mut runtime.reasoning_buf);
             if response.trim().is_empty() {
-                // Empty response — retry with backoff.
+                // Empty response -- retry with backoff.
                 let max_retries = state.max_retries;
                 if runtime.retry_count < max_retries {
                     runtime.retry_count += 1;
@@ -823,7 +688,7 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
             auto_execute(state, runtime, &response);
 
             // A "length" finish_reason means the provider cut the model off
-            // before it chose to stop — treat that as incomplete even if the
+            // before it chose to stop -- treat that as incomplete even if the
             // text doesn't happen to match a continuation phrase.
             let truncated = last_finish_reason.as_deref() == Some("length");
             if truncated {
@@ -834,421 +699,4 @@ fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
     }
 
     got_something || done
-}
-
-fn poll_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
-    let rx = match runtime.tool_rx.as_ref() {
-        Some(r) => r,
-        None => return false,
-    };
-
-    match rx.try_recv() {
-        Ok(results) => {
-            runtime.tool_rx = None;
-
-            if still_owns_session(runtime, state) {
-                let has_handoff = results.iter().any(|r| r.content.starts_with("HANDOFF:"));
-
-                if has_handoff && state.handoff_enabled && !runtime.handoff_in_progress {
-                    // Extract the AI-generated next_prompt from the handoff tool call args.
-                    if let Some(tr) = results.iter().find(|r| r.content.starts_with("HANDOFF:"))
-                        && let Ok(args) =
-                            serde_json::from_str::<serde_json::Value>(&tr.tool_call.arguments)
-                    {
-                        runtime.handoff_next_prompt = args
-                            .get("next_prompt")
-                            .and_then(|v| v.as_str().map(String::from));
-                    }
-                    push_tool_results_to_state(state, runtime, &results);
-                    handle_handoff(state, runtime);
-                } else if has_handoff && !state.handoff_enabled {
-                    // Give the model feedback when handoff is disabled.
-                    let results: Vec<ToolResult> = results
-                        .into_iter()
-                        .map(|mut tr| {
-                            if tr.content.starts_with("HANDOFF:") {
-                                tr.content = "Handoff is disabled — enable it via the toolbar toggle or Settings to use session handoff.".to_string();
-                                tr.meta.is_error = true;
-                            }
-                            tr
-                        })
-                        .collect();
-                    push_tool_results_to_state(state, runtime, &results);
-                    runtime.status = format!("{} tool(s) complete.", results.len());
-                    if runtime.live_shell_rx.is_none() && runtime.pending_tool_remaining.is_empty()
-                    {
-                        start_completion(state, runtime);
-                    }
-                } else {
-                    push_tool_results_to_state(state, runtime, &results);
-                    runtime.status = format!("{} tool(s) complete.", results.len());
-                    // Token estimate refreshed from disk by push_tool_results_to_state
-                    // → push_to_session → recompute_estimate_from_disk.
-                    // Only start next completion if shell calls are also done.
-                    if runtime.live_shell_rx.is_none() && runtime.pending_tool_remaining.is_empty()
-                    {
-                        start_completion(state, runtime);
-                    }
-                }
-            } else {
-                runtime.drain();
-            }
-            true
-        }
-        Err(std::sync::mpsc::TryRecvError::Empty) => {
-            if runtime.tool_rx.is_some() {
-                runtime.status = "Running tool(s)...".to_string();
-            }
-            false
-        }
-        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-            runtime.tool_rx = None;
-            true
-        }
-    }
-}
-
-fn start_next_live_shell(state: &mut AppState, runtime: &mut ChatRuntime, project_root: &str) {
-    while let Some(tc) = runtime.pending_tool_remaining.first().cloned() {
-        let args: serde_json::Value =
-            serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
-        let command = match args["command"].as_str() {
-            Some(c) => c.to_string(),
-            None => {
-                runtime.pending_tool_results.push(ToolResult {
-                    tool_call: tc,
-                    content: "Error: missing 'command' argument".to_string(),
-                    meta: ToolMeta {
-                        tool_name: "run_shell".into(),
-                        is_error: true,
-                        ..Default::default()
-                    },
-                    todo_update: None,
-                    project_todo_update: None,
-                });
-                runtime.pending_tool_remaining.remove(0);
-                continue;
-            }
-        };
-        let cwd = args["cwd"].as_str().unwrap_or(project_root).to_string();
-        let timeout_secs = args["timeout_secs"].as_u64().unwrap_or(0);
-        runtime.live_shell_timeout_secs = timeout_secs;
-        runtime.live_shell_buf = format!("$ {}\n", command);
-        let (task, rx) = match shell::run_command_in_dir(&command, Some(&cwd)) {
-            Ok(result) => result,
-            Err(e) => {
-                runtime.pending_tool_results.push(ToolResult {
-                    tool_call: tc,
-                    content: format!("Shell command rejected: {}", e),
-                    meta: ToolMeta {
-                        tool_name: "run_shell".into(),
-                        is_error: true,
-                        ..Default::default()
-                    },
-                    todo_update: None,
-                    project_todo_update: None,
-                });
-                runtime.pending_tool_remaining.remove(0);
-                continue;
-            }
-        };
-        runtime.live_shell_pid = task.pid;
-        runtime.live_shell_start = Some(std::time::Instant::now());
-        runtime.live_shell_rx = Some(rx);
-        runtime.status = format!("Running: {}...", core_helpers::truncate_str(&command, 60));
-        return;
-    }
-    // All remaining shell calls were rejected (sanitization, missing args, etc).
-    // Commit any accumulated errors so the model gets feedback.
-    if !runtime.pending_tool_results.is_empty() {
-        commit_tool_results(state, runtime);
-    }
-}
-
-fn poll_live_shell(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
-    let rx = match runtime.live_shell_rx.as_ref() {
-        Some(r) => r,
-        None => return false,
-    };
-
-    // Use model-requested timeout if set, else default. Capped at max.
-    let shell_timeout = if runtime.live_shell_timeout_secs > 0 {
-        runtime
-            .live_shell_timeout_secs
-            .min(state.shell_timeout_max_secs)
-    } else {
-        state.shell_timeout_secs
-    };
-    if let Some(start) = runtime.live_shell_start
-        && start.elapsed().as_secs() >= shell_timeout
-    {
-        if let Some(pid) = runtime.live_shell_pid.take() {
-            kill_process(pid);
-        }
-        runtime
-            .live_shell_buf
-            .push_str(&format!("\n[shell timed out after {}s]\n", shell_timeout));
-        runtime.live_shell_rx = None;
-        runtime.live_shell_pid = None;
-        runtime.live_shell_start = None;
-
-        let tc = runtime.pending_tool_remaining.remove(0);
-        let content = format!(
-            "{}\n\n[Shell timed out after {}s]\n\nExit code: -1",
-            runtime.live_shell_buf.trim_end_matches('\n'),
-            shell_timeout,
-        );
-        let result = ToolResult {
-            tool_call: tc,
-            content,
-            meta: ToolMeta {
-                tool_name: "run_shell".into(),
-                exit_code: Some(-1),
-                line_count: Some(runtime.live_shell_buf.lines().count()),
-                byte_count: Some(runtime.live_shell_buf.len()),
-                is_error: true,
-                duration_ms: None,
-                ..Default::default()
-            },
-            todo_update: None,
-            project_todo_update: None,
-        };
-        runtime.pending_tool_results.push(result);
-
-        if runtime.pending_tool_remaining.is_empty() {
-            commit_tool_results(state, runtime);
-        } else {
-            let root =
-                project_root_for_session(state, runtime.active_session_id.as_deref().unwrap_or(""));
-            start_next_live_shell(state, runtime, &root);
-        }
-        return true;
-    }
-
-    let mut repaint = false;
-    let mut done = false;
-    let mut exit_code: i32 = -1;
-
-    loop {
-        match rx.try_recv() {
-            Ok(ShellEvent::Output(line)) => {
-                runtime.live_shell_buf.push_str(&line);
-                runtime.live_shell_buf.push('\n');
-                repaint = true;
-            }
-            Ok(ShellEvent::Done { exit_code: code }) => {
-                exit_code = code;
-                done = true;
-                break;
-            }
-            Ok(ShellEvent::SpawnError(e)) => {
-                runtime
-                    .live_shell_buf
-                    .push_str(&format!("[spawn error: {}]\n", e));
-                exit_code = -1;
-                done = true;
-                break;
-            }
-            Err(std::sync::mpsc::TryRecvError::Empty) => break,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                done = true;
-                break;
-            }
-        }
-    }
-
-    if done {
-        runtime.live_shell_rx = None;
-        runtime.live_shell_pid = None;
-        runtime.live_shell_start = None;
-
-        let tc = runtime.pending_tool_remaining.remove(0);
-        let content = format!(
-            "{}\n\nExit code: {}",
-            runtime.live_shell_buf.trim_end_matches('\n'),
-            exit_code
-        );
-        let meta = ToolMeta {
-            tool_name: "run_shell".into(),
-            exit_code: Some(exit_code),
-            line_count: Some(runtime.live_shell_buf.lines().count()),
-            byte_count: Some(runtime.live_shell_buf.len()),
-            is_error: exit_code != 0,
-            duration_ms: None,
-            ..Default::default()
-        };
-        let result = ToolResult {
-            tool_call: tc,
-            content,
-            meta,
-            todo_update: None,
-            project_todo_update: None,
-        };
-        runtime.pending_tool_results.push(result);
-        runtime.live_shell_buf.clear();
-
-        if !runtime.pending_tool_remaining.is_empty() {
-            let root =
-                project_root_for_session(state, runtime.active_session_id.as_deref().unwrap_or(""));
-            start_next_live_shell(state, runtime, &root);
-        } else {
-            commit_tool_results(state, runtime);
-        }
-
-        repaint = true;
-    }
-
-    repaint
-}
-
-fn poll_network(runtime: &mut ChatRuntime) -> bool {
-    let is_streaming =
-        runtime.stream_rx.is_some() || runtime.tool_rx.is_some() || runtime.live_shell_rx.is_some();
-
-    if is_streaming && !runtime.net_status.active {
-        runtime.net_status.active = true;
-    }
-
-    if !is_streaming && runtime.net_status.active {
-        runtime.net_status.active = false;
-        runtime.net_status.stalled = false;
-        runtime.net_status.idle_secs = None;
-        return true;
-    }
-
-    if is_streaming {
-        runtime.net_status.idle_secs = runtime
-            .last_delta_time
-            .map(|t| t.elapsed().as_secs())
-            .or_else(|| runtime.request_start.map(|t| t.elapsed().as_secs()));
-    }
-
-    runtime.net_status.active
-}
-
-fn commit_tool_results(state: &mut AppState, runtime: &mut ChatRuntime) {
-    if still_owns_session(runtime, state) && !runtime.pending_tool_results.is_empty() {
-        let has_handoff = runtime
-            .pending_tool_results
-            .iter()
-            .any(|tr| tr.content.starts_with("HANDOFF:"));
-
-        if has_handoff && state.handoff_enabled && !runtime.handoff_in_progress {
-            let results = std::mem::take(&mut runtime.pending_tool_results);
-            // Extract the AI-generated next_prompt from the handoff tool call args.
-            if let Some(tr) = results.iter().find(|r| r.content.starts_with("HANDOFF:"))
-                && let Ok(args) = serde_json::from_str::<serde_json::Value>(&tr.tool_call.arguments)
-            {
-                runtime.handoff_next_prompt = args
-                    .get("next_prompt")
-                    .and_then(|v| v.as_str().map(String::from));
-            }
-            let count = results.len();
-            push_tool_results_to_state(state, runtime, &results);
-            runtime.status = format!("{} tool(s) complete.", count);
-            handle_handoff(state, runtime);
-            return;
-        }
-
-        if has_handoff && !state.handoff_enabled {
-            // Give the model feedback when handoff is disabled.
-            for tr in &mut runtime.pending_tool_results {
-                if tr.content.starts_with("HANDOFF:") {
-                    tr.content = "Handoff is disabled — enable it via the toolbar toggle or Settings to use session handoff.".to_string();
-                    tr.meta.is_error = true;
-                }
-            }
-        }
-
-        let count = runtime.pending_tool_results.len();
-        push_tool_results_to_state(state, runtime, &runtime.pending_tool_results);
-        runtime.pending_tool_results.clear();
-        runtime.status = format!("{} tool(s) complete.", count);
-        // Token estimate refreshed from disk by push_tool_results_to_state
-        // → push_to_session → recompute_estimate_from_disk.
-
-        // Only continue if non-shell tools are also done.
-        if runtime.tool_rx.is_none() {
-            start_completion(state, runtime);
-        }
-    } else if !still_owns_session(runtime, state) {
-        runtime.drain();
-    }
-}
-
-// -- Shell task polling --------------------------------------------------------
-
-fn poll_shell_tasks(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
-    let mut repaint = false;
-    let mut completed: Vec<String> = Vec::new();
-
-    for (task_id, rx, _pid) in &runtime.running_tasks {
-        loop {
-            match rx.try_recv() {
-                Ok(ShellEvent::Output(line)) => {
-                    if let Some(t) = state.shell_tasks.iter_mut().find(|t| t.id == *task_id) {
-                        t.output.push_str(&line);
-                        t.output.push('\n');
-                    }
-                    repaint = true;
-                }
-                Ok(ShellEvent::Done { exit_code }) => {
-                    let (output, command) =
-                        if let Some(t) = state.shell_tasks.iter_mut().find(|t| t.id == *task_id) {
-                            t.status = autocode_core::state::ShellStatus::Done { exit_code };
-                            (t.output.clone(), t.command.clone())
-                        } else {
-                            (String::new(), String::new())
-                        };
-                    if !output.is_empty() && still_owns_session(runtime, state) {
-                        let msg = ChatMessage::new(
-                            Role::Tool,
-                            format!(
-                                "```\n{}\n```\n\nShell `{}` exited {}.",
-                                output, command, exit_code
-                            ),
-                        );
-                        push_runtime(state, runtime, msg);
-                    }
-                    completed.push(task_id.clone());
-                    repaint = true;
-                    break;
-                }
-                Ok(ShellEvent::SpawnError(e)) => {
-                    if let Some(t) = state.shell_tasks.iter_mut().find(|t| t.id == *task_id) {
-                        t.status = autocode_core::state::ShellStatus::Failed(e);
-                    }
-                    completed.push(task_id.clone());
-                    repaint = true;
-                    break;
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    if let Some(t) = state.shell_tasks.iter_mut().find(|t| {
-                        t.id == *task_id
-                            && matches!(t.status, autocode_core::state::ShellStatus::Running)
-                    }) {
-                        t.status = autocode_core::state::ShellStatus::Failed(
-                            "channel disconnected".into(),
-                        );
-                    }
-                    completed.push(task_id.clone());
-                    break;
-                }
-            }
-        }
-    }
-
-    if !completed.is_empty() {
-        runtime
-            .running_tasks
-            .retain(|(id, _, _)| !completed.contains(id));
-        if still_owns_session(runtime, state) && runtime.stream_rx.is_none() {
-            start_completion(state, runtime);
-        } else if !still_owns_session(runtime, state) {
-            runtime.drain();
-        }
-    }
-
-    repaint
 }
