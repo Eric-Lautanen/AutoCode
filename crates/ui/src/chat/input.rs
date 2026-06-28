@@ -209,15 +209,14 @@ pub(crate) fn show_input_row(
                         {
                             sess.thinking_mode = !sess.thinking_mode;
                             if sess.thinking_mode {
-                                let available = autocode_core::helpers::reasoning_efforts_for_provider(
-                                    &provider_kind,
-                                    &model,
-                                );
+                                let available =
+                                    autocode_core::helpers::reasoning_efforts_for_provider(
+                                        &provider_kind,
+                                        &model,
+                                    );
                                 if !available.contains(&sess.reasoning_effort) {
-                                    sess.reasoning_effort = available
-                                        .first()
-                                        .cloned()
-                                        .unwrap_or_else(|| "high".into());
+                                    sess.reasoning_effort =
+                                        available.first().cloned().unwrap_or_else(|| "high".into());
                                 }
                             }
                         }

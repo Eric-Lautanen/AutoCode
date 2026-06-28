@@ -92,10 +92,7 @@ pub(crate) struct TimeoutConfig {
     pub request: u64,
 }
 
-pub(crate) fn apply_timeouts(
-    stream: &TcpStream,
-    cfg: &TimeoutConfig,
-) -> std::io::Result<()> {
+pub(crate) fn apply_timeouts(stream: &TcpStream, cfg: &TimeoutConfig) -> std::io::Result<()> {
     let read_timeout = cfg.request;
     stream.set_read_timeout(Some(Duration::from_secs(read_timeout)))?;
     stream.set_write_timeout(Some(Duration::from_secs(cfg.request)))

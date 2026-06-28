@@ -10,14 +10,10 @@ const LINE_COUNT_SIZE_LIMIT: u64 = 10 * 1024 * 1024; // skip files > 10 MB
 
 /// Common binary file extensions that won't have meaningful line counts.
 const BINARY_EXTENSIONS: &[&str] = &[
-    "png", "jpg", "jpeg", "gif", "bmp", "ico", "webp", "avif", "heic", "heif",
-    "mp3", "wav", "ogg", "flac", "aac", "wma", "m4a", "opus",
-    "mp4", "avi", "mkv", "mov", "wmv", "flv", "webm",
-    "zip", "tar", "gz", "bz2", "xz", "7z", "rar", "zst",
-    "exe", "dll", "so", "dylib", "bin", "class", "wasm",
-    "pdf", "ttf", "otf", "woff", "woff2", "eot",
-    "db", "sqlite", "sqlite3",
-    "pyc", "pyo",
+    "png", "jpg", "jpeg", "gif", "bmp", "ico", "webp", "avif", "heic", "heif", "mp3", "wav", "ogg",
+    "flac", "aac", "wma", "m4a", "opus", "mp4", "avi", "mkv", "mov", "wmv", "flv", "webm", "zip",
+    "tar", "gz", "bz2", "xz", "7z", "rar", "zst", "exe", "dll", "so", "dylib", "bin", "class",
+    "wasm", "pdf", "ttf", "otf", "woff", "woff2", "eot", "db", "sqlite", "sqlite3", "pyc", "pyo",
 ];
 
 fn is_binary(path: &Path) -> bool {
