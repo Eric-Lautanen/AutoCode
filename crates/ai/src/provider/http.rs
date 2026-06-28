@@ -94,18 +94,9 @@ pub(crate) struct TimeoutConfig {
 
 pub(crate) fn apply_timeouts(
     stream: &TcpStream,
-    is_stream: bool,
     cfg: &TimeoutConfig,
 ) -> std::io::Result<()> {
-    // Use the longer request timeout for streaming reads so that normal
-    // gaps between reasoning chunks don't trigger a premature TCP timeout.
-    // The application-level stall detector (poll_stream) is the first line
-    // of defense against idle streams and uses the shorter stream_idle value.
-    let read_timeout = if is_stream {
-        cfg.request
-    } else {
-        cfg.request
-    };
+    let read_timeout = cfg.request;
     stream.set_read_timeout(Some(Duration::from_secs(read_timeout)))?;
     stream.set_write_timeout(Some(Duration::from_secs(cfg.request)))
 }
@@ -237,7 +228,7 @@ pub(crate) fn send_http(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let _t0 = std::time::Instant::now();
     let mut stream_conn = connect_tcp(args.conn.host, args.conn.port, args.timeouts.request)?;
-    apply_timeouts(&stream_conn, args.stream, args.timeouts)?;
+    apply_timeouts(&stream_conn, args.timeouts)?;
 
     let extra_refs: Vec<(&str, &str)> = args
         .extra_headers
@@ -263,7 +254,7 @@ pub(crate) fn send_https(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let _t0 = std::time::Instant::now();
     let stream = connect_tcp(args.conn.host, args.conn.port, args.timeouts.request)?;
-    apply_timeouts(&stream, args.stream, args.timeouts)?;
+    apply_timeouts(&stream, args.timeouts)?;
 
     let config = tls_config();
     let dns_name = rustls::pki_types::DnsName::try_from(args.conn.host.to_string())
