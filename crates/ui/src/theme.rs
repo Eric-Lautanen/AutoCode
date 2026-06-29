@@ -84,6 +84,7 @@ pub fn apply(ctx: &Context) {
     style.spacing.text_edit_width = 300.0;
 
     style.spacing.interact_size.y = 24.0;
+    style.spacing.combo_height = 300.0;
 
     style.interaction.show_tooltips_only_when_still = false;
     style.interaction.tooltip_delay = 0.0;
