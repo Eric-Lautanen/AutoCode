@@ -2,7 +2,6 @@ use crate::helpers;
 use crate::theme::{Palette, ROUND_MD, ROUND_SM};
 use autocode_ai::provider;
 use autocode_core::state::{AppState, ThinkingApi};
-use autocode_core::storage::provider_file;
 use egui::{CollapsingHeader, Frame, Grid, Margin, RichText, ScrollArea, TextEdit};
 
 use super::state::SettingsState;
@@ -11,7 +10,6 @@ pub fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Se
     helpers::section_heading(ui, "API Providers");
 
     ui.add_space(4.0);
-    let mut provider_dirty = false;
 
     if ui.button("+ Add Provider").clicked() {
         settings.adding_provider = true;
@@ -44,7 +42,6 @@ pub fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Se
                     .providers
                     .insert(key, autocode_core::state::ApiProvider::new(kind));
                 settings.adding_provider = false;
-                provider_dirty = true;
             }
             if ui
                 .button(
@@ -208,7 +205,6 @@ pub fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Se
                                     .clicked()
                                 {
                                     p.enabled = !p.enabled;
-                                    provider_dirty = true;
                                     if !p.enabled && is_active {
                                         disable_switch_key = Some(key.clone());
                                     }
@@ -249,9 +245,6 @@ pub fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Se
                                             p.enabled = true;
                                         }
                                         p.api_key = autocode_core::state::SecretString::new(key_buf);
-                                    }
-                                    if resp.lost_focus() {
-                                        provider_dirty = true;
                                     }
                                     ui.end_row();
 
@@ -356,8 +349,7 @@ pub fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Se
                                                                     presence_penalty: p.presence_penalty,
                                                                 };
                                                                 let cm = p.models_config.get_or_insert_with(std::collections::HashMap::new);
-                                                                cm.insert(m.clone(), entry);
-                                                                provider_dirty = true;
+                                                                 cm.insert(m.clone(), entry);
                                                             }
                                                             if ui.small_button("Select").clicked() {
                                                                 p.model = m.clone();
@@ -723,7 +715,6 @@ pub fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Se
         && let Some(ap) = state.providers.remove(&old_key)
     {
         state.providers.insert(new_key.clone(), ap);
-        provider_dirty = true;
         if state.active_provider == old_key {
             state.active_provider = new_key.clone();
             state.session_meta_dirty = true;
@@ -734,13 +725,9 @@ pub fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Se
     }
     for key in to_remove {
         state.providers.remove(&key);
-        provider_dirty = true;
         if state.active_provider == key {
             state.active_provider = state.providers.keys().next().cloned().unwrap_or_default();
         }
-    }
-    if provider_dirty {
-        let _ = provider_file::save_providers_file(&state.providers);
     }
     if let Some((label, model)) = set_active_key {
         state.active_provider = label.clone();

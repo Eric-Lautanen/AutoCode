@@ -1,7 +1,7 @@
 use crate::helpers;
 use crate::theme::{Palette, ROUND_SM};
 use autocode_core::state::AppState;
-use autocode_core::storage::provider_file;
+use autocode_core::storage::{provider_file, save_session_meta, session_exists};
 use egui::{Color32, CornerRadius, Frame, Margin, RichText, ScrollArea, Stroke, Vec2};
 
 use super::state::{SettingsState, Tab};
@@ -169,6 +169,16 @@ pub fn show_window(ctx: &egui::Context, state: &mut AppState, settings: &mut Set
         state.settings_open = false;
         helpers::set_temp_bool(ctx, helpers::data::SETTINGS_CLOSED_THIS_FRAME, true);
         let _ = provider_file::save_providers_file(&state.providers);
+        if state.session_meta_dirty {
+            state.session_meta_dirty = false;
+            if let Some(sess) = state.active_session()
+                && let Some(proj) = state.active_project()
+                && session_exists(proj, sess)
+                && let Err(e) = save_session_meta(proj, sess)
+            {
+                eprintln!("[settings] Failed to save session meta: {}", e);
+            }
+        }
     }
     if !state.settings_open {
         // Notify the chat input that a popup just closed so it can reclaim focus.

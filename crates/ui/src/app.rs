@@ -289,7 +289,7 @@ impl eframe::App for AutocodeApp {
             }
         }
 
-        if self.state.session_meta_dirty {
+        if self.state.session_meta_dirty && !self.state.settings_open {
             self.state.session_meta_dirty = false;
             if let Some(sess) = self.state.active_session()
                 && let Some(proj) = self.state.active_project()
