@@ -281,9 +281,94 @@ pub fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Se
                                     {
                                         p.models_list_url = models_url;
                                     }
-                                    ui.end_row();
-                                });
-                        });
+                                ui.end_row();
+                            });
+                            // Fetch button.
+                            ui.add_space(4.0);
+                            let p_clone = p.clone();
+                            let key_for_fetch = key.clone();
+                            if ui
+                                .button("Fetch")
+                                .on_hover_text("Fetch available models from API")
+                                .clicked()
+                            {
+                                let models = provider::fetch_models(&p_clone);
+                                let status = format!("{} models", models.len());
+                                settings.fetched_models.insert(key_for_fetch.clone(), models);
+                                settings.fetch_status.insert(key_for_fetch, status);
+                            }
+                            // Fetched model list.
+                            if let Some(models) = settings.fetched_models.get(&key)
+                                && !models.is_empty()
+                            {
+                                ui.add_space(4.0);
+                                Frame::NONE
+                                    .fill(Palette::BG_SURFACE)
+                                    .corner_radius(ROUND_SM)
+                                    .inner_margin(Margin::same(6))
+                                    .show(ui, |ui| {
+                                        ui.label(
+                                            RichText::new("Fetched Models")
+                                                .size(10.5).color(Palette::TEXT_MUTED).strong(),
+                                        );
+                                        ui.add_space(2.0);
+                                        ScrollArea::vertical()
+                                            .id_salt(format!("fetch_scroll_{}", &key))
+                                            .max_height(300.0)
+                                            .show(ui, |ui| {
+                                                for m in models.iter() {
+                                                    let is_saved = p.saved_models.contains(m);
+                                                    let is_active = p.model == *m;
+                                                    ui.horizontal(|ui| {
+                                                        ui.label(
+                                                            RichText::new(m)
+                                                                .size(11.0)
+                                                                .color(if is_active { Palette::ACCENT } else { Palette::TEXT_PRIMARY })
+                                                                .monospace(),
+                                                        );
+                                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                            if is_saved {
+                                                                ui.label(
+                                                                    RichText::new("Saved")
+                                                                        .size(9.5).color(Palette::TEXT_MUTED),
+                                                                );
+                                                            } else if ui.small_button("+ Add").clicked() {
+                                                                p.saved_models.push(m.clone());
+                                                                let defs = autocode_core::helpers::model_or_safe(&p.kind, m);
+                                                                let entry = autocode_core::storage::provider_file::ModelEntry {
+                                                                    id: m.clone(),
+                                                                    context_window: defs.context_window,
+                                                                    max_output_tokens: defs.max_output_tokens,
+                                                                    max_output_tokens_thinking: defs.max_output_tokens_thinking,
+                                                                    thinking_api: defs.thinking_api.clone(),
+                                                                    reasoning_efforts: defs.reasoning_efforts.clone(),
+                                                                    supports_cache_control: defs.supports_cache_control,
+                                                                    requests_per_hour: defs.requests_per_hour,
+                                                                    thinking_overrides: defs.thinking_overrides.clone(),
+                                                                    handoff_percent: p.handoff_percent,
+                                                                    temperature: p.temperature,
+                                                                    top_p: p.top_p,
+                                                                    frequency_penalty: p.frequency_penalty,
+                                                                    presence_penalty: p.presence_penalty,
+                                                                };
+                                                                let cm = p.models_config.get_or_insert_with(std::collections::HashMap::new);
+                                                                cm.insert(m.clone(), entry);
+                                                                provider_dirty = true;
+                                                            }
+                                                            if ui.small_button("Select").clicked() {
+                                                                p.model = m.clone();
+                                                                p.fill_from_config();
+                                                                if state.active_provider == key {
+                                                                    state.session_meta_dirty = true;
+                                                                }
+                                                            }
+                                                        });
+                                                    });
+                                                }
+                                            });
+                                    });
+                            }
+                    });
 
                     ui.add_space(6.0);
 
@@ -311,94 +396,11 @@ pub fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Se
                                         state.session_meta_dirty = true;
                                     }
                                 }
-                                let p_clone = p.clone();
-                                let key_for_fetch = key.clone();
-                                if ui
-                                    .button("Fetch")
-                                    .on_hover_text("Fetch available models from API")
-                                    .clicked()
-                                {
-                                    let models = provider::fetch_models(&p_clone);
-                                    let status = format!("{} models", models.len());
-                                    settings.fetched_models.insert(key_for_fetch.clone(), models);
-                                    settings.fetch_status.insert(key_for_fetch, status);
-                                }
                             });
 
                             let mut saved = std::mem::take(&mut p.saved_models);
 
-                            // Fetched model list.
-                            if let Some(models) = settings.fetched_models.get(&key)
-                                && !models.is_empty()
-                            {
-                                ui.add_space(2.0);
-                                Frame::NONE
-                                    .fill(Palette::BG_SURFACE)
-                                    .corner_radius(ROUND_SM)
-                                    .inner_margin(Margin::same(6))
-                                    .show(ui, |ui| {
-                                        ui.label(
-                                            RichText::new("Fetched Models")
-                                                .size(10.5).color(Palette::TEXT_MUTED).strong(),
-                                        );
-                                        ui.add_space(2.0);
-                                        let scroll_h = (models.len() as f32 * 24.0).min(150.0);
-                                        ScrollArea::vertical()
-                                            .id_salt(format!("fetch_scroll_{}", &key))
-                                            .max_height(scroll_h)
-                                            .show(ui, |ui| {
-                                                for m in models.iter() {
-                                                    let is_saved = saved.contains(m);
-                                                    let is_active = p.model == *m;
-                                                    ui.horizontal(|ui| {
-                                                        ui.label(
-                                                            RichText::new(m)
-                                                                .size(11.0)
-                                                                .color(if is_active { Palette::ACCENT } else { Palette::TEXT_PRIMARY })
-                                                                .monospace(),
-                                                        );
-                                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                                            if is_saved {
-                                                                ui.label(
-                                                                    RichText::new("Saved")
-                                                                        .size(9.5).color(Palette::TEXT_MUTED),
-                                                                );
-                                                            } else if ui.small_button("+ Add").clicked() {
-                                                                saved.push(m.clone());
-                                                                let defs = autocode_core::helpers::model_or_safe(&p.kind, m);
-                                                                 let entry = autocode_core::storage::provider_file::ModelEntry {
-                                                                     id: m.clone(),
-                                                                     context_window: defs.context_window,
-                                                                     max_output_tokens: defs.max_output_tokens,
-                                                                     max_output_tokens_thinking: defs.max_output_tokens_thinking,
-                                                                     thinking_api: defs.thinking_api.clone(),
-                                                                     reasoning_efforts: defs.reasoning_efforts.clone(),
-                                                                     supports_cache_control: defs.supports_cache_control,
-                                                                      requests_per_hour: defs.requests_per_hour,
-                                                                      thinking_overrides: defs.thinking_overrides.clone(),
-                                                                      handoff_percent: p.handoff_percent,
-                                                                      temperature: p.temperature,
-                                                                      top_p: p.top_p,
-                                                                      frequency_penalty: p.frequency_penalty,
-                                                                      presence_penalty: p.presence_penalty,
-                                                                  };
-                                                                 let cm = p.models_config.get_or_insert_with(std::collections::HashMap::new);
-                                                                cm.insert(m.clone(), entry);
-                                                                provider_dirty = true;
-                                                            }
-                                                              if ui.small_button("Select").clicked() {
-                                                                  p.model = m.clone();
-                                                                  p.fill_from_config();
-                                                                  if state.active_provider == key {
-                                                                      state.session_meta_dirty = true;
-                                                                  }
-                                                              }
-                                                        });
-                                                    });
-                                                }
-                                            });
-                                    });
-                            }
+
 
                             // Saved models.
                             ui.add_space(4.0);
