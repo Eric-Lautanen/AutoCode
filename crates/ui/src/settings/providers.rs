@@ -303,7 +303,7 @@ pub fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Se
                             {
                                 ui.add_space(4.0);
                                 Frame::NONE
-                                    .fill(Palette::BG_SURFACE)
+                                    .fill(Palette::BG_BASE)
                                     .corner_radius(ROUND_SM)
                                     .inner_margin(Margin::same(6))
                                     .show(ui, |ui| {
@@ -312,10 +312,14 @@ pub fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Se
                                                 .size(10.5).color(Palette::TEXT_MUTED).strong(),
                                         );
                                         ui.add_space(2.0);
+                                        let (_, rect) = ui.allocate_space(egui::vec2(ui.available_size().x, 300.0));
+                                        let mut scroll_ui = ui.new_child(
+                                            egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()),
+                                        );
                                         ScrollArea::vertical()
                                             .id_salt(format!("fetch_scroll_{}", &key))
                                             .max_height(300.0)
-                                            .show(ui, |ui| {
+                                            .show(&mut scroll_ui, |ui| {
                                                 for m in models.iter() {
                                                     let is_saved = p.saved_models.contains(m);
                                                     let is_active = p.model == *m;
