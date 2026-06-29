@@ -253,11 +253,11 @@ pub fn push_tool_results_to_state(
                 sess.todo_user_dismissed = false;
                 sess.show_todo = true;
             }
-            if state.active_session_id.as_deref() == Some(sid) {
-                state.todo_list = sess.todo_list.clone();
-                state.show_todo = sess.show_todo;
-                state.todo_user_dismissed = sess.todo_user_dismissed;
-            }
+            // Always sync to global state so the UI panel shows the latest data
+            // regardless of which session the runtime is targeting.
+            state.todo_list = sess.todo_list.clone();
+            state.show_todo = sess.show_todo;
+            state.todo_user_dismissed = sess.todo_user_dismissed;
         }
         if let Some((title, items)) = &tr.project_todo_update
             && let Some(sid) = sess_id
@@ -266,9 +266,8 @@ pub fn push_tool_results_to_state(
             sess.project_task_list
                 .set_items(title.clone(), items.clone());
             state.show_project_tasks = true;
-            if state.active_session_id.as_deref() == Some(sid) {
-                state.project_task_list = sess.project_task_list.clone();
-            }
+            // Always sync to global state so the UI panel shows the latest data.
+            state.project_task_list = sess.project_task_list.clone();
             // Persist to disk immediately — session meta is the source of truth.
             if let Some(pid) = sess.project_id.as_ref()
                 && let Some(proj) = state.projects.iter().find(|p| &p.id == pid)

@@ -83,10 +83,10 @@ pub fn show_project_tasks(ctx: &egui::Context, state: &mut AppState) {
     if out.all_done_triggered {
         state.project_task_list.clear();
         state.show_project_tasks = true;
-        let ptl = state.project_task_list.clone();
+        // Persist the cleared state to the active session on disk.
         let proj = state.active_project().cloned();
         if let Some(sess) = state.active_session_mut() {
-            sess.project_task_list = ptl;
+            sess.project_task_list.clear();
             if let Some(ref proj) = proj {
                 let _ = storage::save_session_meta(proj, sess);
             }

@@ -21,16 +21,22 @@ pub(crate) fn save_old_session(
         if old_sess.project_id.as_ref() != state.active_project_id.as_ref() {
             return;
         }
-        old_sess.todo_list = state.todo_list.clone();
-        old_sess.project_task_list = state.project_task_list.clone();
-        old_sess.show_todo = state.show_todo;
-        old_sess.todo_user_dismissed = state.todo_user_dismissed;
+        // Only copy task lists from global state if the old session is in the
+        // same project as the active one. A project switch already saved the
+        // old session's task lists to disk in switch_to_project, and the
+        // global state now belongs to the *new* project's active session.
+        if old_sess.project_id.as_ref() == state.active_project_id.as_ref() {
+            old_sess.todo_list = state.todo_list.clone();
+            old_sess.project_task_list = state.project_task_list.clone();
+            old_sess.show_todo = state.show_todo;
+            old_sess.todo_user_dismissed = state.todo_user_dismissed;
+            old_sess.show_project_tasks = state.show_project_tasks;
+        }
         old_sess.draft_input = panel_state.input.clone();
         old_sess.handoff_enabled = state.handoff_enabled;
         old_sess.show_explorer = state.show_explorer;
         old_sess.settings_open = state.settings_open;
         old_sess.show_reasoning_inline = state.show_reasoning_inline;
-        old_sess.show_project_tasks = state.show_project_tasks;
         if let Some(old_proj) = state
             .projects
             .iter()
@@ -136,6 +142,9 @@ pub(crate) fn load_new_session(
                     prov.fill_from_config();
                 }
             }
+            // Always load task lists from the session meta on disk — never
+            // from the global state, which may belong to a different session
+            // (e.g. a background runtime for another tab).
             state.todo_list = new_sess.todo_list.clone();
             state.project_task_list = new_sess.project_task_list.clone();
             state.show_todo = new_sess.show_todo;
