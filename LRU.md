@@ -1,5 +1,9 @@
 # Looping Context Window — Implementation Plan
 
+> **Note to implementing agent**: This plan was written without access to the full codebase. Treat it as a strong architectural guide, not ground truth. Exact function names, field names, line numbers, and call signatures must be verified against the actual source before use — some will differ. You are expected to adapt the specifics where the real code diverges, so long as the core philosophy is preserved: **disk as source of truth, one group removed per trigger cycle, batched I/O, minimal RAM footprint, no background threads added for this feature, and backpressure from disk latency is intentional and correct.** If a better implementation path is visible from the code, take it.
+
+---
+
 ## Concept
 
 A toggleable mode that prunes old assistant/tool message pairs when the session's token usage crosses a configurable threshold, keeping the system prompt and recent exchanges. Pruning aggressiveness is configured per-model in provider settings — some models handle aggressive pruning well, others need a more conservative approach. A `FileAccessLog` tracks which files the model has accessed so the pruning algorithm can retain messages that reference actively-used files. One group is removed per trigger cycle so the algorithm always has fresh working-set data before making the next removal decision.
@@ -10,8 +14,8 @@ A toggleable mode that prunes old assistant/tool message pairs when the session'
 
 This is a distinct subsystem from the existing "trim RAM" logic already in `session_ops.rs` (372 lines — push/replay/trim/format) — that's a dumb count-based trim; this is scoring-based semantic pruning with its own state, file ops, and disk side-effects. It earns its own files rather than growing the existing ones further:
 
-- **`core/src/state/access_log.rs`** *(new)* — `FileAccessLog`, `AccessEntry`, `FileOp`. Fits the existing pattern of one state type per file (`chat.rs`, `session.rs`, `todo.rs`, etc.) under `core/src/state/`.
-- **`ai/src/chat/looping.rs`** *(new)* — `apply_looping_window()`, `pair_groups()`, `is_unverified_edit_group()`, scoring, breadcrumb construction, dry-run logging. Register with `pub mod looping;` in `ai/src/chat/mod.rs` and export `apply_looping_window`. Keeping this separate from `session_ops.rs` means the existing trim-RAM path and the new scoring path can't accidentally tangle, and the ~150 lines of scoring logic gets its own home instead of pushing `session_ops.rs` past 500 lines.
+- **`crates/core/src/state/access_log.rs`** *(new)* — `FileAccessLog`, `AccessEntry`, `FileOp`. Fits the existing pattern of one state type per file (`chat.rs`, `session.rs`, `todo.rs`, etc.) under `core/src/state/`.
+- **`crates/ai/src/chat/looping.rs`** *(new)* — `apply_looping_window()`, `pair_groups()`, `is_unverified_edit_group()`, scoring, breadcrumb construction, dry-run logging. Register with `pub mod looping;` in `ai/src/chat/mod.rs` and export `apply_looping_window`. Keeping this separate from `session_ops.rs` means the existing trim-RAM path and the new scoring path can't accidentally tangle, and the ~150 lines of scoring logic gets its own home instead of pushing `session_ops.rs` past 500 lines.
 
 Everything else (new fields on `Session`/`AppState`/`ChatMessage`, the toggle button, settings) is a small, localized addition to an existing file and stays there — no need to split those out.
 
@@ -197,7 +201,7 @@ pub loop_aggressiveness: LoopAggressiveness,
 
 **File:** `crates/core/src/helpers/serde_defaults.rs`
 
-Remove `default_loop_max_pairs()` — no longer needed. The trigger is token-based via `loop_aggressiveness`.
+Export via `crates/core/src/helpers/mod.rs` (remove the existing `default_loop_max_pairs` export).
 
 **File:** `crates/core/src/state/app_state.rs`
 
@@ -278,7 +282,62 @@ if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
 
 No message-id correlation needed — `FileAccessLog::record()` only takes `path`/`op`/`turn` now (see the simplified struct above), so this pass doesn't need to know which `ChatMessage` id each `ToolResult` became.
 
-### Rebuild from disk on session load
+---
+
+## Batched Disk Writes (General Improvement, Enabled by This Work)
+
+This is a general session persistence improvement that the looping work makes necessary to get right, but benefits the whole app regardless of whether looping is enabled.
+
+**The problem**: `push_tool_results_to_state()` currently pushes messages one at a time through `push_to_session()`, which calls the disk appender once per message. A frame with 5 parallel tool calls produces 5 separate disk writes with 5 separate fsyncs. On fast models doing multiple tool calls per second this is significant unnecessary I/O churn.
+
+**The fix**: `chunked_jsonl.rs` gets a new `append_batch()` function that takes a slice of messages, serializes all of them into the chunk in one pass, and fsyncs once at the end. `push_tool_results_to_state()` builds the full `Vec<ChatMessage>` for the frame first, then calls `append_batch()` once. The user message send path gets the same treatment — it's a single message so less dramatic, but consistent.
+
+**File:** `crates/core/src/storage/chunked_jsonl.rs` (323 lines)
+
+```rust
+/// Write multiple messages to the current chunk in one pass with a single
+/// fsync. Preferred over calling append() in a loop — avoids per-message
+/// fsync overhead when a frame produces several messages at once (e.g. 5
+/// parallel tool results).
+pub fn append_batch(msg_dir: &Path, messages: &[ChatMessage]) -> Result<()> {
+    if messages.is_empty() { return Ok(()); }
+    // Open/create the current chunk file, write all messages as JSONL lines,
+    // fsync once. Follow the same crash-safe temp-file pattern append() uses
+    // for chunk rotation, but rotation only triggers after the full batch is
+    // written — don't split a batch across two chunk files mid-write.
+}
+```
+
+**File:** `crates/ai/src/chat/session_ops.rs`, `push_tool_results_to_state()`
+
+Replace the per-message push loop with:
+
+```rust
+// 1. Convert all ToolResults → ChatMessages in RAM
+let mut messages_to_write: Vec<ChatMessage> = results.iter()
+    .map(|tr| /* existing ToolResult → ChatMessage conversion */ )
+    .collect();
+
+// 2. Single batched disk write for the whole frame.
+// NOTE: verify the exact helper for resolving the session message directory
+// against session_io.rs — it may be named differently from session_msg_dir().
+if let Some(msg_dir) = session_msg_dir(state, session_id) {
+    chunked_jsonl::append_batch(&msg_dir, &messages_to_write)?;
+}
+
+// 3. Update RAM state (access log, session.messages if still used)
+// 4. apply_looping_window() fires after this, on a fully consistent disk state
+```
+
+**Ordering guarantee**: the batch write completes and fsyncs before `apply_looping_window()` runs. This means the prune pass always operates on a disk state that includes the just-landed tool results — no race between "write new messages" and "decide what to remove."
+
+**Breadcrumb write ordering**: within `apply_looping_window()` itself, the breadcrumb is written to disk *before* `remove_messages_by_id()` runs. If the process crashes between the two, the breadcrumb exists on disk and the original messages are still there — fully recoverable. The reverse order (remove first, write breadcrumb second) would leave a silent gap with no marker on crash.
+
+---
+
+---
+
+## Access Log Rebuild on Session Load
 
 **File:** `crates/core/src/storage/discovery.rs` (228 lines — "disk discovery: load/save project meta, discover projects/sessions, identity migration"; this is the right home, not `session_io.rs`):
 
@@ -466,7 +525,7 @@ pub fn apply_looping_window(state: &mut AppState, session_id: &str) -> Option<()
     // instead of a silent gap (cheap: ~1 line of text per group). Give the
     // breadcrumb the *current* turn — it's a synthetic message created now,
     // not a record of when the original group happened.
-    let breadcrumb_for: HashMap<usize, ChatMessage> = scored.iter().take(excess)
+    let breadcrumb_for: HashMap<usize, ChatMessage> = scored.iter().take(agg.remove_per_trigger())
         .map(|&(gi, _)| {
             let (start, end) = groups[gi];
             let paths: HashSet<String> = state.sessions[idx].messages[start..=end].iter()
@@ -506,6 +565,12 @@ pub fn apply_looping_window(state: &mut AppState, session_id: &str) -> Option<()
     // messages; everything else (kept groups, System/User messages
     // between groups) passes through unchanged. Avoids index drift from
     // splicing into a vec after a retain().
+    //
+    // NOTE: This block assumes session.messages still exists as a RAM vec.
+    // If RAM message storage has been removed by the time this is implemented,
+    // skip this entire block — disk is already updated above and is the
+    // source of truth. The access log and token estimate are the only RAM
+    // state that need updating after a prune in that world.
     let old_messages = std::mem::take(&mut state.sessions[idx].messages);
     let mut new_messages = Vec::with_capacity(old_messages.len());
     let mut i = 0;
@@ -580,7 +645,9 @@ if buttons::lit_btn(ui, "Loop", looping_active)
 **File:** `crates/ui/src/toolbar/meters.rs`
 
 When `sess.looping_window` is true, append to hover text:  
-`"Looping: keep ~N pairs (max: {sess.loop_max_pairs})"`
+`"Looping: {aggressiveness} — triggers at {trigger_pct}% context full"`
+
+Resolve the aggressiveness label and trigger percentage from the active model's `LoopAggressiveness` config using the same lookup path as `apply_looping_window()`.
 
 ---
 
@@ -639,7 +706,7 @@ Also add `is_error: bool` to `ToolMeta` in the same file (default `false`). Set 
 
 ## Dry-Run Mode
 
-**File:** `crates/core/src/state/session.rs` / `crates/ai/src/chat/session_ops.rs`
+**File:** `crates/core/src/state/session.rs`
 
 ```rust
 #[serde(default)]
@@ -677,6 +744,11 @@ When set, `apply_looping_window()` computes `to_remove` and the breadcrumb summa
 | `crates/core/src/storage/session_meta.rs` | Add `looping_window` to `SessionMeta`; `from_session()`. **Not** `loop_max_pairs` (removed) or `loop_dry_run` (not persisted). |
 | `crates/core/src/storage/discovery.rs` | Add `looping_window` to direct `Session` construction; rebuild `access_log` from `ToolMeta` on load |
 
+### Modified — Storage
+| File | Changes |
+|---|---|
+| `crates/core/src/storage/chunked_jsonl.rs` | Add `append_batch(&[ChatMessage])` — writes all messages in one pass, one fsync. Existing `append()` stays for single-message cases (user send). Chunk rotation logic applies to the batch as a whole — don't split a batch across chunk files mid-write. |
+
 ### Modified — AI / Chat Logic
 | File | Changes |
 |---|---|
@@ -684,7 +756,7 @@ When set, `apply_looping_window()` computes `to_remove` and the breadcrumb summa
 | `crates/ai/src/chat/tools.rs` | No change — this file only executes tools; access recording happens one layer up in `polling/tools.rs` |
 | `crates/ai/src/chat/polling/tools.rs` | Populate `ToolResult.accessed_paths` per tool call, inside the existing result-collection pass that builds each `ToolResult` before `commit_tool_results` |
 | `crates/ai/src/chat/polling/mod.rs` | Call `looping::apply_looping_window()` once at the end of the frame loop, after either a tool-commit or a text-only completion lands |
-| `crates/ai/src/chat/session_ops.rs` | Add the access-recording pass in `push_tool_results_to_state()` only — the scoring/removal algorithm itself lives in `looping.rs`, not here |
+| `crates/ai/src/chat/session_ops.rs` | Switch `push_tool_results_to_state()` from per-message push loop to batch: build full `Vec<ChatMessage>` first, call `append_batch()` once, then record access log. The scoring/removal algorithm itself lives in `looping.rs`, not here. |
 | `crates/ai/src/chat/looping.rs` *(new)* | `apply_looping_window()`, `pair_groups()`, `is_unverified_edit_group()`, breadcrumb construction, `loop_dry_run` log-only branch |
 | `crates/ai/src/chat/completion.rs` | Call `looping::apply_looping_window()` at the start of `start_completion()`; increment `sess.turn_count`; suppress auto-handoff in `check_auto_handoff()` when `looping_window` is set |
 | `crates/ai/src/chat/mod.rs` | Add `pub mod looping;`; export `apply_looping_window` |
@@ -699,7 +771,7 @@ When set, `apply_looping_window()` computes `to_remove` and the breadcrumb summa
 
 **Note on settings location**: `loop_dry_run` moves out of `settings/session.rs` and into `settings/providers.rs` — it's a per-model debug flag, not a per-session user setting. `settings/session.rs` no longer needs any changes for this feature since `loop_max_pairs` is removed.
 
-**Total: 2 new files + 19 modified files = 21 files.**
+**Total: 2 new files + 20 modified files = 22 files.**
 
 ---
 
@@ -708,10 +780,12 @@ When set, `apply_looping_window()` computes `to_remove` and the breadcrumb summa
 Before enabling the toggle by default:
 
 1. **API-shape invariant test** (the one that matters most): after any `apply_looping_window()` run, assert that the resulting `messages` slice never has an `Assistant` message with tool calls that isn't immediately followed by matching `Tool` results, and never has an orphaned `Tool` message with no preceding `Assistant`. `core/tests/stability.rs` already simulates 70 sessions / 7,000 messages and crash-recovery round-trips — that's the natural place to add a looping-enabled variant of that simulation and assert the invariant holds under realistic load, rather than standing up a separate test harness. Pure-function cases (varying group sizes, error mixes, interleaved markers) can stay as fast inline `#[cfg(test)]` unit tests in `looping.rs` itself.
-2. **Token threshold test**: confirm that with a session at 74% of context window and `Balanced` aggressiveness (trigger 75%), `apply_looping_window()` returns `None` without touching messages; at 76% it enters the scoring path. Test all three aggressiveness levels at their boundaries.
-3. **Single-group removal test**: confirm that even when many groups are scoreable, exactly 1 is removed per call, and a second call after re-checking the threshold may or may not fire depending on whether tokens dropped below the threshold after the first removal.
-4. **Unverified-edit exemption test**: a session with an Edit on `path` and no later access to `path` — confirm that group is never in `to_remove` even when above the trigger threshold.
-5. **Dry-run first**: run with `loop_dry_run = true` on a handful of real long sessions, eyeball the logged candidates/scores, then flip it off for that workload.
+2. **Batch write atomicity test**: simulate a frame with N tool results, confirm `append_batch()` produces exactly one chunk file write and that all N messages are present on disk after a single call. Verify that a simulated crash mid-batch (truncated write) leaves the chunk in a state that `read_all()` can handle gracefully — either all N messages or none, not a partial set.
+3. **Breadcrumb-before-removal ordering test**: confirm that in `apply_looping_window()` the breadcrumb is present on disk before `remove_messages_by_id()` is called, by intercepting at the storage layer.
+4. **Token threshold test**: confirm that with a session at 74% of context window and `Balanced` aggressiveness (trigger 75%), `apply_looping_window()` returns `None` without touching messages; at 76% it enters the scoring path. Test all three aggressiveness levels at their boundaries.
+5. **Single-group removal test**: confirm that even when many groups are scoreable, exactly 1 is removed per call, and a second call after re-checking the threshold may or may not fire depending on whether tokens dropped below the threshold after the first removal.
+6. **Unverified-edit exemption test**: a session with an Edit on `path` and no later access to `path` — confirm that group is never in `to_remove` even when above the trigger threshold.
+7. **Dry-run first**: run with `loop_dry_run = true` on a handful of real long sessions, eyeball the logged candidates/scores, then flip it off for that workload.
 
 ---
 
@@ -719,22 +793,20 @@ Before enabling the toggle by default:
 
 ```
 Tool dispatch (polling/tools.rs)
-    │  extract path from tc.arguments
-    ▼
-ToolResult.accessed_paths
-    │
+    │  collect all tool results for this frame into Vec<ToolResult>
     ▼
 push_tool_results_to_state() (session_ops.rs)
-    │  record paths → session.access_log
+    │  convert all ToolResults → ChatMessages
+    │  record accessed_paths → session.access_log
+    │  chunked_jsonl::append_batch() — one fsync for the whole frame
     ▼
-FileAccessLog
+Disk (source of truth, fully consistent)
     │
     ▼
-apply_looping_window() (looping.rs, new)
-    │  query working_set → score groups → remove lowest
-    ▼
-Session.messages (RAM) + remove_messages_by_id() (disk)
-    │
+apply_looping_window() (looping.rs)
+    │  token check → pair_groups → score → remove 1 lowest
+    │  breadcrumb written to disk first, then remove_messages_by_id()
+    │  recompute_estimate_from_disk()
     ▼
 Next API request sees only the kept window
 ```
@@ -762,3 +834,5 @@ Next API request sees only the kept window
 9. **Single removal may not drop below threshold**: one group removal might not be enough tokens to drop below the trigger percentage. That's fine — the next frame-loop tick will fire again and remove another. Converges naturally across a few cycles without bulk-removing with stale data.
 
 10. **Aggressiveness mismatch across models**: if a user switches the active model mid-session, the next trigger check will use the new model's aggressiveness and context window. This is correct — the new model is what's about to receive the context, so its limits are what matter.
+
+11. **Parallel tool calls and batch sizing**: 5 parallel tool calls in one frame produce 5 `ToolResult` entries, all converted to `ChatMessage` and written via one `append_batch()` call. The model waits for that single fsync before the next completion starts — this is intentional backpressure. Fast models that generate 5+ parallel tool calls per second will naturally be throttled to disk write speed, which is the correct behavior under the disk-as-source-of-truth mantra.
