@@ -5,7 +5,7 @@
 > **[v0.2.5 Release](https://github.com/Eric-Lautanen/AutoCode/releases/tag/v0.2.5)** — Download for Windows, Linux, and macOS
 
 > **⚠️ WARNING — You're piloting a chainsaw**
-> AutoCode reads, writes, deletes, and runs code with **zero confirmation prompts**. No "Are you sure?" popup. No safety rail. If you tell it to `rm -rf /`, it will try its hardest. Use at your own risk.
+> AutoCode reads, writes, deletes, and runs code with **zero confirmation prompts for AI-triggered operations**. No "Are you sure?" popup when the agent edits files or runs commands. No safety rail. If you tell it to `rm -rf /`, it will try its hardest. Use at your own risk.
 
 Most agentic coding tools assume you have a datacenter in your laptop. AutoCode takes the opposite approach — it's built for older hardware, limited RAM, and long sessions that run for hours or days without caving in. No async runtime, no Electron, no background services. One binary, ~100-200 MB RAM with the UI visible (under 100 MB while minimized), and the disk.
 
@@ -27,7 +27,7 @@ It's not trying to be clever. It's trying to be durable. Transient errors retry 
 | **Session Handoff** | Auto-continuation when context limits hit — trigger prompt, RESUME.md generation |
 | **System Info** | Auto-detect OS, CPU, GPU, RAM, shell, and tool availability (Win32 FFI / `/proc` / `lspci`) |
 | **Security** | Heap-zeroed `SecretString`, path traversal blocking, scoped shell, atomic writes |
-| **Dark Theme** | 20-color palette |
+| **Dark Theme** | 15-color palette |
 | **Cross-Platform** | Windows, macOS, Linux — egui/eframe 0.34, OpenGL/Wgpu auto-select |
 
 ## Skills
@@ -113,7 +113,7 @@ Settings are persisted across restarts. Most settings in `app.ron`; **provider c
 ## Security
 
 - API keys zeroed from heap on drop via `SecretString`, but **persisted as plaintext** in `AutoCode_data/providers.json`
-- Shell commands scoped to project directory
+- Shell commands default to project directory as working directory
 - Path traversal attacks (`../../etc/passwd`) blocked with cached resolver (`#[must_use]`)
 - Temp files tracked and cleaned up on exit
 - Atomic session file writes (temp + rename)
