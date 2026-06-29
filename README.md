@@ -1,15 +1,15 @@
 # AutoCode
 
-**AutoCode** is an autonomous AI coding agent — a native Rust desktop app that connects to LLMs and gives them full access to your filesystem and shell. Not a harness or scaffold — a single self-contained binary. Built in simple code editor, handoff system.  Run tasks for days/weeks.
+**AutoCode** is an autonomous AI coding agent — a native Rust desktop app that connects to LLMs and gives them full access to your filesystem and shell. Not a harness or scaffold — a single self-contained binary. Built-in code editor, handoff system. Run tasks for days or weeks.
 
 > **[v0.2.5 Release](https://github.com/Eric-Lautanen/AutoCode/releases/tag/v0.2.5)** — Download for Windows, Linux, and macOS
 
 > **⚠️ WARNING — You're piloting a chainsaw**
 > AutoCode reads, writes, deletes, and runs code with **zero confirmation prompts**. No "Are you sure?" popup. No safety rail. If you tell it to `rm -rf /`, it will try its hardest. Use at your own risk.
 
-Most agentic coding tools assume you have a datacenter in your laptop. AutoCode takes the opposite approach — it's built for older hardware, limited RAM, and long sessions that run for hours or days without caving in. No async runtime, no Electron, no background services. One binary, a few MB of RAM, and the disk.
+Most agentic coding tools assume you have a datacenter in your laptop. AutoCode takes the opposite approach — it's built for older hardware, limited RAM, and long sessions that run for hours or days without caving in. No async runtime, no Electron, no background services. One binary, ~100-200 MB RAM with the UI visible (under 100 MB while minimized), and the disk.
 
-It's not trying to be clever. It's trying to be durable. Transient errors retry forever. Streams reconnect. Sessions survive crashes. The disk is the source of truth — if the process disappears mid-write, the data comes back intact on restart. Built like a tank, not a race car.
+It's not trying to be clever. It's trying to be durable. Transient errors retry forever. Streams reconnect. Sessions survive crashes. The disk is the source of truth — if the process disappears mid-write, the data comes back intact on restart.
 
 ![Screenshot](assets/screenshot.png)
 
@@ -22,7 +22,7 @@ It's not trying to be clever. It's trying to be durable. Transient errors retry 
 | **Streaming** | Real-time SSE with auto-recovery, exponential backoff, auto-continue on drop |
 | **Sessions** | Named sessions per project (up to 50), JSONL history, lazy-load display buffer, per-project tab colors |
 | **Token Management** | 2-tier counting (API → heuristic), auto-handoff at configurable threshold |
-| **File Explorer** | gitignore-aware tree with git status colors, text/image preview, inline rename/delete, simple code editor |
+| **File Explorer** | gitignore-aware tree with git status colors, text/image preview, inline rename/delete, code editor |
 | **Task Tracking** | Session-level floating todo list + project-level task list (disk-persisted) |
 | **Session Handoff** | Auto-continuation when context limits hit — trigger prompt, RESUME.md generation |
 | **System Info** | Auto-detect OS, CPU, GPU, RAM, shell, and tool availability (Win32 FFI / `/proc` / `lspci`) |
@@ -50,10 +50,10 @@ cargo build --release
 
 **Prerequisites:** Rust 1.96+, Vulkan/Metal/DX12 or OpenGL.
 
-| Platform | Build for static linking |
-|----------|------------------------|
-| Windows | `cargo build --target x86_64-pc-windows-msvc --release` (no vc_redist) |
-| Linux | `cargo build --target x86_64-unknown-linux-musl --release` (static musl) |
+| Platform | Build |
+|----------|-------|
+| Windows | `cargo build --target x86_64-pc-windows-msvc --release` (statically links CRT — no vc_redist) |
+| Linux | `cargo build --target x86_64-unknown-linux-musl --release` (statically links musl) |
 | macOS | `cargo build --release` (system frameworks remain dynamic) |
 
 Renderer auto-selects `Glow` on Windows/macOS (OpenGL always present); checks `libGL.so` on Linux, falls back to `Wgpu`.
@@ -66,7 +66,7 @@ Built in **Rust 2024** with **egui 0.34** / **eframe 0.34**. Zero async — all 
 
 - **No async runtime** — blocking I/O on spawned threads, UI polls via channels
 - **Immediate-mode GUI** — egui rebuilds every frame
-- **Disk as source of truth** — messages always written to JSONL immediately; RAM only holds a display window
+- **Disk as source of truth** — messages always written to JSONL immediately; RAM only holds a display window (default 50 messages)
 - **2-tier token estimation** — API counting endpoint → heuristic fallback
 - **7-strategy fuzzy patching** — exact → CRLF-normalized → whitespace-normalized → tabs-normalized → anchored line → Myers DP alignment → single-line fuzzy
 - **Transient/permanent error classification** — rate limits/timeouts/5xx retry forever (5s→180s cap); auth/quota/filter surface immediately
@@ -89,7 +89,7 @@ Settings are persisted across restarts. Most settings in `app.ron`; **provider c
 | **Providers** | API keys, models, rate limits, thinking API mode, handoff %, sampling params |
 | **Projects** | Add/manage project directories via native folder picker |
 | **Prompts** | System prompt, handoff trigger, handoff continuation, connection drop prompts |
-| **Session** | Display window size, completion delay, web rate limit, disk write rate |
+| **Session** | Display window size (default 50 messages), completion delay, web rate limit, disk write rate |
 | **Timeouts** | Stream idle, request max, tool timeout, shell timeout (default + max), retries |
 | **About** | Version, renderer, system info, OpenGL check |
 
@@ -153,15 +153,15 @@ AutoCode ships with built-in configs for popular providers. You can also add any
 
 ## Project Structure
 
-**23,719 lines across 130 files (5 crates).** See [`structure.md`](structure.md) for the full file-by-file breakdown.
+**21,911 lines across 130 files (5 crates).** See [`structure.md`](structure.md) for the full file-by-file breakdown.
 
 | Crate | Lines | Role |
 |-------|-------|------|
-| `autocode` (bin) | 27 | Entry point, icon embedding |
-| `autocode-core` (lib) | 6,496 | State types, storage, helpers, token estimation, sysinfo, HTML extraction |
-| `autocode-ai` (lib) | 7,493 | Chat loop, HTTP/SSE client, tool dispatch, retry/backoff |
-| `autocode-fs` (lib) | 1,886 | Shell executor, file explorer, git status, skill loader |
-| `autocode-ui` (lib) | 7,793 | egui panels — chat, settings, explorer, toolbar, todo windows |
+| `autocode` (bin) | 23 | Entry point, icon embedding |
+| `autocode-core` (lib) | 5,900 | State types, storage, helpers, token estimation, sysinfo, HTML extraction |
+| `autocode-ai` (lib) | 6,981 | Chat loop, HTTP/SSE client, tool dispatch, retry/backoff |
+| `autocode-fs` (lib) | 1,719 | Shell executor, file explorer, git status, skill loader |
+| `autocode-ui` (lib) | 7,267 | egui panels — chat, settings, explorer, toolbar, todo windows |
 
 ---
 
