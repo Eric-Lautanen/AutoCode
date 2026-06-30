@@ -19,7 +19,7 @@ pub(crate) fn render_unified_diff(
     ui: &mut egui::Ui,
     old: &str,
     new: &str,
-    sid: &str,
+    _sid: &str,
     line_offset: usize,
 ) {
     let old_lines: Vec<&str> = old.lines().collect();
@@ -235,7 +235,7 @@ pub(crate) fn render_unified_diff(
                 }
 
                 ScrollArea::vertical()
-                    .id_salt(format!("diff_scroll_{}", sid))
+                    .id_salt(ui.auto_id_with("diff_scroll"))
                     .max_height(400.0)
                     .min_scrolled_height(0.0)
                     .max_width(ui.available_width())

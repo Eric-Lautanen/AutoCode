@@ -27,8 +27,13 @@ pub(crate) fn render_code_block_impl(
     };
     let display_text = display_lines.join("\n");
 
+    // Use a unique auto-incremented id_salt so that multiple code blocks
+    // within the same message (or across messages in the same push_id scope)
+    // never collide.  The old ("code_block", _inst) salt could clash when
+    // the same _inst (msg.id) appeared in different push_id children.
+    let code_block_salt = ui.auto_id_with("code_block");
     ui.add_space(4.0);
-    ui.push_id(("code_block", _inst), |ui| {
+    ui.push_id(code_block_salt, |ui| {
         ui.set_max_height(f32::INFINITY);
         Frame::NONE
             .fill(theme().code_frame_bg)
@@ -61,7 +66,7 @@ pub(crate) fn render_code_block_impl(
                     });
                 });
                 ScrollArea::vertical()
-                    .id_salt(("code_scroll", _inst))
+                    .id_salt(ui.auto_id_with("code_scroll"))
                     .max_height(400.0)
                     .min_scrolled_height(0.0)
                     .max_width(ui.available_width())
@@ -103,7 +108,7 @@ pub(crate) fn render_code_block_impl(
     ui.add_space(4.0);
 }
 
-pub(crate) fn render_shell_terminal(ui: &mut egui::Ui, code: &str, sid: &str) {
+pub(crate) fn render_shell_terminal(ui: &mut egui::Ui, code: &str, _sid: &str) {
     if code.trim().is_empty() {
         return;
     }
@@ -148,7 +153,7 @@ pub(crate) fn render_shell_terminal(ui: &mut egui::Ui, code: &str, sid: &str) {
                     });
                 });
                 ScrollArea::vertical()
-                    .id_salt(format!("terminal_scroll_{}", sid))
+                    .id_salt(ui.auto_id_with("terminal_scroll"))
                     .max_height(400.0)
                     .min_scrolled_height(0.0)
                     .max_width(ui.available_width())

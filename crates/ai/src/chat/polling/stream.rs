@@ -538,6 +538,19 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                 }
             }
 
+            // Show live preview for write_file calls before batch execution.
+            runtime.live_write_progress = None;
+            for tc in &other_calls {
+                if tc.name == "write_file" {
+                    if let Ok(args) = serde_json::from_str::<serde_json::Value>(&tc.arguments) {
+                        let path = args["path"].as_str().unwrap_or("file").to_string();
+                        let content = args["content"].as_str().unwrap_or("").to_string();
+                        runtime.live_write_progress = Some((path, content));
+                    }
+                    break;
+                }
+            }
+
             // Execute non-shell tools on background thread.
             if !other_calls.is_empty() {
                 let (tx, rx) = std::sync::mpsc::channel::<Vec<ToolResult>>();

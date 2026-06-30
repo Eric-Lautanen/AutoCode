@@ -2,12 +2,12 @@
 
 use std::collections::HashMap;
 
-use egui::{Frame, Key, Margin, RichText, ScrollArea};
+use egui::{Color32, Frame, Key, Margin, RichText, ScrollArea};
 
 use autocode_ai::chat::ChatRuntime;
 use autocode_core::state::{AppState, Role};
 
-use super::code_block::render_shell_terminal;
+use super::code_block::{render_code_block, render_shell_terminal};
 use super::input::show_input_row;
 use super::markdown::render_markdown;
 use super::messages::{empty_state, show_assistant_content, show_live_reasoning, show_user_bubble};
@@ -111,6 +111,7 @@ pub fn show(
                         || !r.pending_response.is_empty()
                         || !r.reasoning_buf.is_empty()
                         || !r.live_shell_buf.is_empty()
+                        || r.live_write_progress.is_some()
                 });
             if streaming {
                 panel_state.scroll_to_bottom = true;
@@ -200,7 +201,8 @@ pub fn show(
                             };
                             let has_streaming = !r.pending_response.is_empty()
                                 || !r.live_shell_buf.is_empty()
-                                || !r.reasoning_buf.is_empty();
+                                || !r.reasoning_buf.is_empty()
+                                || r.live_write_progress.is_some();
 
                             if (r.is_busy() && !has_streaming) || r.retry_after.is_some() {
                                 ui.add_space(8.0);
@@ -228,6 +230,16 @@ pub fn show(
                                         &r.live_shell_buf,
                                         active_sid.as_deref().unwrap_or(""),
                                     );
+                                } else if let Some((ref path, ref content)) = r.live_write_progress
+                                {
+                                    ui.add_space(8.0);
+                                    ui.label(
+                                        RichText::new(format!("[File] Writing {}...", path))
+                                            .size(12.0)
+                                            .color(Color32::from_rgb(74, 156, 133))
+                                            .strong(),
+                                    );
+                                    render_code_block(ui, path, content, 0);
                                 } else if has_reasoning {
                                     ui.add_space(8.0);
                                     ui.label(

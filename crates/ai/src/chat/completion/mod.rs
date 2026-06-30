@@ -47,6 +47,8 @@ pub fn send_message(
     runtime.continuation_chain = 0;
     runtime.orphaned_retry_count = 0;
     runtime.retry_after = None;
+    runtime.next_completion_allowed = None;
+    runtime.live_write_progress = None;
     runtime.active_session_id = Some(sid);
     runtime.pending_start = 2;
 }

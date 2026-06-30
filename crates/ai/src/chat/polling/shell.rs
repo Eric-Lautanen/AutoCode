@@ -121,6 +121,7 @@ pub(super) fn poll_live_shell(state: &mut AppState, runtime: &mut ChatRuntime) -
             project_todo_update: None,
         };
         runtime.pending_tool_results.push(result);
+        runtime.live_shell_buf.clear();
 
         if runtime.pending_tool_remaining.is_empty() {
             commit_tool_results(state, runtime);

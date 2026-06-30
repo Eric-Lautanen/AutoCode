@@ -1,6 +1,6 @@
 // tool_result.rs -- Tool result rendering with collapsible cards + diff views.
 
-use egui::{CollapsingHeader, Color32, RichText};
+use egui::{CollapsingHeader, Color32, Frame, Margin, RichText, ScrollArea, Stroke};
 
 use crate::helpers;
 use autocode_core::helpers::sanitize_display_text;
@@ -465,9 +465,23 @@ pub(crate) fn render_structured_tool_result(
             );
             if !meta.is_error {
                 let body = sanitize_display_text(&helpers::get_tool_body(msg));
-                ui.push_id(format!("skill_{}_{}", msg.id, idx), |ui| {
-                    render_code_block(ui, "markdown", &body, msg.id);
-                });
+                ui.add_space(4.0);
+                Frame::NONE
+                    .fill(theme().code_frame_bg)
+                    .corner_radius(6.0)
+                    .stroke(Stroke::new(1.0, theme().border))
+                    .inner_margin(Margin::symmetric(10, 6))
+                    .show(ui, |ui| {
+                        ScrollArea::vertical()
+                            .id_salt(("skill_scroll", msg.id))
+                            .max_height(400.0)
+                            .auto_shrink([false; 2])
+                            .show(ui, |ui| {
+                                ui.set_min_width(ui.available_width());
+                                render_markdown(ui, &body, true, false);
+                            });
+                    });
+                ui.add_space(4.0);
             }
         }
         "project_task_list" => {

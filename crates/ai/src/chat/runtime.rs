@@ -116,6 +116,9 @@ pub struct ChatRuntime {
     /// Deferred completion start — set in send_message so the UI can
     /// render the user bubble before the disk read + API call fires.
     pub pending_start: u8,
+    /// Live file write progress — (filepath, content) shown immediately
+    /// when a write_file tool call is received, before disk write completes.
+    pub live_write_progress: Option<(String, String)>,
 }
 
 impl Default for ChatRuntime {
@@ -151,6 +154,7 @@ impl Default for ChatRuntime {
             handoff_next_prompt: None,
             orphaned_retry_count: 0,
             pending_start: 0,
+            live_write_progress: None,
         }
     }
 }
@@ -160,6 +164,7 @@ impl ChatRuntime {
         self.stream_rx.is_some()
             || self.tool_rx.is_some()
             || self.live_shell_rx.is_some()
+            || self.live_write_progress.is_some()
             || self.retry_after.is_some()
     }
 
@@ -196,6 +201,7 @@ impl ChatRuntime {
         self.handoff_next_prompt = None;
         self.retry_after = None;
         self.next_completion_allowed = None;
+        self.live_write_progress = None;
         crate::provider::api_rate_limit_reset();
 
         // Force deallocation of large buffers
