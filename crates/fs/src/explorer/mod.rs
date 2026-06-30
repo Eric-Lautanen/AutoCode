@@ -1,5 +1,6 @@
 // explorer/ -- File system traversal for the file explorer panel.
 
+mod comment;
 mod fuzzy;
 mod gitignore;
 mod glob;

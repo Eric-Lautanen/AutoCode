@@ -1,6 +1,7 @@
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use crate::state::{AppState, ModelManifest, Project, ProviderKind, ThinkingApi};
+use crate::state::{AppState, ModelManifest, Project, ProviderKind, ProviderManifest, ThinkingApi};
 
 // -- String utilities ----------------------------------------------------------
 
@@ -51,18 +52,86 @@ pub struct Manifest {
 pub fn manifest() -> &'static Manifest {
     static MANIFEST: OnceLock<Manifest> = OnceLock::new();
     MANIFEST.get_or_init(|| {
+        let baked: Manifest =
+            serde_json::from_str(include_str!("../../../../assets/providers.json"))
+                .expect("Failed to parse providers.json");
+
         let disk_path = crate::utils::fsutil::exe_dir()
             .join("AutoCode_data")
             .join("providers.json");
         if disk_path.exists()
             && let Ok(json) = crate::utils::fsutil::read_to_string(&disk_path)
-            && let Ok(m) = serde_json::from_str(&json)
+            && let Ok(file) =
+                serde_json::from_str::<crate::storage::provider_file::ProviderFile>(&json)
         {
-            return m;
+            return merge_manifest(file, baked);
         }
-        let json = include_str!("../../../../assets/providers.json");
-        serde_json::from_str(json).expect("Failed to parse providers.json")
+
+        baked
     })
+}
+
+/// Merge disk-stored provider entries into the baked-in manifest.
+/// Fields that `ProviderEntry` carries (label, base_url, models, strict_tools)
+/// override the baked-in values. Metadata fields that only exist in the baked
+/// manifest (auth_type, endpoints, etc.) are preserved from the baked version.
+fn merge_manifest(
+    file: crate::storage::provider_file::ProviderFile,
+    mut baked: Manifest,
+) -> Manifest {
+    for entry in file.providers {
+        let kind = entry.kind.clone();
+        let label = entry.label.clone();
+        let base_url = entry.base_url.clone();
+        let strict = entry.supports_strict_tools;
+
+        let models: HashMap<String, ModelManifest> = entry
+            .models
+            .into_iter()
+            .map(|m| {
+                (
+                    m.id.clone(),
+                    ModelManifest {
+                        context_window: m.context_window,
+                        max_output_tokens: m.max_output_tokens,
+                        max_output_tokens_thinking: m.max_output_tokens_thinking,
+                        thinking_api: m.thinking_api,
+                        reasoning_efforts: m.reasoning_efforts,
+                        supports_cache_control: m.supports_cache_control,
+                        requests_per_hour: m.requests_per_hour,
+                        thinking_overrides: m.thinking_overrides,
+                    },
+                )
+            })
+            .collect();
+
+        let manifest_entry = baked
+            .providers
+            .entry(kind)
+            .or_insert_with(|| ProviderManifest {
+                label: label.clone(),
+                base_url: base_url.clone(),
+                supports_cache_control: false,
+                supports_parallel_tool_calls: false,
+                supports_strict_tools: strict.unwrap_or(true),
+                default_model: String::new(),
+                models: HashMap::new(),
+                counting_endpoint: None,
+                auth_type: None,
+                anthropic_version: None,
+                model_prefix_strip: None,
+                models_endpoint: None,
+                chat_endpoint: None,
+            });
+
+        manifest_entry.label = label;
+        manifest_entry.base_url = base_url;
+        if let Some(s) = strict {
+            manifest_entry.supports_strict_tools = s;
+        }
+        manifest_entry.models = models;
+    }
+    baked
 }
 
 pub fn provider_manifest(kind: &ProviderKind) -> Option<&'static crate::state::ProviderManifest> {

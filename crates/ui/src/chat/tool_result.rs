@@ -343,10 +343,10 @@ pub(crate) fn render_structured_tool_result(
                     render_code_block(ui, "grep", &body, msg.id);
                 });
             } else {
-                // Show "Try grep again" suggestions if present in the tool result.
+                // Show "Did you mean:" suggestions if present in the tool result.
                 let body = helpers::get_tool_body(msg);
                 if let Some(suggestions) = body.strip_prefix("No matches for")
-                    && let Some(pos) = suggestions.find("Try grep again")
+                    && let Some(pos) = suggestions.find("Did you mean")
                 {
                     ui.label(
                         RichText::new(suggestions[pos..].trim())

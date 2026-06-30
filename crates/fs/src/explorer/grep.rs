@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use super::fuzzy::{fuzzy_suggest, fuzzy_suggest_single_file, walk_files};
+use super::fuzzy::{fuzzy_suggest, walk_files};
 use super::gitignore::{Gitignore, find_project_root};
 use autocode_core::helpers::has_regex_meta;
 use autocode_core::utils::fsutil;
@@ -36,16 +36,21 @@ pub fn grep_files(
             if !has_regex_meta(pattern)
                 && let Some(content) = content
             {
-                let suggestions = fuzzy_suggest_single_file(&content, pattern, case_sensitive);
+                let file_rel = search_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("file");
+                let suggestions = fuzzy_suggest(
+                    search_path,
+                    &project_root,
+                    pattern,
+                    file_glob,
+                    case_sensitive,
+                    None,
+                    Some((&content, file_rel)),
+                );
                 if !suggestions.is_empty() {
-                    msg.push_str(&format!(
-                        ". Try grep again with one of: {}",
-                        suggestions
-                            .iter()
-                            .map(|s| format!("\"{}\"", s))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ));
+                    msg.push_str(&format_suggestions(&suggestions));
                 }
             }
             msg
@@ -94,16 +99,10 @@ pub fn grep_files(
                     file_glob,
                     case_sensitive,
                     gitignore.as_ref(),
+                    None,
                 );
                 if !suggestions.is_empty() {
-                    msg.push_str(&format!(
-                        ". Try grep again with one of: {}",
-                        suggestions
-                            .iter()
-                            .map(|s| format!("\"{}\"", s))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ));
+                    msg.push_str(&format_suggestions(&suggestions));
                 }
             }
             msg
@@ -117,6 +116,21 @@ pub fn grep_files(
             )
         }
     }
+}
+
+/// Format fuzzy suggestions as `Did you mean: word (path), word (path)?`
+fn format_suggestions(suggestions: &[(String, String)]) -> String {
+    let items: Vec<String> = suggestions
+        .iter()
+        .map(|(text, path)| {
+            if path.is_empty() {
+                text.clone()
+            } else {
+                format!("{} ({})", text, path)
+            }
+        })
+        .collect();
+    format!(" Did you mean: {}?", items.join(", "))
 }
 
 struct GrepParams<'a> {
@@ -191,8 +205,8 @@ fn grep_walk(
         project_root,
         params.file_glob,
         gitignore,
-        &mut |_path: &Path, rel_raw: &str, content: &str| {
-            if results.len() >= params.max_results {
+        &mut |_path: &Path, rel_raw: &str, content: &str, glob_matched: bool| {
+            if !glob_matched || results.len() >= params.max_results {
                 return;
             }
 

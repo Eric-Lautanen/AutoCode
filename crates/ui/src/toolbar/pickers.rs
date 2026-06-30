@@ -149,8 +149,8 @@ pub fn show_model_picker(ui: &mut egui::Ui, state: &mut AppState) {
                 .color(Palette::TEXT_MUTED),
         )
         .show_ui(ui, |ui| {
-            let manifest_models: Vec<String> = state
-                .active_provider()
+            let provider = state.active_provider();
+            let manifest_models: Vec<String> = provider
                 .and_then(|p| autocode_core::helpers::provider_manifest(&p.kind))
                 .map(|m| {
                     let mut keys: Vec<String> = m.models.keys().cloned().collect();
@@ -159,7 +159,14 @@ pub fn show_model_picker(ui: &mut egui::Ui, state: &mut AppState) {
                 })
                 .unwrap_or_default();
 
-            let mut all_models = manifest_models;
+            let mut all_models = manifest_models.clone();
+            if let Some(p) = provider {
+                for m in &p.saved_models {
+                    if !all_models.contains(m) {
+                        all_models.push(m.clone());
+                    }
+                }
+            }
             if !current_model.is_empty() && !all_models.contains(&current_model) {
                 all_models.insert(0, current_model.clone());
             }

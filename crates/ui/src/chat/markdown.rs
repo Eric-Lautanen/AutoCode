@@ -67,7 +67,7 @@ pub(crate) fn render_inline(ui: &mut egui::Ui, line: &str, word_wrap: bool) {
             RichText::new(helpers::parse_inline_formatting(rest))
                 .size(16.0)
                 .strong()
-                .color(theme().accent),
+                .color(theme().text_primary),
         );
         return;
     }
