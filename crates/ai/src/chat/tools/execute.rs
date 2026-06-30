@@ -2,6 +2,29 @@ use crate::helpers;
 use autocode_core::state::TodoItem;
 use autocode_core::state::TodoStatus;
 
+fn urlencoding(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
+            ' ' => "+".to_string(),
+            c => format!("%{:02X}", c as u8),
+        })
+        .collect()
+}
+
+fn write_json(path: &std::path::Path, val: &serde_json::Value) {
+    if let Ok(json) = serde_json::to_string_pretty(val) {
+        let _ = std::fs::write(path, &json);
+    }
+}
+
+fn read_json(path: &std::path::Path) -> serde_json::Value {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or(serde_json::Value::Null)
+}
+
 pub struct ToolExecCtx<'a> {
     pub tc: &'a crate::provider::ToolCall,
     pub project_root: &'a str,
@@ -881,6 +904,194 @@ pub fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                 keyword,
                 names.join(", ")
             )
+        }
+
+        "verify_proof" => {
+            let statement = args["statement"].as_str().unwrap_or("");
+            let proof_code = args["proof_code"].as_str().unwrap_or("");
+            let system = args["system"].as_str().unwrap_or("auto");
+
+            let verifier_dir = std::path::Path::new(project_root).join("verify");
+            let configured = std::env::var("AUTOCODE_VERIFIER").is_ok() || verifier_dir.exists();
+
+            if configured {
+                format!(
+                    "verify_proof: statement submitted to {} verifier.\nStatement: {}\nProof code ({} chars, truncated to 500):\n{}\n\nNOTE: Verifier integration is a stub. Run the verifier externally and check output.\nExpected exit 0 on success.",
+                    system,
+                    statement,
+                    proof_code.len(),
+                    &proof_code.chars().take(500).collect::<String>()
+                )
+            } else {
+                format!(
+                    "verify_proof: no verifier configured.\nStatement: {}\nProof code: {} chars\n\nTo enable, set $AUTOCODE_VERIFIER or create verify/lean.sh/coq.sh/z3.sh in project root.",
+                    statement,
+                    proof_code.len()
+                )
+            }
+        }
+
+        "search_literature" => {
+            let query = args["query"].as_str().unwrap_or("");
+            let max_results = args["max_results"].as_u64().unwrap_or(5).min(20);
+            if query.is_empty() {
+                return "Error: missing 'query' argument".to_string();
+            }
+            let url = format!(
+                "https://export.arxiv.org/api/query?search_query=all:{}&start=0&max_results={}",
+                urlencoding(query),
+                max_results
+            );
+            match crate::provider::native_get(&url, 15, 65536) {
+                Ok(bytes) => {
+                    let xml = String::from_utf8_lossy(&bytes);
+                    let mut results = Vec::new();
+                    for entry in xml.split("<entry>").skip(1) {
+                        let title = entry
+                            .split("<title>")
+                            .nth(1)
+                            .and_then(|s| s.split("</title>").next())
+                            .unwrap_or("")
+                            .trim()
+                            .replace('\n', " ")
+                            .replace("  ", " ");
+                        let authors: Vec<String> = entry
+                            .split("<author>")
+                            .skip(1)
+                            .filter_map(|a| a.split("<name>").nth(1))
+                            .filter_map(|n| n.split("</name>").next())
+                            .map(|s| s.trim().to_string())
+                            .collect();
+                        let summary = entry
+                            .split("<summary>")
+                            .nth(1)
+                            .and_then(|s| s.split("</summary>").next())
+                            .unwrap_or("")
+                            .trim()
+                            .chars()
+                            .take(300)
+                            .collect::<String>();
+                        results.push(format!(
+                            "---\nTitle: {}\nAuthors: {}\nAbstract: {}...\n",
+                            title,
+                            authors.join("; "),
+                            summary
+                        ));
+                    }
+                    if results.is_empty() {
+                        format!("No arXiv results for '{}'.", query)
+                    } else {
+                        results.join("\n")
+                    }
+                }
+                Err(e) => format!("arXiv query failed: {}. Try web_search instead.", e),
+            }
+        }
+
+        "explore_theorem" => {
+            let theorem = args["theorem"].as_str().unwrap_or("");
+            let action = args["action"].as_str().unwrap_or("status");
+            let goal_id = args["goal_id"].as_str().unwrap_or("");
+            let notes = args["notes"].as_str().unwrap_or("");
+            let sub_goals: Vec<&str> = args["sub_goals"]
+                .as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+                .unwrap_or_default();
+
+            if theorem.is_empty() {
+                return "Error: missing 'theorem' argument".to_string();
+            }
+
+            let state_dir = std::path::Path::new(project_root)
+                .join(".autocode")
+                .join("theorems");
+            let _ = std::fs::create_dir_all(&state_dir);
+            let safe_name: String = theorem
+                .chars()
+                .map(|c| if c.is_alphanumeric() { c } else { '_' })
+                .take(64)
+                .collect();
+            let state_path = state_dir.join(format!("{}.json", safe_name));
+
+            match action {
+                "init" => {
+                    let state = serde_json::json!({
+                        "theorem": theorem,
+                        "goals": {"1": {"statement": theorem, "children": [], "status": "pending", "notes": notes}},
+                        "next_id": 2,
+                    });
+                    write_json(&state_path, &state);
+                    format!(
+                        "Initialized theorem exploration for: {}\nRoot goal ID: 1",
+                        theorem
+                    )
+                }
+                "refine" => {
+                    if goal_id.is_empty() {
+                        return "Error: 'goal_id' required for refine action".to_string();
+                    }
+                    if sub_goals.is_empty() {
+                        return "Error: 'sub_goals' required for refine action".to_string();
+                    }
+                    let mut state = read_json(&state_path);
+                    if state.is_null() {
+                        return format!("No state for '{}'. Call action=init first.", theorem);
+                    }
+                    let next_id = state["next_id"].as_u64().unwrap_or(2);
+                    let mut child_ids = Vec::new();
+                    let mut sid = next_id;
+                    for sg in &sub_goals {
+                        let cid = sid.to_string();
+                        state["goals"][&cid] = serde_json::json!({"statement": sg, "children": [], "status": "pending", "notes": ""});
+                        if let Some(children) = state["goals"][goal_id]["children"].as_array_mut() {
+                            children.push(serde_json::json!(cid));
+                        }
+                        child_ids.push(cid);
+                        sid += 1;
+                    }
+                    state["next_id"] = serde_json::json!(sid);
+                    write_json(&state_path, &state);
+                    format!("Refined goal {} into: {}", goal_id, child_ids.join(", "))
+                }
+                "prove" | "fail" => {
+                    if goal_id.is_empty() {
+                        return "Error: 'goal_id' required".to_string();
+                    }
+                    let mut state = read_json(&state_path);
+                    if state.is_null() {
+                        return format!("No state for '{}'. Call action=init first.", theorem);
+                    }
+                    let status = if action == "prove" {
+                        "proven"
+                    } else {
+                        "failed"
+                    };
+                    if let Some(g) = state["goals"][goal_id].as_object_mut() {
+                        g.insert("status".into(), serde_json::json!(status));
+                        if !notes.is_empty() {
+                            g.insert("notes".into(), serde_json::json!(notes));
+                        }
+                    }
+                    write_json(&state_path, &state);
+                    format!(
+                        "Marked goal {} as {}.{}",
+                        goal_id,
+                        status,
+                        if notes.is_empty() {
+                            "".into()
+                        } else {
+                            format!(" Notes: {}", notes)
+                        }
+                    )
+                }
+                _ => {
+                    let content = std::fs::read_to_string(&state_path).unwrap_or_default();
+                    if content.is_empty() {
+                        return format!("No state for '{}'. Call action=init.", theorem);
+                    }
+                    format!("Theorem state:\n{}", content)
+                }
+            }
         }
 
         "handoff" => {

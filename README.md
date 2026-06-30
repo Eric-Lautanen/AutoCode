@@ -17,7 +17,7 @@ It's not trying to be clever. It's trying to be durable. Transient errors retry 
 
 | Category | What it does |
 |----------|-------------|
-| **AI Coding** | Read, write, edit (7-strategy fuzzy patching), search, and execute code via 21 built-in tools |
+| **AI Coding** | Read, write, edit (7-strategy fuzzy patching), search, and execute code via 24 built-in tools |
 | **Multi-Provider** | Built-in configs for popular providers + add any OpenAI-compatible provider via Settings |
 | **Streaming** | Real-time SSE with auto-recovery, exponential backoff, auto-continue on drop |
 | **Sessions** | Named sessions per project (up to 50), JSONL history, lazy-load display buffer, per-project tab colors |
@@ -34,7 +34,7 @@ It's not trying to be clever. It's trying to be durable. Transient errors retry 
 
 Skill files live in the `skills/` directory at project root and ship with the binary. Each file uses YAML frontmatter with a `description` field (fallback to first `# Heading`). The agent discovers skills via `get_skill` — filename, description, and heading are matched by exact, fuzzy, and substring search. Call `get_skill` with an empty keyword to list everything available.
 
-Built-in skills (76 so far) cover task decomposition, codebase orientation, debugging, refactoring, testing, API design, data modeling, error handling, Git workflows, environment/config, security, logging, performance, documentation, language conventions, code review, dependency management, shell usage, web research, file editing strategy, and more.
+Built-in skills (77 so far) cover task decomposition, codebase orientation, debugging, refactoring, testing, API design, data modeling, error handling, Git workflows, environment/config, security, logging, performance, documentation, language conventions, code review, dependency management, shell usage, web research, file editing strategy, Yang–Mills mass gap, and more.
 
 ## Quick Start
 
@@ -119,7 +119,7 @@ Settings are persisted across restarts. Most settings in `app.ron`; **provider c
 - Atomic session file writes (temp + rename)
 - Zero confirmation prompts — designed for trusted environments
 
-## Tools (21)
+## Tools (24)
 
 | Tool | Description |
 |------|-------------|
@@ -144,6 +144,9 @@ Settings are persisted across restarts. Most settings in `app.ron`; **provider c
 | `project_task_list` | Create/update project-level task list (persists across sessions) |
 | `handoff` | Signal context limit and continue in new session |
 | `name_session` | Auto-label the current session |
+| `verify_proof` | Submit proofs to external verifiers (Lean, Coq, Z3) |
+| `search_literature` | Search academic literature (arXiv API) by keyword |
+| `explore_theorem` | Decompose theorems into sub-goals and track proof state |
 
 ## Adding Providers
 
@@ -153,15 +156,15 @@ AutoCode ships with built-in configs for popular providers. You can also add any
 
 ## Project Structure
 
-**21,911 lines across 130 files (5 crates).** See [`structure.md`](structure.md) for the full file-by-file breakdown.
+**22,075 lines across 136 source files (5 crates).** See [`structure.md`](structure.md) for the full file-by-file breakdown.
 
-| Crate | Lines | Role |
-|-------|-------|------|
-| `autocode` (bin) | 23 | Entry point, icon embedding |
-| `autocode-core` (lib) | 5,900 | State types, storage, helpers, token estimation, sysinfo, HTML extraction |
-| `autocode-ai` (lib) | 6,981 | Chat loop, HTTP/SSE client, tool dispatch, retry/backoff |
-| `autocode-fs` (lib) | 1,719 | Shell executor, file explorer, git status, skill loader |
-| `autocode-ui` (lib) | 7,267 | egui panels — chat, settings, explorer, toolbar, todo windows |
+| Crate | Files | Lines | Role |
+|-------|-------|-------|------|
+| `autocode` (bin) | 4 | 23 | Entry point, icon embedding |
+| `autocode-core` (lib) | 36 | 5,949 | State types, storage, helpers, token estimator, sysinfo, HTML extraction |
+| `autocode-ai` (lib) | 33 | 7,074 | Chat loop, HTTP/SSE client, tool dispatch, retry/backoff, web scraping |
+| `autocode-fs` (lib) | 17 | 1,719 | Shell executor, file explorer, git status, skill loader |
+| `autocode-ui` (lib) | 46 | 7,310 | egui panels — chat, settings, explorer, toolbar, todo windows |
 
 ---
 

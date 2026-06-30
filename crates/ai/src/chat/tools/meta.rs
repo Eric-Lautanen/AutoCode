@@ -317,6 +317,24 @@ pub fn build_tool_meta(tc: &ToolCall, result: &str, duration_ms: u64) -> ToolMet
             tool_name: "name_session".into(),
             ..Default::default()
         },
+        "verify_proof" => ToolMeta {
+            tool_name: "verify_proof".into(),
+            is_error,
+            duration_ms: Some(duration_ms),
+            ..Default::default()
+        },
+        "search_literature" => ToolMeta {
+            tool_name: "search_literature".into(),
+            is_error,
+            duration_ms: Some(duration_ms),
+            ..Default::default()
+        },
+        "explore_theorem" => ToolMeta {
+            tool_name: "explore_theorem".into(),
+            is_error,
+            duration_ms: Some(duration_ms),
+            ..Default::default()
+        },
         _ => ToolMeta {
             tool_name: tc.name.clone(),
             is_error,

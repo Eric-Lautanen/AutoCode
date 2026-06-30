@@ -328,9 +328,7 @@ pub fn show(
             panel_state.prev_message_count = usize::MAX;
             panel_state.input = text;
             panel_state.scroll_to_bottom = true;
-            ui.ctx().memory_mut(|mem| {
-                mem.request_focus(panel_state.input_id);
-            });
+            panel_state.wants_input_focus = true;
             ui.ctx().request_repaint();
         }
 

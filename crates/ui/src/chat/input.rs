@@ -46,7 +46,7 @@ pub(crate) fn show_input_row(
                         .show(ui, |ui: &mut egui::Ui| {
                             ui.add(
                                 TextEdit::multiline(&mut panel_state.input)
-                                    .id(panel_state.input_id)
+                                    .id_salt(panel_state.input_id)
                                     .hint_text("Describe a task... Shift+Enter for newline")
                                     .desired_width(input_w)
                                     .desired_rows(3)
@@ -56,6 +56,10 @@ pub(crate) fn show_input_row(
                         })
                         .inner;
 
+                    // Remember the actual widget Id so other code can request
+                    // focus on it (the final Id depends on the push_id scope).
+                    panel_state.actual_input_id = Some(resp.id);
+
                     // Enter sends, Shift+Enter inserts a newline.
                     // Ctrl+Enter is a no-op (not a send shortcut).
                     let enter_pressed = ui.input(|i| {
@@ -63,10 +67,18 @@ pub(crate) fn show_input_row(
                     });
                     let send_shortcut = enter_pressed && send_enabled && !busy;
 
-                    // Focus management: only focus the input when the user clicks it.
+                    // Focus management: request focus when an external caller
+                    // (e.g. replay action) sets the flag, or when the user
+                    // clicks the input area.
+                    if panel_state.wants_input_focus {
+                        panel_state.wants_input_focus = false;
+                        ui.ctx().memory_mut(|mem| {
+                            mem.request_focus(resp.id);
+                        });
+                    }
                     if resp.clicked() {
                         ui.ctx().memory_mut(|mem| {
-                            mem.request_focus(panel_state.input_id);
+                            mem.request_focus(resp.id);
                         });
                     }
 

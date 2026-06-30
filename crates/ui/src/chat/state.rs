@@ -25,8 +25,15 @@ pub struct ChatPanelState {
     /// 0 = no history on disk, or not yet checked.
     pub(crate) oldest_disk_id: u64,
 
-    // --- Stable widget IDs (assigned once at creation) ---
-    /// Unique ID for the chat input TextEdit.
+    /// Set to true to request keyboard focus on the input TextEdit next frame.
+    pub(crate) wants_input_focus: bool,
+    /// The actual egui::Id of the input TextEdit widget (set each frame from
+    /// the Response, since we use `.id_salt()` instead of `.id()` the final
+    /// Id depends on the parent push_id scope).
+    pub(crate) actual_input_id: Option<egui::Id>,
+
+    // --- Stable widget ID salts (assigned once at creation) ---
+    /// Unique ID salt for the chat input TextEdit.
     pub(crate) input_id: egui::Id,
     /// Unique ID for the input row push_id scope (separate from input_id).
     pub(crate) input_scope_id: egui::Id,
@@ -56,6 +63,8 @@ impl Default for ChatPanelState {
             prev_message_count: 0,
             user_scrolled_up: false,
             oldest_disk_id: 0,
+            wants_input_focus: false,
+            actual_input_id: None,
             input_id: next_id(),
             input_scope_id: next_id(),
             input_scroll_id: next_id(),
