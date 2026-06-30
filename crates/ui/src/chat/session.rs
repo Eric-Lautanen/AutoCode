@@ -115,7 +115,7 @@ pub(crate) fn load_new_session(
             // Find the oldest non-Error message ID on disk for the
             // "Load full history" button check.
             let sess_dir = autocode_core::storage::session_messages_dir(new_proj, new_sess);
-            if autocode_core::storage::chunked_jsonl::has_chunked_files(&sess_dir) {
+            if autocode_core::storage::has_messages_file(&sess_dir) {
                 let on_disk = autocode_core::storage::load_all_messages(new_proj, new_sess);
                 panel_state.oldest_disk_id = on_disk
                     .iter()

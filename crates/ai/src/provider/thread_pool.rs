@@ -25,7 +25,10 @@ impl Worker {
             .spawn(move || {
                 loop {
                     let msg = {
-                        let lock = receiver.lock().unwrap();
+                        let lock = receiver.lock().unwrap_or_else(|p| {
+                            receiver.clear_poison();
+                            p.into_inner()
+                        });
                         lock.recv()
                     };
                     match msg {

@@ -174,8 +174,6 @@ impl ChatRuntime {
         for (_, _, pid) in self.running_tasks.drain(..) {
             super::tools::kill_process(pid);
         }
-        self.pending_response.clear();
-        self.reasoning_buf.clear();
         self.pending_tool_calls.clear();
         self.assistant_tool_calls_json = None;
         self.provider_error = None;
@@ -202,14 +200,12 @@ impl ChatRuntime {
         self.retry_after = None;
         self.next_completion_allowed = None;
         self.live_write_progress = None;
-        crate::provider::api_rate_limit_reset();
 
-        // Force deallocation of large buffers
+        // Force deallocation of large buffers (clear + shrink once each).
         self.pending_response.clear();
         self.pending_response.shrink_to(0);
         self.reasoning_buf.clear();
         self.reasoning_buf.shrink_to(0);
-
         self.live_shell_buf.clear();
         self.live_shell_buf.shrink_to(0);
     }

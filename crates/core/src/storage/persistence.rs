@@ -4,7 +4,7 @@ use std::sync::mpsc;
 use std::thread;
 
 use crate::state::ChatMessage;
-use crate::storage::chunked_jsonl;
+use crate::storage::messages;
 
 /// Commands sent to the background persistence thread.
 pub enum PersistenceCommand {
@@ -90,8 +90,7 @@ impl PersistenceThread {
         while let Ok(cmd) = rx.recv() {
             match cmd {
                 PersistenceCommand::AppendMessages { dir, messages } => {
-                    if let Err(e) = chunked_jsonl::append_messages_chunked(&dir, "", "", &messages)
-                    {
+                    if let Err(e) = messages::append_messages(&dir, "", "", &messages) {
                         eprintln!(
                             "[persistence] Failed to append messages to {:?}: {}",
                             dir, e
@@ -140,7 +139,10 @@ impl PersistenceThread {
 
     /// Drain any panic reports that have accumulated since the last check.
     pub fn drain_panics(&self) -> Vec<PanicInfo> {
-        let rx = self.panic_rx.lock().unwrap();
+        let rx = self.panic_rx.lock().unwrap_or_else(|p| {
+            self.panic_rx.clear_poison();
+            p.into_inner()
+        });
         let mut panics = Vec::new();
         while let Ok(info) = rx.try_recv() {
             panics.push(info);

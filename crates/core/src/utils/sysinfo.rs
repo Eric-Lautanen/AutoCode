@@ -699,7 +699,7 @@ fn grep_field(path: &str, field: &str) -> String {
 // ── Runtime helpers ───────────────────────────────────────────────────
 
 pub fn grep_note() -> &'static str {
-    LIVE_CACHE.get().map(|i| grep_note_from(i)).unwrap_or("")
+    ""
 }
 
 pub fn shell_tools_note() -> String {

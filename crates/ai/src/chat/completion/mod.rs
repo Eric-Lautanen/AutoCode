@@ -33,7 +33,9 @@ pub fn send_message(
         state.new_session_for_project(state.active_project_id.clone());
     }
     super::session::ensure_session(state);
-    let sid = state.active_session_id.clone().unwrap();
+    let Some(sid) = state.active_session_id.clone() else {
+        return;
+    };
     let runtime = runtimes.entry(sid.clone()).or_default();
     if runtime.is_busy() {
         return;

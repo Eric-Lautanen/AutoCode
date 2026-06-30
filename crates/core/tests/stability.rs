@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU16, Ordering};
 
 use autocode_core::{
     state::{ChatMessage, Project, Role},
-    storage::{self, SessionMeta, chunked_jsonl},
+    storage::{self, SessionMeta, messages},
     utils::fsutil,
 };
 
@@ -104,7 +104,7 @@ fn test_long_running_simulation() {
                 })
                 .collect();
 
-            chunked_jsonl::append_messages_chunked(&msg_dir, &meta.id, &meta.label, &msgs).unwrap();
+            messages::append_messages(&msg_dir, &meta.id, &meta.label, &msgs).unwrap();
             total_messages += msgs.len();
             total_sessions += 1;
         }
@@ -127,7 +127,7 @@ fn test_long_running_simulation() {
     // Verify each session has exactly its own 100 messages (per-session isolation).
     for sess in &sessions {
         let msg_dir = storage::session_messages_dir(loaded_project, sess);
-        let msgs = chunked_jsonl::read_all_messages_chunked(&msg_dir);
+        let msgs = messages::read_all_messages(&msg_dir);
         assert_eq!(
             msgs.len(),
             100,
@@ -175,7 +175,7 @@ fn test_crash_recovery() {
         })
         .collect();
 
-    chunked_jsonl::append_messages_chunked(&msg_dir, &meta.id, &meta.label, &msgs).unwrap();
+    messages::append_messages(&msg_dir, &meta.id, &meta.label, &msgs).unwrap();
 
     // Phase 2: Simulate crash — re-discover from disk.
     let projects = storage::discover_projects_from_disk();
@@ -196,7 +196,7 @@ fn test_crash_recovery() {
     assert!(loaded, "session must load successfully after crash");
 
     let msg_dir = storage::session_messages_dir(loaded_project, &sess);
-    let all_msgs = chunked_jsonl::read_all_messages_chunked(&msg_dir);
+    let all_msgs = messages::read_all_messages(&msg_dir);
     assert_eq!(all_msgs.len(), 50, "all 50 messages must survive crash");
     assert_eq!(sess.messages[0].content, "Message 1");
     assert_eq!(sess.label, "main_session");
@@ -231,13 +231,13 @@ fn test_truncate_preserves_early_messages() {
         })
         .collect();
 
-    chunked_jsonl::append_messages_chunked(&msg_dir, &meta.id, &meta.label, &msgs).unwrap();
+    messages::append_messages(&msg_dir, &meta.id, &meta.label, &msgs).unwrap();
 
     // Truncate to keep only messages with id <= 50.
-    chunked_jsonl::truncate_messages_chunked(&msg_dir, 50).unwrap();
+    messages::truncate_messages(&msg_dir, 50).unwrap();
 
     // Verify: messages 1-50 survive, 51-100 are gone.
-    let remaining = chunked_jsonl::read_all_messages_chunked(&msg_dir);
+    let remaining = messages::read_all_messages(&msg_dir);
     assert_eq!(
         remaining.len(),
         50,
@@ -250,13 +250,12 @@ fn test_truncate_preserves_early_messages() {
     );
     assert_eq!(remaining[49].id, 50, "last kept message must be id 50");
 
-    // Verify early messages are truly untouched by checking the first chunk file.
-    let chunk_files = std::fs::read_dir(&msg_dir)
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_name().to_string_lossy().starts_with("messages_"))
-        .collect::<Vec<_>>();
-    assert!(!chunk_files.is_empty(), "chunk files must exist");
+    // Verify the single messages file exists.
+    let msg_file = msg_dir.join("messages.jsonl");
+    assert!(
+        msg_file.exists(),
+        "messages.jsonl must exist after truncate"
+    );
 }
 
 // ── 4.4 Remove Messages By ID Test ──────────────────────────────────
@@ -288,15 +287,15 @@ fn test_remove_messages_by_id() {
         })
         .collect();
 
-    chunked_jsonl::append_messages_chunked(&msg_dir, &meta.id, &meta.label, &msgs).unwrap();
+    messages::append_messages(&msg_dir, &meta.id, &meta.label, &msgs).unwrap();
 
     // Remove messages 10, 20, 30.
     let ids_to_remove: std::collections::HashSet<u64> = [10, 20, 30].into_iter().collect();
-    let removed = chunked_jsonl::remove_messages_by_id(&msg_dir, &ids_to_remove).unwrap();
+    let removed = messages::remove_messages_by_id(&msg_dir, &ids_to_remove).unwrap();
     assert_eq!(removed, 3, "should remove exactly 3 messages");
 
     // Verify: 47 messages remain, messages 10/20/30 are gone, all others intact.
-    let remaining = chunked_jsonl::read_all_messages_chunked(&msg_dir);
+    let remaining = messages::read_all_messages(&msg_dir);
     assert_eq!(remaining.len(), 47, "should have 47 messages after removal");
     assert!(
         remaining.iter().all(|m| ![10, 20, 30].contains(&m.id)),

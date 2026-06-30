@@ -41,7 +41,7 @@ pub fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: 
 /// Falls back to the in-memory window only when no project is assigned yet.
 pub fn recompute_estimate_from_disk(state: &mut AppState, session_id: &str) {
     state.flush_pending_writes(true);
-    let tool_tokens = tool_defs_tokens_for_session(state, Some(session_id));
+    let tool_tokens = refresh_tool_tokens_cache(state, session_id);
     let messages = {
         let sess = state.sessions.iter().find(|s| s.id == session_id);
         sess.and_then(|s| {
@@ -71,28 +71,82 @@ pub fn recompute_estimate_from_disk(state: &mut AppState, session_id: &str) {
 }
 
 /// Compute the heuristic token count for tool definitions for a given session.
+/// Results are cached on the `Session` struct and only recomputed when the
+/// inputs that affect the tool definitions change (provider_label, model,
+/// handoff_enabled, strict-tools support). This avoids re-serializing 20+
+/// tool schemas on every message push.
 pub fn tool_defs_tokens_for_session(state: &AppState, session_id: Option<&str>) -> usize {
     let Some(sid) = session_id else { return 0 };
-    let (handoff_enabled, prov_label) = state
-        .sessions
-        .iter()
-        .find(|s| s.id == sid)
-        .map(|s| {
-            let label = if !s.provider_label.is_empty() {
-                s.provider_label.clone()
-            } else {
-                state.active_provider.clone()
-            };
-            (s.handoff_enabled, label)
-        })
-        .unwrap_or_else(|| (true, state.active_provider.clone()));
+    let Some(sess) = state.sessions.iter().find(|s| s.id == sid) else {
+        return 0;
+    };
+    let prov_label = if !sess.provider_label.is_empty() {
+        sess.provider_label.clone()
+    } else {
+        state.active_provider.clone()
+    };
     let strict = state
         .providers
         .get(&prov_label)
         .map(|p| p.supports_strict_tools())
         .unwrap_or(false);
-    let tools_json = crate::provider::tool_definitions(strict, handoff_enabled);
+    let key = (
+        prov_label.clone(),
+        sess.model.clone(),
+        sess.handoff_enabled,
+        strict,
+    );
+
+    // Fast path: cache is valid.
+    if sess.cached_tool_key.as_ref() == Some(&key) && sess.cached_tool_tokens > 0 {
+        return sess.cached_tool_tokens;
+    }
+
+    // Slow path: recompute. We need a mutable session to store the cache, but
+    // we received an immutable &AppState. Fall back to computing without
+    // caching when we can't get mut access — the next call through a mut path
+    // will populate the cache.
+    let tools_json = crate::provider::tool_definitions(strict, sess.handoff_enabled);
+    // No interior mutability available via &AppState; callers holding &mut
+    // AppState should use `refresh_tool_tokens_cache` to keep the cache warm.
     autocode_core::helpers::estimate_tools_tokens(&tools_json)
+}
+
+/// Recompute and cache the tool-definition token count on the session if the
+/// inputs have changed (or the cache is empty). Returns the cached value.
+/// Call this from any code path that holds `&mut AppState` before relying on
+/// the token estimate, so the cache stays warm and the immutable
+/// `tool_defs_tokens_for_session` fast path hits.
+pub fn refresh_tool_tokens_cache(state: &mut AppState, session_id: &str) -> usize {
+    let Some(sess) = state.sessions.iter_mut().find(|s| s.id == session_id) else {
+        return 0;
+    };
+    let prov_label = if !sess.provider_label.is_empty() {
+        sess.provider_label.clone()
+    } else {
+        state.active_provider.clone()
+    };
+    let strict = state
+        .providers
+        .get(&prov_label)
+        .map(|p| p.supports_strict_tools())
+        .unwrap_or(false);
+    let key = (
+        prov_label.clone(),
+        sess.model.clone(),
+        sess.handoff_enabled,
+        strict,
+    );
+
+    if sess.cached_tool_key.as_ref() == Some(&key) && sess.cached_tool_tokens > 0 {
+        return sess.cached_tool_tokens;
+    }
+
+    let tools_json = crate::provider::tool_definitions(strict, sess.handoff_enabled);
+    let tokens = autocode_core::helpers::estimate_tools_tokens(&tools_json);
+    sess.cached_tool_tokens = tokens;
+    sess.cached_tool_key = Some(key);
+    tokens
 }
 
 /// Unified session token estimate update using the single pipeline.

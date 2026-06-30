@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::helpers;
 use crate::state::{ChatMessage, Project, Role, Session};
-use crate::storage::chunked_jsonl;
+use crate::storage::messages;
 use crate::utils::fsutil;
 
 use super::session_meta::SessionMeta;
@@ -117,7 +117,7 @@ pub fn append_messages_to_jsonl(
         })
         .collect();
 
-    chunked_jsonl::append_messages_chunked(&dir, &session.id, &session.label, &sanitized)
+    messages::append_messages(&dir, &session.id, &session.label, &sanitized)
 }
 
 /// Save session metadata inside the session's subdirectory.
@@ -252,7 +252,7 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
 
 pub fn load_all_messages(project: &Project, session: &Session) -> Vec<ChatMessage> {
     let dir = session_messages_dir(project, session);
-    chunked_jsonl::read_all_messages_chunked(&dir)
+    messages::read_all_messages(&dir)
 }
 
 /// Truncate the session's chunked message files, keeping only messages
@@ -263,7 +263,7 @@ pub fn truncate_messages_after(
     keep_up_to_id: u64,
 ) -> std::io::Result<()> {
     let dir = session_messages_dir(project, session);
-    chunked_jsonl::truncate_messages_chunked(&dir, keep_up_to_id)
+    messages::truncate_messages(&dir, keep_up_to_id)
 }
 
 /// Remove specific messages from the session's chunked JSONL files by ID.
@@ -275,12 +275,12 @@ pub fn remove_messages_after(
     ids_to_remove: &std::collections::HashSet<u64>,
 ) -> std::io::Result<usize> {
     let dir = session_messages_dir(project, session);
-    chunked_jsonl::remove_messages_by_id(&dir, ids_to_remove)
+    messages::remove_messages_by_id(&dir, ids_to_remove)
 }
 
 fn read_jsonl_messages_from_dir(project: &Project, session: &Session) -> Vec<ChatMessage> {
     let dir = session_messages_dir(project, session);
-    chunked_jsonl::read_all_messages_chunked(&dir)
+    messages::read_all_messages(&dir)
 }
 
 pub fn delete_session_file(project: &Project, session: &Session) {
@@ -343,7 +343,7 @@ pub fn load_messages_before(
     count: usize,
 ) -> Vec<ChatMessage> {
     let dir = session_messages_dir(project, session);
-    chunked_jsonl::load_messages_chunked_before(&dir, before_id, count)
+    messages::load_messages_before(&dir, before_id, count)
 }
 
 fn cleanup_orphan_temp_files(dir: &Path, max_age_secs: u64) {

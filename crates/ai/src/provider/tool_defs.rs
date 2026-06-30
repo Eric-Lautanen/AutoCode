@@ -1,15 +1,7 @@
 // tool_defs.rs -- Tool definitions sent to the API.
 
 pub fn tool_definitions(strict: bool, handoff_enabled: bool) -> serde_json::Value {
-    let grep_note = autocode_core::utils::sysinfo::grep_note();
-    let grep_desc = if grep_note.is_empty() {
-        "Search code. Returns file:line matches. Literal by default; use ^prefix or suffix$ for regex. Glob filter, .gitignore respect.".to_string()
-    } else {
-        format!(
-            "Search code. Returns file:line matches. Literal by default; use ^prefix or suffix$ for regex. Glob filter, .gitignore respect. [!] {}",
-            grep_note
-        )
-    };
+    let grep_desc = "Search code. Returns file:line matches. Literal by default; use ^prefix or suffix$ for regex. Glob filter, .gitignore respect.".to_string();
 
     let shell_note = autocode_core::utils::sysinfo::shell_tools_note();
     let shell_desc = format!(

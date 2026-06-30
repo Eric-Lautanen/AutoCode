@@ -12,14 +12,16 @@ A toggleable mode that prunes old assistant/tool message pairs when the session'
 
 ## File Organization
 
-This is a distinct subsystem from the existing "trim RAM" logic already in `session_ops.rs` (372 lines — push/replay/trim/format) — that's a dumb count-based trim; this is scoring-based semantic pruning with its own state, file ops, and disk side-effects. It earns its own files rather than growing the existing ones further:
+**File:** `crates/ai/src/chat/session_ops.rs` (415 lines — push/replay/trim/format)
+
+This is a distinct subsystem from the existing "trim RAM" logic already in `session_ops.rs` — that's a dumb count-based trim; this is scoring-based semantic pruning with its own state, file ops, and disk side-effects. It earns its own files rather than growing the existing ones further:
 
 - **`crates/core/src/state/access_log.rs`** *(new)* — `FileAccessLog`, `AccessEntry`, `FileOp`. Fits the existing pattern of one state type per file (`chat.rs`, `session.rs`, `todo.rs`, etc.) under `core/src/state/`.
 - **`crates/ai/src/chat/looping.rs`** *(new)* — `apply_looping_window()`, `pair_groups()`, `is_unverified_edit_group()`, scoring, breadcrumb construction, dry-run logging. Register with `pub mod looping;` in `ai/src/chat/mod.rs` and export `apply_looping_window`. Keeping this separate from `session_ops.rs` means the existing trim-RAM path and the new scoring path can't accidentally tangle, and the ~150 lines of scoring logic gets its own home instead of pushing `session_ops.rs` past 500 lines.
 
 Everything else (new fields on `Session`/`AppState`/`ChatMessage`, the toggle button, settings) is a small, localized addition to an existing file and stays there — no need to split those out.
 
-**Note on the real chat module layout**: `polling.rs` is actually a directory now (`polling/mod.rs` 131 lines, `polling/stream.rs` 702 lines, `polling/tools.rs` 127 lines), and `ai/src/chat/tools.rs` (1,261 lines) is a *different* file from `polling/tools.rs` — the former executes the 21 tools, the latter collects results and calls `commit_tool_results`. The original draft of this plan was written against generic guessed paths/line numbers before the structure doc existed; the sections below are corrected against the real layout.
+**Note on the real chat module layout**: `polling.rs` is actually a directory now (`polling/mod.rs` 131 lines, `polling/stream.rs` 715 lines, `polling/tools.rs` 127 lines), and `completion.rs` is a directory (`completion/mod.rs` 553 lines, `completion/preflight.rs`, `completion/provider.rs`). `tools.rs` is also a directory (`tools/execute.rs` ~1,100 lines, `tools/meta.rs`, `tools/process.rs`) — `tools/execute.rs` executes the 21 tools, `polling/tools.rs` collects results and calls `commit_tool_results`. These are *different* files. The original draft of this plan was written against generic guessed paths/line numbers before the structure doc existed; the sections below are corrected against the real layout.
 
 ---
 
@@ -111,7 +113,7 @@ pub turn_count: u64,
 pub access_log: FileAccessLog,
 ```
 
-Add defaults in `Session::new()`: `false`/`0`/`FileAccessLog::new()`. `loop_max_pairs` is removed — the trigger threshold comes from the active model's `LoopAggressiveness` config.
+Add defaults in `Session::new()`: `false`/`false`/`0`/`FileAccessLog::new()`. The trigger threshold comes from the active model's `LoopAggressiveness` config — no `loop_max_pairs` field exists to remove (it was never added).
 
 **File:** `crates/core/src/state/chat.rs`
 
@@ -134,7 +136,7 @@ Set this on every `ChatMessage` at the moment it's pushed via `push_to_session()
 pub looping_window: bool,
 ```
 
-`loop_max_pairs` is not persisted — the threshold is derived from the model config at runtime. Add mapping in `SessionMeta::from_session()` (line ~81, but verify against current file).
+`loop_max_pairs` does not exist in `SessionMeta` — no removal needed. The threshold is derived from the model config at runtime. Add `looping_window` mapping in `SessionMeta::from_session()` (line ~81).
 
 **File:** `crates/core/src/storage/discovery.rs`
 
@@ -150,7 +152,7 @@ looping_window: meta.looping_window,
 
 **File:** `crates/core/src/state/provider.rs` (452 lines — "ApiProvider config, ProviderKind, ThinkingApi enum, model defaults")
 
-Add alongside the existing per-model fields (context window size, handoff threshold, etc.):
+Add alongside the existing per-model fields (context window size, handoff threshold, etc.). The per-model config struct is `ModelEntry` in `crates/core/src/storage/provider_file.rs` (line 30) — that's where `context_window`, `max_output_tokens`, `handoff_percent`, etc. live. Add `loop_aggressiveness` there:
 
 ```rust
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -192,20 +194,22 @@ impl LoopAggressiveness {
 }
 ```
 
-Add to the per-model config struct (whatever holds context window size and handoff threshold):
+Add to the per-model config struct (`ModelEntry` in `crates/core/src/storage/provider_file.rs`):
 
 ```rust
 #[serde(default)]
 pub loop_aggressiveness: LoopAggressiveness,
 ```
 
+Also add `LoopAggressiveness` to `crates/core/src/state/provider.rs` (or `crates/core/src/state/mod.rs` re-exports) so it's accessible from both `provider_file.rs` and `looping.rs`.
+
 **File:** `crates/core/src/helpers/serde_defaults.rs`
 
-Export via `crates/core/src/helpers/mod.rs` (remove the existing `default_loop_max_pairs` export).
+No `default_loop_max_pairs` exists to remove — it was never added. No changes needed here unless a new default function is desired for `LoopAggressiveness` (the `#[default]` attribute on the enum handles it).
 
-**File:** `crates/core/src/state/app_state.rs`
+**File:** `crates/core/src/helpers/mod.rs`
 
-Remove `loop_max_pairs` field — superseded. Token usage is already tracked per-session; `apply_looping_window()` reads it directly.
+No `default_loop_max_pairs` export exists to remove. No changes needed.
 
 
 
@@ -213,7 +217,7 @@ Remove `loop_max_pairs` field — superseded. Token usage is already tracked per
 
 ## Tool-Layer Instrumentation
 
-**Key constraint**: `execute_tool_with_cache()` (in `ai/src/chat/tools.rs`, the 1,261-line file that executes all 21 tools on the bg thread) takes `ToolExecCtx` which has no access to `Session` or `AppState`. File access logging cannot happen inside the tool function itself.
+**Key constraint**: `execute_tool_with_cache()` (in `ai/src/chat/tools/execute.rs`, the ~1,100-line file that executes all 21 tools on the bg thread) takes `ToolExecCtx` which has no access to `Session` or `AppState`. File access logging cannot happen inside the tool function itself.
 
 ### Solution: widen `ToolResult`
 
@@ -230,9 +234,11 @@ pub struct ToolResult {
 }
 ```
 
-**File:** `crates/ai/src/chat/polling/tools.rs` (127 lines — "tool result collection, handoff detection, commit_tool_results"; this is the layer that wraps each call to `execute_tool_with_cache()`, not `chat/tools.rs` itself):
+**File:** `crates/ai/src/chat/polling/tools.rs` (127 lines — "tool result collection, handoff detection, commit_tool_results"; this is the layer that wraps each call to `execute_tool_with_cache()`, not `chat/tools/execute.rs` itself):
 
 For each tool call, after `execute_tool_with_cache()` returns, extract file paths from the tool call arguments. Each tool handler already parses `args[path]` (or equivalent). Use the same parsing logic to fill `accessed_paths`:
+
+**Note**: The `ToolResult` struct is constructed in `polling/stream.rs` (~line 644), not `polling/tools.rs`. That's where the `accessed_paths` field needs to be populated — `stream.rs` is where tool calls are dispatched to the background thread and results are collected. `polling/tools.rs` receives the already-built `Vec<ToolResult>` from the channel.
 
 ```rust
 let accessed_paths = match tc.name.as_str() {
@@ -290,9 +296,9 @@ This is a general session persistence improvement that the looping work makes ne
 
 **The problem**: `push_tool_results_to_state()` currently pushes messages one at a time through `push_to_session()`, which calls the disk appender once per message. A frame with 5 parallel tool calls produces 5 separate disk writes with 5 separate fsyncs. On fast models doing multiple tool calls per second this is significant unnecessary I/O churn.
 
-**The fix**: `chunked_jsonl.rs` gets a new `append_batch()` function that takes a slice of messages, serializes all of them into the chunk in one pass, and fsyncs once at the end. `push_tool_results_to_state()` builds the full `Vec<ChatMessage>` for the frame first, then calls `append_batch()` once. The user message send path gets the same treatment — it's a single message so less dramatic, but consistent.
+**The fix**: `messages.rs` gets a new `append_batch()` function that takes a slice of messages, serializes all of them into the file in one pass, and fsyncs once at the end. `push_tool_results_to_state()` builds the full `Vec<ChatMessage>` for the frame first, then calls `append_batch()` once. The user message send path gets the same treatment — it's a single message so less dramatic, but consistent.
 
-**File:** `crates/core/src/storage/chunked_jsonl.rs` (323 lines)
+**File:** `crates/core/src/storage/messages.rs` (single-file JSONL — migrated from the former chunked format)
 
 ```rust
 /// Write multiple messages to the current chunk in one pass with a single
@@ -301,10 +307,8 @@ This is a general session persistence improvement that the looping work makes ne
 /// parallel tool results).
 pub fn append_batch(msg_dir: &Path, messages: &[ChatMessage]) -> Result<()> {
     if messages.is_empty() { return Ok(()); }
-    // Open/create the current chunk file, write all messages as JSONL lines,
-    // fsync once. Follow the same crash-safe temp-file pattern append() uses
-    // for chunk rotation, but rotation only triggers after the full batch is
-    // written — don't split a batch across two chunk files mid-write.
+    // Open/create the messages file, write all messages as JSONL lines,
+    // fsync once. No chunk rotation — single file.
 }
 ```
 
@@ -322,7 +326,7 @@ let mut messages_to_write: Vec<ChatMessage> = results.iter()
 // NOTE: verify the exact helper for resolving the session message directory
 // against session_io.rs — it may be named differently from session_msg_dir().
 if let Some(msg_dir) = session_msg_dir(state, session_id) {
-    chunked_jsonl::append_batch(&msg_dir, &messages_to_write)?;
+    messages::append_batch(&msg_dir, &messages_to_write)?;
 }
 
 // 3. Update RAM state (access log, session.messages if still used)
@@ -551,11 +555,11 @@ pub fn apply_looping_window(state: &mut AppState, session_id: &str) -> Option<()
             // Verify the exact function signature there before calling.
             let _ = autocode_core::storage::remove_messages_by_id(&msg_dir, &to_remove);
             // Append each breadcrumb through whatever disk-write path
-            // push_to_session() already uses for new messages (the chunked
-            // JSONL appender in core/src/storage/chunked_jsonl.rs) — don't
+            // push_to_session() already uses for new messages (the
+            // JSONL appender in core/src/storage/messages.rs) — don't
             // add a second, separate "append_message" entry point.
             for bc in breadcrumb_for.values() {
-                let _ = autocode_core::storage::chunked_jsonl::append(&msg_dir, bc);
+                let _ = autocode_core::storage::messages::append(&msg_dir, bc);
             }
         }
     }
@@ -610,11 +614,11 @@ pub fn apply_looping_window(state: &mut AppState, session_id: &str) -> Option<()
 
 **File:** `crates/ai/src/chat/polling/mod.rs` (131 lines — owns the `update_runtime`/`update_all` frame loop that ties `stream.rs` and `tools.rs` together)
 
-- One call to `apply_looping_window()` at the end of the frame loop, after a tool-commit *or* a text-only completion has landed for that session. This replaces the original 3-scattered-call-sites idea (after tool commit in `polling/tools.rs`, after streaming text in `polling/stream.rs`) — calling once per frame from the loop that already sequences both paths is simpler and avoids redundant O(n) scans when several pushes happen in one frame.
+- One call to `apply_looping_window()` at the end of `update_runtime()` (after line 54, after all poll_* calls), after a tool-commit *or* a text-only completion has landed for that session. This replaces the original 3-scattered-call-sites idea (after tool commit in `polling/tools.rs`, after streaming text in `polling/stream.rs`) — calling once per frame from the loop that already sequences both paths is simpler and avoids redundant O(n) scans when several pushes happen in one frame.
 
-**File:** `crates/ai/src/chat/completion.rs`
+**File:** `crates/ai/src/chat/completion/mod.rs`
 
-- A second call at the start of `start_completion()`, before building the API request — the belt-and-suspenders guarantee that context is trimmed immediately before going to the wire even if something landed outside the normal frame-loop path.
+- A second call at the start of `start_completion()` (line 58), before building the API request — the belt-and-suspenders guarantee that context is trimmed immediately before going to the wire even if something landed outside the normal frame-loop path.
 
 ---
 
@@ -653,7 +657,7 @@ Resolve the aggressiveness label and trigger percentage from the active model's 
 
 ## Disable Handoff When Looping
 
-**File:** `crates/ai/src/chat/completion.rs`, `check_auto_handoff()` function — this file already "handles handoff & auto-continue," so this is where the existing function lives, not `polling.rs`/`polling/mod.rs`:
+**File:** `crates/ai/src/chat/completion/mod.rs`, `check_auto_handoff()` function (line 421) — this file handles handoff & auto-continue:
 
 ```rust
 // Suppress auto-handoff when looping window is active.
@@ -668,7 +672,7 @@ Only auto-handoff is suppressed. Manual handoff tool calls still work.
 
 ## Turn Count Increment
 
-**File:** `crates/ai/src/chat/completion.rs`, `start_completion()`
+**File:** `crates/ai/src/chat/completion/mod.rs`, `start_completion()` (line 58)
 
 At the start of each completion cycle (after the early-return checks, before building the request):
 
@@ -700,7 +704,7 @@ impl ChatMessage {
 
 Add `is_prune_marker: bool` (default `false`) to `ChatMessage`. `pair_groups()` should skip marker messages entirely when grouping (they sit outside any group, same as System/User).
 
-Also add `is_error: bool` to `ToolMeta` in the same file (default `false`). Set this to `true` in `commit_tool_results()` (`crates/ai/src/chat/polling/tools.rs`) when the tool result content begins with the structured JSON error prefix produced by `tool_error.rs`. This lets the UI (`crates/ui/src/chat/tool_result.rs`) and `looping.rs` scoring distinguish a tool call that errored from one that succeeded without re-parsing the content string — the `Role::Error` on `ChatMessage` already signals this at the message level, but `ToolMeta.is_error` makes it available when iterating a group's messages without re-checking the role on each.
+Also add `is_error: bool` to `ToolMeta` in the same file (default `false`). **Already done** — `ToolMeta` already has `is_error: bool` at line 36. Set this to `true` in `commit_tool_results()` (`crates/ai/src/chat/polling/tools.rs:79`) when the tool result content begins with the structured JSON error prefix produced by `tool_error.rs`. This lets the UI (`crates/ui/src/chat/tool_result.rs`) and `looping.rs` scoring distinguish a tool call that errored from one that succeeded without re-parsing the content string — the `Role::Error` on `ChatMessage` already signals this at the message level, but `ToolMeta.is_error` makes it available when iterating a group's messages without re-checking the role on each.
 
 ---
 
@@ -731,34 +735,36 @@ When set, `apply_looping_window()` computes `to_remove` and the breadcrumb summa
 | File | Changes |
 |---|---|
 | `crates/core/src/state/mod.rs` | Add `pub mod access_log;` |
-| `crates/core/src/state/session.rs` | Add `looping_window`, `loop_dry_run`, `turn_count`, `access_log`; remove `loop_max_pairs`; update `new()` |
-| `crates/core/src/state/chat.rs` | Add `is_prune_marker: bool` to `ChatMessage`; add `ChatMessage::prune_marker()` constructor; add `is_error: bool` to `ToolMeta` |
-| `crates/core/src/state/app_state.rs` | Add helper methods `active_model_aggressiveness()` and `active_model_context_window()` for use by `looping.rs`; remove `loop_max_pairs` field |
-| `crates/core/src/state/provider.rs` | Add `LoopAggressiveness` enum; add `loop_aggressiveness: LoopAggressiveness` to per-model config struct |
-| `crates/core/src/helpers/serde_defaults.rs` | Remove `default_loop_max_pairs()` — no longer needed |
-| `crates/core/src/helpers/mod.rs` | Remove export of `default_loop_max_pairs` |
+| `crates/core/src/state/session.rs` | Add `looping_window`, `loop_dry_run`, `turn_count`, `access_log`; update `new()`. No `loop_max_pairs` to remove (never existed). |
+| `crates/core/src/state/chat.rs` | Add `is_prune_marker: bool` to `ChatMessage`; add `ChatMessage::prune_marker()` constructor; add `turn: u64` to `ChatMessage`. `ToolMeta` already has `is_error: bool` (line 36) — no change needed there. |
+| `crates/core/src/state/app_state.rs` | Add helper methods `active_model_aggressiveness()` and `active_model_context_window()` for use by `looping.rs`. No `loop_max_pairs` field to remove. |
+| `crates/core/src/state/provider.rs` | Add `LoopAggressiveness` enum. The per-model config lives in `ModelEntry` (`crates/core/src/storage/provider_file.rs:30`) — add `loop_aggressiveness` field there. |
+| `crates/core/src/storage/provider_file.rs` | Add `loop_aggressiveness: LoopAggressiveness` to `ModelEntry` struct (line 30). Also update `ApiProvider::new()` in `provider.rs` which constructs `ModelEntry` defaults (line ~289). |
+| `crates/core/src/helpers/serde_defaults.rs` | No changes needed — `LoopAggressiveness` uses `#[default]` attribute. |
+| `crates/core/src/helpers/mod.rs` | No changes needed. |
 
 ### Modified — Session Persistence
 | File | Changes |
 |---|---|
-| `crates/core/src/storage/session_meta.rs` | Add `looping_window` to `SessionMeta`; `from_session()`. **Not** `loop_max_pairs` (removed) or `loop_dry_run` (not persisted). |
+| `crates/core/src/storage/session_meta.rs` | Add `looping_window` to `SessionMeta`; `from_session()`. **Not** `loop_dry_run` (not persisted). No `loop_max_pairs` to remove. |
 | `crates/core/src/storage/discovery.rs` | Add `looping_window` to direct `Session` construction; rebuild `access_log` from `ToolMeta` on load |
 
 ### Modified — Storage
 | File | Changes |
 |---|---|
-| `crates/core/src/storage/chunked_jsonl.rs` | Add `append_batch(&[ChatMessage])` — writes all messages in one pass, one fsync. Existing `append()` stays for single-message cases (user send). Chunk rotation logic applies to the batch as a whole — don't split a batch across chunk files mid-write. |
+| `crates/core/src/storage/messages.rs` | Add `append_batch(&[ChatMessage])` — writes all messages in one pass, one fsync. Single-file JSONL (no chunk rotation). |
 
 ### Modified — AI / Chat Logic
 | File | Changes |
 |---|---|
-| `crates/ai/src/chat/runtime.rs` | Add `accessed_paths: Vec<String>` to `ToolResult` |
-| `crates/ai/src/chat/tools.rs` | No change — this file only executes tools; access recording happens one layer up in `polling/tools.rs` |
-| `crates/ai/src/chat/polling/tools.rs` | Populate `ToolResult.accessed_paths` per tool call, inside the existing result-collection pass that builds each `ToolResult` before `commit_tool_results` |
-| `crates/ai/src/chat/polling/mod.rs` | Call `looping::apply_looping_window()` once at the end of the frame loop, after either a tool-commit or a text-only completion lands |
+| `crates/ai/src/chat/runtime.rs` | Add `accessed_paths: Vec<String>` to `ToolResult` (line 66) |
+| `crates/ai/src/chat/tools/execute.rs` | No change — this file only executes tools; access recording happens one layer up in `polling/stream.rs` |
+| `crates/ai/src/chat/polling/stream.rs` | Populate `ToolResult.accessed_paths` when building each `ToolResult` (line ~644), inside the background thread that dispatches tool calls and collects results |
+| `crates/ai/src/chat/polling/tools.rs` | No change to result collection — receives already-built `Vec<ToolResult>` from channel. `commit_tool_results()` (line 79) passes them through to `push_tool_results_to_state`. |
+| `crates/ai/src/chat/polling/mod.rs` | Call `looping::apply_looping_window()` once at the end of `update_runtime()` (after line 54), after either a tool-commit or a text-only completion lands |
 | `crates/ai/src/chat/session_ops.rs` | Switch `push_tool_results_to_state()` from per-message push loop to batch: build full `Vec<ChatMessage>` first, call `append_batch()` once, then record access log. The scoring/removal algorithm itself lives in `looping.rs`, not here. |
 | `crates/ai/src/chat/looping.rs` *(new)* | `apply_looping_window()`, `pair_groups()`, `is_unverified_edit_group()`, breadcrumb construction, `loop_dry_run` log-only branch |
-| `crates/ai/src/chat/completion.rs` | Call `looping::apply_looping_window()` at the start of `start_completion()`; increment `sess.turn_count`; suppress auto-handoff in `check_auto_handoff()` when `looping_window` is set |
+| `crates/ai/src/chat/completion/mod.rs` | Call `looping::apply_looping_window()` at the start of `start_completion()` (line 58); increment `sess.turn_count`; suppress auto-handoff in `check_auto_handoff()` (line 421) when `looping_window` is set |
 | `crates/ai/src/chat/mod.rs` | Add `pub mod looping;`; export `apply_looping_window` |
 
 ### Modified — UI
@@ -769,9 +775,9 @@ When set, `apply_looping_window()` computes `to_remove` and the breadcrumb summa
 | `crates/ui/src/chat/session.rs` | Restore `looping_window` on tab switch (this file already owns save_old/load_new lifecycle, so no separate `app.rs` change needed) |
 | `crates/ui/src/settings/providers.rs` | Add `LoopAggressiveness` picker per model (Conservative / Balanced / Aggressive) alongside the existing handoff threshold control. This is the right home since aggressiveness is per-model config, not per-session. Add `loop_dry_run` toggle here too, clearly labeled as a developer/debug option. |
 
-**Note on settings location**: `loop_dry_run` moves out of `settings/session.rs` and into `settings/providers.rs` — it's a per-model debug flag, not a per-session user setting. `settings/session.rs` no longer needs any changes for this feature since `loop_max_pairs` is removed.
+**Note on settings location**: `loop_dry_run` moves out of `settings/session.rs` and into `settings/providers.rs` — it's a per-model debug flag, not a per-session user setting. `settings/session.rs` no longer needs any changes for this feature.
 
-**Total: 2 new files + 20 modified files = 22 files.**
+**Total: 2 new files + 21 modified files = 23 files.** (Updated from original 22 — `provider_file.rs` was missing from the original count since `ModelEntry` lives there, not in `provider.rs`.)
 
 ---
 
@@ -780,7 +786,7 @@ When set, `apply_looping_window()` computes `to_remove` and the breadcrumb summa
 Before enabling the toggle by default:
 
 1. **API-shape invariant test** (the one that matters most): after any `apply_looping_window()` run, assert that the resulting `messages` slice never has an `Assistant` message with tool calls that isn't immediately followed by matching `Tool` results, and never has an orphaned `Tool` message with no preceding `Assistant`. `core/tests/stability.rs` already simulates 70 sessions / 7,000 messages and crash-recovery round-trips — that's the natural place to add a looping-enabled variant of that simulation and assert the invariant holds under realistic load, rather than standing up a separate test harness. Pure-function cases (varying group sizes, error mixes, interleaved markers) can stay as fast inline `#[cfg(test)]` unit tests in `looping.rs` itself.
-2. **Batch write atomicity test**: simulate a frame with N tool results, confirm `append_batch()` produces exactly one chunk file write and that all N messages are present on disk after a single call. Verify that a simulated crash mid-batch (truncated write) leaves the chunk in a state that `read_all()` can handle gracefully — either all N messages or none, not a partial set.
+2. **Batch write atomicity test**: simulate a frame with N tool results, confirm `append_batch()` produces exactly one file write and that all N messages are present on disk after a single call. Verify that a simulated crash mid-batch (truncated write) leaves the file in a state that `read_all_messages()` can handle gracefully — either all N messages or none, not a partial set.
 3. **Breadcrumb-before-removal ordering test**: confirm that in `apply_looping_window()` the breadcrumb is present on disk before `remove_messages_by_id()` is called, by intercepting at the storage layer.
 4. **Token threshold test**: confirm that with a session at 74% of context window and `Balanced` aggressiveness (trigger 75%), `apply_looping_window()` returns `None` without touching messages; at 76% it enters the scoring path. Test all three aggressiveness levels at their boundaries.
 5. **Single-group removal test**: confirm that even when many groups are scoreable, exactly 1 is removed per call, and a second call after re-checking the threshold may or may not fire depending on whether tokens dropped below the threshold after the first removal.
@@ -798,7 +804,7 @@ Tool dispatch (polling/tools.rs)
 push_tool_results_to_state() (session_ops.rs)
     │  convert all ToolResults → ChatMessages
     │  record accessed_paths → session.access_log
-    │  chunked_jsonl::append_batch() — one fsync for the whole frame
+    │  messages::append_batch() — one fsync for the whole frame
     ▼
 Disk (source of truth, fully consistent)
     │

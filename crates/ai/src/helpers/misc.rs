@@ -8,6 +8,9 @@ pub fn gen_tool_call_id() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos() as u64;
+    // Mix in a monotonic counter so two IDs generated in the same nanosecond
+    // on the same thread still differ.
+    rng ^= autocode_core::helpers::ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     // xorshift64 for cheap pseudo-randomness
     let mut next = || -> u64 {
         rng ^= rng << 13;

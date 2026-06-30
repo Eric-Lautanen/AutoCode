@@ -637,8 +637,8 @@ impl AppState {
             }
         }
         let mut batches = Vec::new();
-        for (sid, msgs) in &grouped {
-            let Some(sess) = self.sessions.iter().find(|s| s.id == *sid) else {
+        for (sid, msgs) in grouped {
+            let Some(sess) = self.sessions.iter().find(|s| s.id == sid) else {
                 continue;
             };
             let Some(pid) = sess.project_id.as_ref() else {
@@ -649,7 +649,7 @@ impl AppState {
             };
             // Resolve the directory path NOW, before any label change.
             let dir = crate::storage::session_messages_dir(proj, sess);
-            batches.push((dir, msgs.clone()));
+            batches.push((dir, msgs));
         }
         self.pending_writes.last_write = std::time::Instant::now();
         batches

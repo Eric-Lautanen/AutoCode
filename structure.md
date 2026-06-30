@@ -117,7 +117,7 @@ crates/core/src/state/session.rs               | 255
 crates/core/src/state/todo.rs                   | 115
 crates/core/src/storage/mod.rs                  |  33
 crates/core/src/storage/app_storage.rs           |  12
-crates/core/src/storage/chunked_jsonl.rs         | 287
+crates/core/src/storage/messages.rs             |  230
 crates/core/src/storage/discovery.rs            | 209
 crates/core/src/storage/persistence.rs          | 147
 crates/core/src/storage/provider_file.rs        | 237

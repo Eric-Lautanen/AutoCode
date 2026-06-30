@@ -28,7 +28,7 @@ pub fn show_about(ui: &mut egui::Ui, state: &mut AppState) {
         .collect::<Vec<&str>>()
         .join(" | ");
     let info = [
-        ("Version", "0.1.0"),
+        ("Version", env!("CARGO_PKG_VERSION")),
         ("UI", "egui 0.34 / eframe 0.34"),
         ("Language", "Rust -- serde, egui only"),
         ("Providers", providers_str.as_str()),

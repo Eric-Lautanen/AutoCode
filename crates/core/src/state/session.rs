@@ -98,6 +98,16 @@ pub struct Session {
     /// compare it against the estimate at request time, not the current one.
     #[serde(default)]
     pub estimated_full_at_request: usize,
+
+    /// Cached token count for the tool definitions sent with API requests.
+    /// Recomputed only when the inputs that affect it change
+    /// (provider_label, model, handoff_enabled, strict-tools support).
+    /// `0` means "not yet computed" — callers must compute on first use.
+    /// Stored alongside a snapshot of the inputs so staleness is detectable.
+    #[serde(skip)]
+    pub cached_tool_tokens: usize,
+    #[serde(skip)]
+    pub cached_tool_key: Option<(String, String, bool, bool)>,
 }
 
 impl Session {
@@ -136,6 +146,8 @@ impl Session {
             draft_input: String::new(),
             token_correction_ratio: 1.0,
             estimated_full_at_request: 0,
+            cached_tool_tokens: 0,
+            cached_tool_key: None,
         }
     }
 
