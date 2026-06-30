@@ -1,20 +1,23 @@
+// completion/mod.rs -- Completion orchestration: send messages, start API calls, handoff, auto-continue.
+
+pub(crate) mod preflight;
+pub(crate) mod provider;
+
 use std::collections::HashMap;
 
-use crate::{
-    helpers,
-    provider::{CompletionRequest, ProviderClient, ToolChoice, count_input_tokens},
-};
-use autocode_core::{
-    helpers as core_helpers,
-    state::{AppState, ChatMessage, Role, TodoStatus, ToolMeta},
-};
+use crate::{helpers, provider::ProviderClient};
+use autocode_core::state::{AppState, ChatMessage, Role, TodoStatus, ToolMeta};
 
 use super::runtime::ChatRuntime;
 use super::session_ops::{
     context_usage_info_for_session, format_context_usage, project_root_for_session, push_error,
-    push_runtime, push_to_session, trim_session_ram,
+    push_runtime, push_to_session,
 };
 use super::tools::kill_process;
+
+// Internal helpers — pub(crate) so they can be used within the crate but not re-exported.
+pub(crate) use preflight::preflight_context_check;
+pub(crate) use provider::{build_completion_request, select_provider};
 
 // -- Send a user message -------------------------------------------------------
 
@@ -62,8 +65,6 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
     // Sync web rate limit from state so provider uses the latest value.
     crate::provider::set_web_rate_limit_ms(state.web_rate_limit_ms);
     // Rate limit: enforce minimum delay between completion starts.
-    // If we're called before the delay has elapsed, use the non-blocking
-    // retry_after timer so the UI doesn't freeze.
     if state.disk_read_delay_ms > 0
         && let Some(allowed) = runtime.next_completion_allowed
         && std::time::Instant::now() < allowed
@@ -71,74 +72,32 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
         runtime.retry_after = Some(allowed);
         return;
     }
-    let session_id = match runtime.active_session_id.as_deref() {
-        Some(id) => id,
-        None => {
-            runtime.status = "No active session.".into();
-            push_error(
-                state,
-                runtime,
-                "No active session. Create or select a session first.".to_string(),
-            );
-            return;
-        }
+    let session_id_owned = runtime.active_session_id.as_deref().map(|s| s.to_string());
+    let session_id = session_id_owned.as_deref().unwrap_or("");
+    if session_id.is_empty() {
+        runtime.status = "No active session.".into();
+        push_error(
+            state,
+            runtime,
+            "No active session. Create or select a session first.".to_string(),
+        );
+        return;
+    }
+    let (provider, prov_label) = match select_provider(state, runtime, session_id) {
+        Some(result) => result,
+        None => return,
     };
-    let (provider, prov_label) = {
-        let prov_label = state
-            .sessions
-            .iter()
-            .find(|s| s.id == session_id)
-            .and_then(|s| {
-                let label = if !s.provider_label.is_empty() {
-                    s.provider_label.clone()
-                } else {
-                    state.active_provider.clone()
-                };
-                state.providers.get(&label).and_then(|p| {
-                    if p.enabled && !p.api_key.is_empty() {
-                        Some((label, p.clone()))
-                    } else {
-                        None
-                    }
-                })
-            });
-        match prov_label {
-            Some((label, p)) => (p, label),
-            None => {
-                let label = state.active_provider.clone();
-                match state.providers.get(&label) {
-                    Some(p) if p.enabled && !p.api_key.is_empty() => (p.clone(), label),
-                    Some(_) => {
-                        runtime.status = "API key not set.".into();
-                        push_error(
-                            state,
-                            runtime,
-                            format!(
-                                "API key not set for provider \"{label}\". Go to Settings -> Providers to configure it."
-                            ),
-                        );
-                        return;
-                    }
-                    None => {
-                        runtime.status = "No provider configured.".into();
-                        push_error(
-                            state,
-                            runtime,
-                            format!(
-                                "Provider \"{label}\" not found. Go to Settings -> Providers to configure it."
-                            ),
-                        );
-                        return;
-                    }
-                }
-            }
-        }
-    };
+    // Clone provider fields needed after the borrow is released.
+    let provider_model = provider.model.clone();
+    let provider_kind = provider.kind.clone();
+    let provider_thinking_api = provider.thinking_api.clone();
+    let provider_thinking_overrides = provider.thinking_overrides.clone();
+    let provider_max_output_tokens = provider.max_output_tokens;
+    let provider_max_output_tokens_thinking = provider.max_output_tokens_thinking;
+    let _provider_label = prov_label.clone();
+    let provider_clone = provider.clone();
 
     // Rate limit: non-blocking wait before starting the request.
-    // Uses the same retry_after mechanism as the retry backoff — the UI
-    // shows a countdown and start_completion fires again when the timer
-    // expires.
     let rate_wait_ms = crate::provider::api_rate_limit_wait_ms(&provider, &prov_label);
     if rate_wait_ms > 50 {
         runtime.status = format!(
@@ -152,21 +111,15 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
     crate::provider::api_rate_limit_record(&provider, &prov_label);
 
     // Gate: advance the completion-delay timer now that we're committed
-    // to sending a request. Doing this after the API rate-limit check
-    // prevents advancing the timer on aborted attempts.
+    // to sending a request.
     if state.disk_read_delay_ms > 0 {
         runtime.next_completion_allowed = Some(
             std::time::Instant::now() + std::time::Duration::from_millis(state.disk_read_delay_ms),
         );
     }
 
-    let messages = super::session::prepare_request_messages_for_session(state, session_id);
-
-    // Trim RAM now that the full history is safely checkpointed to disk.
-    trim_session_ram(state, session_id);
-
     // Read thinking/reasoning from the session so each session remembers
-    // its own settings. Falls back to provider defaults for legacy sessions.
+    // its own settings.
     let session_thinking_mode = state
         .sessions
         .iter()
@@ -203,16 +156,14 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
             }
         });
 
-    let can_think = provider.thinking_api.supports_thinking()
-        || provider.thinking_overrides.iter().any(|(k, _)| k != "off");
+    let can_think = provider_thinking_api.supports_thinking()
+        || provider_thinking_overrides.iter().any(|(k, _)| k != "off");
     let thinking = session_thinking_mode && can_think;
-    let defs = autocode_core::helpers::model_or_safe(&provider.kind, &provider.model);
-    let thinking_api = provider.thinking_api.clone();
-    // Some providers always do reasoning through their proxy — can't disable.
-    // Must use the higher token budget so content isn't starved.
+    let defs = autocode_core::helpers::model_or_safe(&provider_kind, &provider_model);
+    let thinking_api = provider_thinking_api.clone();
     let force_thinking = thinking_api.supports_thinking();
     let mut max_tokens = if thinking || force_thinking {
-        let t = provider.max_output_tokens_thinking;
+        let t = provider_max_output_tokens_thinking;
         if t > 0 {
             t
         } else {
@@ -220,145 +171,37 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
                 .unwrap_or(defs.max_output_tokens * 2)
         }
     } else {
-        let t = provider.max_output_tokens;
+        let t = provider_max_output_tokens;
         if t > 0 { t } else { defs.max_output_tokens }
     };
     let reasoning_effort = session_reasoning_effort.to_string();
 
     // Pre-flight context check.
-    //
-    // estimated_full_tokens was already updated by
-    // prepare_request_messages_for_session (called above at line 163) using the
-    // unified pipeline, so it correctly reflects all disk-backed messages + tool
-    // definitions. We apply the learned correction ratio and try API counting when
-    // the cache is missing or the model changed (same strategy as the old full
-    // recompute — keeps the fast path fast).
-    let _estimated = {
-        let (cached, model_changed, correction) = state
-            .sessions
-            .iter()
-            .find(|s| s.id == session_id)
-            .map(|s| {
-                let changed = !s.model.is_empty() && s.model != provider.model;
-                (s.estimated_full_tokens, changed, s.token_correction_ratio)
-            })
-            .unwrap_or((0, false, 1.0));
-
-        // Baseline from the unified pipeline estimate (includes tool tokens).
-        // Full recompute (including API counting) only when the cache is stale.
-        let estimated = if cached > 0 && !model_changed {
-            if correction > 0.0 && correction.is_finite() {
-                (cached as f32 * correction).round() as usize
-            } else {
-                cached
-            }
-        } else {
-            // Cache is missing or the model changed — do a full recompute
-            // with the same two-tier strategy as before.
-            let msgs: Vec<serde_json::Value> = messages
-                .iter()
-                .map(|m| {
-                    let mut obj = serde_json::json!({
-                        "role": m.role,
-                        "content": m.content,
-                    });
-                    if let Some(id) = &m.tool_call_id {
-                        obj["tool_call_id"] = serde_json::json!(id);
-                    }
-                    if let Some(tc) = &m.tool_calls {
-                        obj["tool_calls"] = tc.clone();
-                    }
-                    if let Some(rc) = &m.reasoning_content {
-                        obj["reasoning_content"] = serde_json::json!(rc);
-                    }
-                    obj
-                })
-                .collect();
-            let body = serde_json::json!({
-                "messages": msgs,
-            });
-            let json_str = serde_json::to_string(&body).unwrap_or_default();
-            let tools_json = crate::provider::tool_definitions(
-                provider.supports_strict_tools(),
-                session_handoff,
-            );
-            let tool_tokens = core_helpers::estimate_tools_tokens(&tools_json);
-
-            // Tier 1: API-based counting (most accurate) with short timeout.
-            // Tier 2: Heuristic fallback on the serialized JSON.
-            let count = if provider.has_counting_api()
-                && let Ok(api_count) = count_input_tokens(&provider, &json_str, &provider.model, 5)
-            {
-                api_count.saturating_add(tool_tokens)
-            } else {
-                core_helpers::estimate_tokens_json(&json_str).saturating_add(tool_tokens)
-            };
-
-            if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == session_id) {
-                sess.estimated_full_tokens = count;
-            }
-            count
-        };
-
-        let max_context = provider.max_context_tokens as usize;
-        let max_output = max_tokens as usize;
-
-        if estimated + max_output > max_context {
-            let room = max_context.saturating_sub(estimated);
-            if room < 1000 && state.handoff_enabled {
-                runtime.drain();
-                handle_handoff(state, runtime);
-                return;
-            }
-            if room < 256 {
-                runtime.status = "Context window would be exceeded.".into();
-                push_error(
-                    state,
-                    runtime,
-                    format!(
-                        "This request would exceed the model's context window \
-                         (estimated {} + {} output > {} max). \
-                         Enable auto-handoff in Settings or reduce conversation length.",
-                        estimated, max_output, max_context
-                    ),
-                );
-                return;
-            }
-            // Clamp max_tokens to what fits — better to get a short response
-            // than to block the request entirely.
-            max_tokens = room as u32;
-        }
-        estimated
-    };
-
-    let temperature =
-        if thinking && provider.thinking_api == autocode_core::state::ThinkingApi::DeepSeek {
-            0.0
-        } else {
-            provider.temperature.clamp(0.0, 2.0)
-        };
-    let top_p = provider.top_p.max(0.01); // must be > 0 for most providers
-
-    let req = CompletionRequest {
-        messages,
-        model: provider.model.clone(),
-        temperature,
+    let preflight = match preflight_context_check(
+        state,
+        runtime,
+        &provider_clone,
+        session_id,
+        session_handoff,
         max_tokens,
-        stream: true,
-        tools: true,
-        tool_choice: ToolChoice::Auto,
-        parallel_tool_calls: provider.kind.supports_parallel_tool_calls(),
-        request_timeout_secs: state.request_timeout_secs,
-        stream_idle_timeout_secs: state.stream_idle_timeout_secs,
-        thinking_mode: thinking,
-        reasoning_effort,
-        thinking_api,
-        thinking_overrides: provider.thinking_overrides.clone(),
-        top_p,
-        frequency_penalty: provider.frequency_penalty.clamp(-2.0, 2.0),
-        presence_penalty: provider.presence_penalty.clamp(-2.0, 2.0),
-        handoff_enabled: session_handoff,
+    ) {
+        Some(result) => result,
+        None => return,
     };
+    max_tokens = preflight.max_tokens;
+
+    let req = build_completion_request(
+        state,
+        &provider_clone,
+        provider::CompletionParams {
+            session_id: session_id.to_string(),
+            session_handoff,
+            thinking,
+            thinking_api,
+            max_tokens,
+            reasoning_effort,
+        },
+    );
 
     runtime.pending_response.clear();
     runtime.reasoning_buf.clear();
@@ -379,7 +222,7 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
     {
         sess.estimated_full_at_request = sess.estimated_full_tokens;
     }
-    let event_rx = ProviderClient::complete(provider, req);
+    let event_rx = ProviderClient::complete(provider_clone, req);
     runtime.stream_rx = Some(event_rx);
     runtime.net_status.reset();
     runtime.net_status.active = true;
@@ -415,13 +258,16 @@ pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     }
 
     // Save the old session to disk before creating the new one.
-    // The JSONL is append-only - just flush pending writes and update metadata.
     if let Some(sess) = state.active_session()
         && let Some(pid) = sess.project_id.as_ref()
         && let Some(proj) = state.projects.iter().find(|p| &p.id == pid)
         && let Err(e) = autocode_core::storage::save_session_meta(proj, sess)
     {
-        eprintln!("[chat] Failed to save session meta before handoff: {}", e);
+        push_error(
+            state,
+            runtime,
+            format!("Failed to save session meta before handoff: {}", e),
+        );
     }
     // Capture the old session's project_task_list before creating the new session.
     let old_ptl = state
@@ -435,7 +281,6 @@ pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     // Carry forward the handoff setting so the chain continues.
     if let Some(sess) = state.active_session_mut() {
         sess.handoff_enabled = handoff_was_enabled;
-        // Carry forward project tasks to the new session; session tasks start fresh.
         sess.project_task_list = old_ptl.clone();
     }
     state.project_task_list = old_ptl.clone();
@@ -461,8 +306,7 @@ pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     push_runtime(state, runtime, sys);
 
     // Inject synthetic bootstrap messages so the model sees the project task list
-    // from the previous session. Source of truth is the old session's SessionMeta,
-    // which was just saved above.
+    // from the previous session.
     let ptl_opt = if old_ptl.is_empty() {
         None
     } else {
@@ -471,8 +315,7 @@ pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     if let Some(ptl) = ptl_opt {
         let tool_call_id = crate::helpers::gen_tool_call_id();
 
-        // 1. Synthetic user message — uses the continuation prompt from settings
-        //    so users can customize what the model sees before the tool call.
+        // 1. Synthetic user message
         let user_msg = ChatMessage::new(Role::User, state.handoff_continuation_prompt.clone());
         push_runtime(state, runtime, user_msg);
 
@@ -506,7 +349,7 @@ pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
         assistant_msg.tool_calls = Some(tool_calls_json);
         push_runtime(state, runtime, assistant_msg);
 
-        // 3. Synthetic tool result matching the format from execute_tool_with_cache
+        // 3. Synthetic tool result
         let done = ptl
             .items
             .iter()
@@ -535,8 +378,6 @@ pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     }
 
     // Use the AI-generated next_prompt as the first user message in the fresh session.
-    // Falls back to a simple continue message since the synthetic bootstrap already
-    // loaded the project task list via the continuation prompt.
     let handoff_msg = runtime.handoff_next_prompt.take().unwrap_or_else(|| {
         if state.project_task_list.has_incomplete() {
             "Project tasks remain. Continue working and create a todo list to track progress."
@@ -573,26 +414,16 @@ pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
 }
 
 /// Auto-trigger a handoff when token usage exceeds the configured threshold.
-/// This provides a safety net if the model forgets to call `handoff` voluntarily.
 pub fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     if !state.handoff_enabled || runtime.handoff_in_progress {
         return;
     }
-    // Don't interrupt a running shell command — wait for it to finish.
     if runtime.live_shell_rx.is_some() {
         return;
     }
     let Some(sid) = runtime.active_session_id.as_ref() else {
         return;
     };
-    // Use the most up-to-date token count for auto-handoff.
-    // Recompute the full estimate (messages + tool definitions) on the fly
-    // so the threshold check never works with stale data.
-    // Uses cached per-message full_token_estimate for O(n) sum instead of
-    // re-serializing all messages.
-    // Derive values from the session's own provider (not the UI-active one)
-    // and bail out if the provider can't be found — no hardcoded fallbacks
-    // since context windows vary wildly across models (128K to 1M+).
     let Some(sess) = state.sessions.iter().find(|s| s.id == *sid) else {
         return;
     };
@@ -615,7 +446,6 @@ pub fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
         runtime.handoff_trigger_sent = false;
         return;
     }
-    // First, send the trigger prompt to give the model a chance to clean up.
     if !runtime.handoff_trigger_sent {
         runtime.drain();
         runtime.handoff_trigger_sent = true;
@@ -626,7 +456,6 @@ pub fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
         push_runtime(state, runtime, msg);
         start_completion(state, runtime);
     }
-    // Trigger already sent — the model has the warning, it's up to it now.
 }
 
 pub fn auto_continue(
@@ -640,10 +469,7 @@ pub fn auto_continue(
 
 /// Send a "continue" message when there are incomplete tasks, the response
 /// was cut off by the output token limit, or the text itself signals the
-/// model meant to keep going. This resumes work in the *same* session
-/// and is intentionally independent of the handoff toggle — handoff only
-/// controls whether a *new* session gets spun up, not whether an unfinished
-/// turn gets nudged to continue.
+/// model meant to keep going.
 fn auto_continue_impl(
     state: &mut AppState,
     runtime: &mut ChatRuntime,
@@ -686,9 +512,6 @@ fn auto_continue_impl(
     };
 
     push_runtime(state, runtime, ChatMessage::new(Role::User, msg));
-    // After pushing the continue message, refresh the full token estimate
-    // from disk (source of truth) so the toolbar meter and auto-handoff
-    // threshold stay accurate.
     if let Some(sid) = runtime.active_session_id.as_deref() {
         super::session_ops::recompute_estimate_from_disk(state, sid);
     }
@@ -723,7 +546,4 @@ pub fn auto_execute(state: &mut AppState, runtime: &mut ChatRuntime, response: &
             ChatMessage::new(Role::Tool, format!("Files written: {}", written.join(", "))),
         );
     }
-
-    // Do not implicitly execute shell commands from raw markdown text.
-    // The assistant must use the formal `run_shell` tool call.
 }
