@@ -602,8 +602,8 @@ impl AppState {
             Some(i) => i,
             None => return,
         };
-        let mut meta = crate::storage::load_project_meta(&self.projects[proj_idx])
-            .unwrap_or_default();
+        let mut meta =
+            crate::storage::load_project_meta(&self.projects[proj_idx]).unwrap_or_default();
         meta.project_task_list = todo.clone();
         if let Err(e) = crate::storage::save_project_meta(&self.projects[proj_idx], &meta) {
             eprintln!("[state] Failed to save project task list: {}", e);

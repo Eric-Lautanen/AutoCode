@@ -12,7 +12,10 @@ pub(crate) fn save_old_session(
     runtimes: &HashMap<String, ChatRuntime>,
     panel_state: &mut ChatPanelState,
 ) {
-    let looping_window = state.active_session().map(|s| s.looping_window).unwrap_or(false);
+    let looping_window = state
+        .active_session()
+        .map(|s| s.looping_window)
+        .unwrap_or(false);
     if let Some(ref old_id) = panel_state.prev_session_id
         && let Some(old_sess) = state.sessions.iter_mut().find(|s| s.id == *old_id)
     {

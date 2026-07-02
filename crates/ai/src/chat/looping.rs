@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use autocode_core::state::{
-    tool_name_to_op, AppState, ChatMessage, FileOp, LoopAggressiveness, Role,
+    AppState, ChatMessage, FileOp, LoopAggressiveness, Role, tool_name_to_op,
 };
 
 fn pair_groups(messages: &[ChatMessage]) -> Vec<(usize, usize)> {
@@ -43,13 +43,21 @@ fn group_signals(
         in_working_set: false,
     };
     for msg in &messages[start..=end] {
-        let Some(meta) = msg.tool_meta.as_ref() else { continue };
-        let Some(path) = meta.file_path.as_deref() else { continue };
-        let Some(op) = tool_name_to_op(&meta.tool_name) else { continue };
+        let Some(meta) = msg.tool_meta.as_ref() else {
+            continue;
+        };
+        let Some(path) = meta.file_path.as_deref() else {
+            continue;
+        };
+        let Some(op) = tool_name_to_op(&meta.tool_name) else {
+            continue;
+        };
         if working_set.contains(path) {
             s.in_working_set = true;
         }
-        let Some(entry) = access_log.entries.get(path) else { continue };
+        let Some(entry) = access_log.entries.get(path) else {
+            continue;
+        };
         match op {
             FileOp::Edit if entry.last_turn == group_turn => s.has_unverified_edit = true,
             FileOp::Read | FileOp::Grep | FileOp::Search if entry.last_turn > group_turn => {
@@ -134,7 +142,10 @@ pub fn apply_looping_window(state: &mut AppState, session_id: &str) -> Option<()
         .take(agg.remove_per_trigger())
         .flat_map(|&(gi, _)| {
             let (start, end) = groups[gi];
-            messages[start..=end].iter().map(|m| m.id).collect::<Vec<_>>()
+            messages[start..=end]
+                .iter()
+                .map(|m| m.id)
+                .collect::<Vec<_>>()
         })
         .collect();
 
@@ -168,20 +179,17 @@ pub fn apply_looping_window(state: &mut AppState, session_id: &str) -> Option<()
 
     if !dry_run {
         let pid = state.sessions[idx].project_id.clone();
-        if let Some(ref pid) = pid {
-            if let Some(proj) = state.projects.iter().find(|p| p.id == *pid) {
-                let msg_dir = autocode_core::storage::session_messages_dir(
+        if let Some(ref pid) = pid
+            && let Some(proj) = state.projects.iter().find(|p| p.id == *pid)
+        {
+            let msg_dir = autocode_core::storage::session_messages_dir(proj, &state.sessions[idx]);
+            let _ = autocode_core::storage::remove_messages_by_id(&msg_dir, &to_remove);
+            for bc in breadcrumb_for.values() {
+                let _ = autocode_core::storage::append_messages_to_jsonl(
                     proj,
                     &state.sessions[idx],
+                    std::slice::from_ref(bc),
                 );
-                let _ = autocode_core::storage::remove_messages_by_id(&msg_dir, &to_remove);
-                for bc in breadcrumb_for.values() {
-                    let _ = autocode_core::storage::append_messages_to_jsonl(
-                        proj,
-                        &state.sessions[idx],
-                        &[bc.clone()],
-                    );
-                }
             }
         }
 

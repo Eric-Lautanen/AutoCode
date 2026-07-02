@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use autocode_core::helpers::compute_request_estimate;
-use autocode_core::state::{AppState, ChatMessage, Role, TodoList};
 use autocode_core::state::tool_name_to_op;
+use autocode_core::state::{AppState, ChatMessage, Role, TodoList};
 
 use super::runtime::ChatRuntime;
 
@@ -324,8 +324,7 @@ pub fn push_tool_results_to_state(
                     }
                 }
             }
-            let was_empty = todo.items.is_empty()
-                || state.todo_list().is_empty();
+            let was_empty = todo.items.is_empty() || state.todo_list().is_empty();
             if was_empty || !state.todo_user_dismissed {
                 state.todo_user_dismissed = false;
                 state.show_todo = true;
@@ -344,9 +343,16 @@ pub fn push_tool_results_to_state(
     }
     // Record file accesses into the access log for looping window scoring.
     if let Some(sid) = sess_id {
-        let turn = state.sessions.iter().find(|s| s.id == sid).map(|s| s.turn_count).unwrap_or(0);
+        let turn = state
+            .sessions
+            .iter()
+            .find(|s| s.id == sid)
+            .map(|s| s.turn_count)
+            .unwrap_or(0);
         for tr in results {
-            let Some(op) = tool_name_to_op(&tr.tool_call.name) else { continue };
+            let Some(op) = tool_name_to_op(&tr.tool_call.name) else {
+                continue;
+            };
             for path in &tr.accessed_paths {
                 if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
                     sess.access_log.record(path, op, turn);

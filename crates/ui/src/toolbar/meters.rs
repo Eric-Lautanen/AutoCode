@@ -45,16 +45,25 @@ pub fn show_token_meter(ui: &mut egui::Ui, state: &AppState, frac: f32) {
                 .iter()
                 .find(|s| s.id == *sid)
                 .and_then(|s| {
-                    let label = if !s.provider_label.is_empty() { &s.provider_label } else { &state.active_provider };
+                    let label = if !s.provider_label.is_empty() {
+                        &s.provider_label
+                    } else {
+                        &state.active_provider
+                    };
                     state.providers.get(label)
                 })
                 .and_then(|p| {
-                    p.models_config.as_ref()
+                    p.models_config
+                        .as_ref()
                         .and_then(|mc| mc.get(&p.model))
                         .map(|m| m.loop_aggressiveness)
                 })
                 .unwrap_or_default();
-            tip.push_str(&format!("\nLRU: {} — triggers at {:.0}% context full", agg.label(), agg.trigger_pct() * 100.0));
+            tip.push_str(&format!(
+                "\nLRU: {} — triggers at {:.0}% context full",
+                agg.label(),
+                agg.trigger_pct() * 100.0
+            ));
         }
         tip
     });

@@ -24,8 +24,8 @@ pub use provider_file::{
 pub use session_io::{
     append_messages_to_jsonl, delete_session_file, ensure_project_dirs, load_all_messages,
     load_messages_before, load_session, load_session_todo_list, project_sessions_dir,
-    remove_messages_after, save_session, save_session_meta, save_session_todo_list,
-    session_exists, session_messages_dir, truncate_messages_after,
+    remove_messages_after, save_session, save_session_meta, save_session_todo_list, session_exists,
+    session_messages_dir, truncate_messages_after,
 };
 pub use session_meta::SessionMeta;
 pub use shell_task::{delete_task, list_tasks, load_task, prune_tasks, save_task};

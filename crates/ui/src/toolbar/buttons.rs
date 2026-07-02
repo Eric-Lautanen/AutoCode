@@ -23,7 +23,10 @@ pub fn lit_btn(ui: &mut egui::Ui, label: &str, lit: bool) -> egui::Response {
 }
 
 pub fn show_handoff_toggle(ui: &mut egui::Ui, state: &mut AppState) {
-    let looping_active = state.active_session().map(|s| s.looping_window).unwrap_or(false);
+    let looping_active = state
+        .active_session()
+        .map(|s| s.looping_window)
+        .unwrap_or(false);
     let enabled = state.handoff_enabled;
     if looping_active {
         let resp = lit_btn(ui, "Handoff", false);

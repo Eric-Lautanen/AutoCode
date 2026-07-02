@@ -228,10 +228,12 @@ pub fn save_session_todo_list(
     let dir = project_sessions_dir(project);
     let path = match find_session_file(&dir, session) {
         Some(p) => p,
-        None => return Err(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "session meta not found",
-        )),
+        None => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "session meta not found",
+            ));
+        }
     };
 
     let mut meta: SessionMeta = fsutil::read_to_string(&path)
@@ -292,10 +294,13 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
                 // Rebuild access log from ToolMeta in loaded messages.
                 session.access_log = crate::state::FileAccessLog::new();
                 for msg in &session.messages {
-                    if let Some(meta) = &msg.tool_meta {
-                        if let (Some(path), Some(op)) = (&meta.file_path, crate::state::tool_name_to_op(&meta.tool_name)) {
-                            session.access_log.record(path, op, msg.turn);
-                        }
+                    if let Some(meta) = &msg.tool_meta
+                        && let (Some(path), Some(op)) = (
+                            &meta.file_path,
+                            crate::state::tool_name_to_op(&meta.tool_name),
+                        )
+                    {
+                        session.access_log.record(path, op, msg.turn);
                     }
                 }
                 session.turn_count = session.messages.iter().map(|m| m.turn).max().unwrap_or(0);

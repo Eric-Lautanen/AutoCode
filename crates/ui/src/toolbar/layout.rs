@@ -85,13 +85,11 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                     if buttons::lit_btn(ui, "LRU", looping_active)
                         .on_hover_text("LRU pruning: automatically remove old messages when context fills, keeping recent working set. Disables auto-handoff.")
                         .clicked()
+                        && let Some(sid) = state.active_session_id.as_ref()
+                        && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == *sid)
                     {
-                        if let Some(sid) = state.active_session_id.as_ref()
-                            && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == *sid)
-                        {
-                            sess.looping_window = !sess.looping_window;
-                            state.session_meta_dirty = true;
-                        }
+                        sess.looping_window = !sess.looping_window;
+                        state.session_meta_dirty = true;
                     }
                 });
             });
