@@ -12,6 +12,7 @@ pub(crate) fn save_old_session(
     runtimes: &HashMap<String, ChatRuntime>,
     panel_state: &mut ChatPanelState,
 ) {
+    let looping_window = state.active_session().map(|s| s.looping_window).unwrap_or(false);
     if let Some(ref old_id) = panel_state.prev_session_id
         && let Some(old_sess) = state.sessions.iter_mut().find(|s| s.id == *old_id)
     {
@@ -21,19 +22,18 @@ pub(crate) fn save_old_session(
         if old_sess.project_id.as_ref() != state.active_project_id.as_ref() {
             return;
         }
-        // Only copy task lists from global state if the old session is in the
+        // Only copy per-session flags from global state if the old session is in the
         // same project as the active one. A project switch already saved the
-        // old session's task lists to disk in switch_to_project, and the
-        // global state now belongs to the *new* project's active session.
+        // old session's flags to disk in switch_to_project, and the global state
+        // now belongs to the *new* project's active session.
         if old_sess.project_id.as_ref() == state.active_project_id.as_ref() {
-            old_sess.todo_list = state.todo_list.clone();
-            old_sess.project_task_list = state.project_task_list.clone();
             old_sess.show_todo = state.show_todo;
             old_sess.todo_user_dismissed = state.todo_user_dismissed;
             old_sess.show_project_tasks = state.show_project_tasks;
         }
         old_sess.draft_input = panel_state.input.clone();
         old_sess.handoff_enabled = state.handoff_enabled;
+        old_sess.looping_window = looping_window;
         old_sess.show_explorer = state.show_explorer;
         old_sess.settings_open = state.settings_open;
         old_sess.show_reasoning_inline = state.show_reasoning_inline;
@@ -142,11 +142,9 @@ pub(crate) fn load_new_session(
                     prov.fill_from_config();
                 }
             }
-            // Always load task lists from the session meta on disk — never
+            // Load per-session flags from the session meta on disk — never
             // from the global state, which may belong to a different session
             // (e.g. a background runtime for another tab).
-            state.todo_list = new_sess.todo_list.clone();
-            state.project_task_list = new_sess.project_task_list.clone();
             state.show_todo = new_sess.show_todo;
             state.todo_user_dismissed = new_sess.todo_user_dismissed;
             panel_state.input = new_sess.draft_input.clone();
@@ -163,8 +161,6 @@ pub(crate) fn load_new_session(
         panel_state.display_buffer.clear();
         panel_state.loaded_min_id = 0;
         panel_state.input.clear();
-        state.todo_list.clear();
-        state.project_task_list.clear();
         state.show_todo = false;
         state.todo_user_dismissed = false;
         state.handoff_enabled = false;

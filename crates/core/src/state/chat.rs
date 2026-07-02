@@ -74,6 +74,12 @@ pub struct ChatMessage {
     /// section and passed back on subsequent API requests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
+    /// Which session turn this message was created on.
+    #[serde(default)]
+    pub turn: u64,
+    /// True for synthetic prune-marker messages left by apply_looping_window.
+    #[serde(default)]
+    pub is_prune_marker: bool,
 }
 
 impl ChatMessage {
@@ -86,11 +92,19 @@ impl ChatMessage {
             content,
             timestamp: crate::helpers::unix_now(),
             token_count,
-            full_token_estimate: 0, // computed lazily or on push
+            full_token_estimate: 0,
             tool_call_id: None,
             tool_calls: None,
             tool_meta: None,
             reasoning_content: None,
+            turn: 0,
+            is_prune_marker: false,
         }
+    }
+
+    pub fn prune_marker(summary: String) -> Self {
+        let mut msg = Self::new(Role::System, summary);
+        msg.is_prune_marker = true;
+        msg
     }
 }

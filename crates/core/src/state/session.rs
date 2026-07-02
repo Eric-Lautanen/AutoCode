@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use super::access_log::FileAccessLog;
 use super::chat::{ChatMessage, Role};
-use super::todo::{ProjectTaskList, TodoList};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
@@ -21,10 +21,6 @@ pub struct Session {
     pub provider_label: String,
     #[serde(default)]
     pub model: String,
-    #[serde(default)]
-    pub todo_list: TodoList,
-    #[serde(default)]
-    pub project_task_list: ProjectTaskList,
     #[serde(default)]
     pub show_todo: bool,
     #[serde(default)]
@@ -84,6 +80,24 @@ pub struct Session {
     #[serde(default)]
     pub draft_input: String,
 
+    /// When true, old message pairs are pruned when the session's token usage
+    /// crosses the model's configured trigger threshold. Also disables auto-handoff.
+    #[serde(default)]
+    pub looping_window: bool,
+
+    /// Monotonic turn counter. Incremented at the start of each completion cycle.
+    #[serde(default)]
+    pub turn_count: u64,
+
+    /// In-memory file access log (not serialized — rebuilt from ToolMeta on load).
+    #[serde(skip)]
+    pub access_log: FileAccessLog,
+
+    /// Dry-run mode for looping: compute pruning decisions but skip disk/RAM mutation,
+    /// logging candidates and scores instead. Not persisted.
+    #[serde(skip)]
+    pub loop_dry_run: bool,
+
     /// Correction ratio: actual API prompt_tokens / heuristic estimate.
     /// Learned from each API response and applied to future estimates so
     /// the heuristic drift is compensated. Starts at 1.0 (no correction).
@@ -122,8 +136,6 @@ impl Session {
             actual_tokens_used: 0,
             provider_label,
             model,
-            todo_list: TodoList::default(),
-            project_task_list: ProjectTaskList::default(),
             show_todo: false,
             todo_user_dismissed: false,
             session_named: false,
@@ -144,6 +156,10 @@ impl Session {
             show_reasoning_inline: false,
             show_project_tasks: false,
             draft_input: String::new(),
+            looping_window: false,
+            turn_count: 0,
+            access_log: FileAccessLog::new(),
+            loop_dry_run: false,
             token_correction_ratio: 1.0,
             estimated_full_at_request: 0,
             cached_tool_tokens: 0,

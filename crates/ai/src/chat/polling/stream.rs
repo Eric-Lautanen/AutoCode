@@ -627,16 +627,32 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
 
                         let duration_ms = start.elapsed().as_millis() as u64;
                         let meta = build_tool_meta(tc, &result, duration_ms);
+                        let args: serde_json::Value = serde_json::from_str(&tc.arguments)
+                            .unwrap_or(serde_json::Value::Null);
+                        let accessed_paths = match tc.name.as_str() {
+                            "read_file" | "read_entire_file" | "write_file"
+                            | "patch_file" | "patch_lines" | "delete_file"
+                            | "list_dir" | "grep" | "glob" | "project_tree"
+                            | "create_dir" =>
+                                args.get("path").and_then(|v| v.as_str()).map(|p| vec![p.to_string()]).unwrap_or_default(),
+                            "read_files" =>
+                                args.get("paths").and_then(|v| v.as_array())
+                                    .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                                    .unwrap_or_default(),
+                            "rename_file" => {
+                                let mut paths = Vec::new();
+                                if let Some(p) = args.get("from").and_then(|v| v.as_str()) { paths.push(p.to_string()); }
+                                if let Some(p) = args.get("to").and_then(|v| v.as_str()) { paths.push(p.to_string()); }
+                                paths
+                            }
+                            _ => vec![],
+                        };
                         let todo_update = if tc.name == "todo_list" {
-                            let args: serde_json::Value = serde_json::from_str(&tc.arguments)
-                                .unwrap_or(serde_json::Value::Null);
                             crate::helpers::parse_todo_from_tool_args(&args)
                         } else {
                             None
                         };
                         let project_todo_update = if tc.name == "project_task_list" {
-                            let args: serde_json::Value = serde_json::from_str(&tc.arguments)
-                                .unwrap_or(serde_json::Value::Null);
                             crate::helpers::parse_project_task_from_tool_args(&args)
                         } else {
                             None
@@ -645,6 +661,7 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                             tool_call: tc.clone(),
                             content: result.to_string(),
                             meta,
+                            accessed_paths,
                             todo_update,
                             project_todo_update,
                         });

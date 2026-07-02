@@ -30,6 +30,7 @@ pub(super) fn start_next_live_shell(
                         is_error: true,
                         ..Default::default()
                     },
+                    accessed_paths: vec![],
                     todo_update: None,
                     project_todo_update: None,
                 });
@@ -52,6 +53,7 @@ pub(super) fn start_next_live_shell(
                         is_error: true,
                         ..Default::default()
                     },
+                    accessed_paths: vec![],
                     todo_update: None,
                     project_todo_update: None,
                 });
@@ -117,6 +119,7 @@ pub(super) fn poll_live_shell(state: &mut AppState, runtime: &mut ChatRuntime) -
                 duration_ms: None,
                 ..Default::default()
             },
+            accessed_paths: vec![],
             todo_update: None,
             project_todo_update: None,
         };
@@ -189,6 +192,7 @@ pub(super) fn poll_live_shell(state: &mut AppState, runtime: &mut ChatRuntime) -
             tool_call: tc,
             content,
             meta,
+            accessed_paths: vec![],
             todo_update: None,
             project_todo_update: None,
         };

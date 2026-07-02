@@ -2,7 +2,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::helpers;
-use crate::state::{ChatMessage, Project, Role, Session};
+use crate::state::{ChatMessage, Project, Role, Session, TodoList};
 use crate::storage::messages;
 use crate::utils::fsutil;
 
@@ -134,6 +134,7 @@ pub fn save_session(project: &Project, session: &Session) -> std::io::Result<()>
 /// The chunked JSONL files are the source of truth — never rewritten from RAM.
 /// Renames the session subdirectory when the label changes (e.g. after name_session),
 /// keeping everything (metadata + message chunks) atomic in one folder.
+/// Preserves the on-disk todo_list — Session no longer carries it in RAM.
 pub fn save_session_meta(project: &Project, session: &Session) -> std::io::Result<()> {
     let parent = project_sessions_dir(project);
     let new_dirname = session.filename().replace(".json", "");
@@ -189,8 +190,57 @@ pub fn save_session_meta(project: &Project, session: &Session) -> std::io::Resul
     let dir = parent.join(&new_dirname);
     fsutil::create_dir_all(&dir)?;
     let meta_path = dir.join("session.json");
-    let meta = SessionMeta::from_session(session);
+
+    // Preserve the on-disk todo_list — Session no longer carries it in RAM.
+    let existing_todo = fsutil::read_to_string(&meta_path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<SessionMeta>(&s).ok())
+        .map(|m| m.todo_list)
+        .unwrap_or_default();
+
+    let mut meta = SessionMeta::from_session(session);
+    meta.todo_list = existing_todo;
+
     atomic_write_json(&meta_path, &meta)
+}
+
+/// Load the session todo list from disk (session meta JSON).
+pub fn load_session_todo_list(project: &Project, session: &Session) -> TodoList {
+    let dir = project_sessions_dir(project);
+    let path = match find_session_file(&dir, session) {
+        Some(p) => p,
+        None => return TodoList::default(),
+    };
+    fsutil::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<SessionMeta>(&s).ok())
+        .map(|m| m.todo_list)
+        .unwrap_or_default()
+}
+
+/// Save the session todo list to disk (session meta JSON).
+/// Reads the existing session meta, updates only the todo_list, and writes back.
+pub fn save_session_todo_list(
+    project: &Project,
+    session: &Session,
+    todo_list: &TodoList,
+) -> std::io::Result<()> {
+    let dir = project_sessions_dir(project);
+    let path = match find_session_file(&dir, session) {
+        Some(p) => p,
+        None => return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "session meta not found",
+        )),
+    };
+
+    let mut meta: SessionMeta = fsutil::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| SessionMeta::from_session(session));
+
+    meta.todo_list = todo_list.clone();
+    atomic_write_json(&path, &meta)
 }
 
 /// Load session metadata and messages from disk.
@@ -219,7 +269,6 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
                 };
                 session.provider_label = meta.provider_label;
                 session.model = meta.model;
-                session.todo_list = meta.todo_list;
                 session.show_todo = meta.show_todo;
                 session.todo_user_dismissed = meta.todo_user_dismissed;
                 session.handoff_enabled = meta.handoff_enabled;
@@ -239,6 +288,17 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
                 session.show_project_tasks = meta.show_project_tasks;
                 session.draft_input = meta.draft_input;
                 session.token_correction_ratio = meta.token_correction_ratio;
+                session.looping_window = meta.looping_window;
+                // Rebuild access log from ToolMeta in loaded messages.
+                session.access_log = crate::state::FileAccessLog::new();
+                for msg in &session.messages {
+                    if let Some(meta) = &msg.tool_meta {
+                        if let (Some(path), Some(op)) = (&meta.file_path, crate::state::tool_name_to_op(&meta.tool_name)) {
+                            session.access_log.record(path, op, msg.turn);
+                        }
+                    }
+                }
+                session.turn_count = session.messages.iter().map(|m| m.turn).max().unwrap_or(0);
                 // estimated_full_tokens is set by callers (restore_active_session,
                 // load_new_session, prepare_request_messages_for_session) via
                 // update_full_estimate which always does a full serialized estimate.

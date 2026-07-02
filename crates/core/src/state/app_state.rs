@@ -8,7 +8,7 @@ use super::chat::ChatMessage;
 use super::project::Project;
 use super::provider::{ApiProvider, ProviderKind};
 use super::session::{PendingWrites, Session, ShellTask};
-use super::todo::{ProjectTaskList, TodoList};
+use super::todo::TodoList;
 
 pub const DEFAULT_SYSTEM_PROMPT: &str = "
 You are an expert autonomous coding agent working inside a user's project directory.
@@ -189,10 +189,6 @@ pub struct AppState {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub expanded_dirs: Vec<String>,
 
-    /// Working copy of the session todo list. Source of truth is SessionMeta on disk.
-    #[serde(default, skip)]
-    pub todo_list: TodoList,
-
     #[serde(default)]
     pub show_todo: bool,
 
@@ -200,10 +196,6 @@ pub struct AppState {
     /// Reset to false when a brand-new task list is created.
     #[serde(default)]
     pub todo_user_dismissed: bool,
-
-    /// Working copy of the session project task list. Source of truth is SessionMeta on disk.
-    #[serde(default, skip)]
-    pub project_task_list: ProjectTaskList,
 
     #[serde(default)]
     pub show_project_tasks: bool,
@@ -313,10 +305,8 @@ impl Default for AppState {
             show_explorer: true,
             explorer_width: 240.0,
             expanded_dirs: Vec::new(),
-            todo_list: TodoList::default(),
             show_todo: false,
             todo_user_dismissed: false,
-            project_task_list: ProjectTaskList::default(),
             show_project_tasks: false,
             show_reasoning_inline: false,
             settings_open: false,
@@ -409,7 +399,6 @@ impl AppState {
             .as_ref()
             .is_some_and(|sid| state.sessions.iter().any(|s| s.id == *sid));
         if !active_ok {
-            state.todo_list.clear();
             state.show_todo = false;
             state.todo_user_dismissed = false;
             state.settings_open = false;
@@ -488,7 +477,6 @@ impl AppState {
         // 4. Clean up orphaned session-level state.
         if self.sessions.is_empty() {
             self.active_session_id = None;
-            self.todo_list.clear();
             self.show_todo = false;
             self.todo_user_dismissed = false;
             self.handoff_enabled = false;
@@ -540,6 +528,86 @@ impl AppState {
     pub fn active_project_mut(&mut self) -> Option<&mut Project> {
         let id = self.active_project_id.clone()?;
         self.projects.iter_mut().find(|p| p.id == id)
+    }
+
+    // -- Disk-backed task list accessors ----------------------------------------
+
+    /// Read the session todo list from disk (session.json).
+    /// Returns default if no active session or file not found.
+    pub fn todo_list(&self) -> TodoList {
+        let sess = match self.active_session() {
+            Some(s) => s,
+            None => return TodoList::default(),
+        };
+        let proj = match sess.project_id.as_ref() {
+            Some(pid) => match self.projects.iter().find(|p| p.id == *pid) {
+                Some(p) => p,
+                None => return TodoList::default(),
+            },
+            None => return TodoList::default(),
+        };
+        crate::storage::load_session_todo_list(proj, sess)
+    }
+
+    /// Write the session todo list to disk (session.json).
+    pub fn set_todo_list(&mut self, todo: &TodoList) {
+        let sid = match self.active_session_id.clone() {
+            Some(s) => s,
+            None => return,
+        };
+        let pid = match self.sessions.iter().find(|s| s.id == sid) {
+            Some(s) => s.project_id.clone(),
+            None => return,
+        };
+        let pid = match pid {
+            Some(p) => p,
+            None => return,
+        };
+        let proj_idx = match self.projects.iter().position(|p| p.id == pid) {
+            Some(i) => i,
+            None => return,
+        };
+        let sess_idx = match self.sessions.iter().position(|s| s.id == sid) {
+            Some(i) => i,
+            None => return,
+        };
+        if let Err(e) = crate::storage::save_session_todo_list(
+            &self.projects[proj_idx],
+            &self.sessions[sess_idx],
+            todo,
+        ) {
+            eprintln!("[state] Failed to save session todo list: {}", e);
+        }
+    }
+
+    /// Read the project task list from disk (project meta.json).
+    /// Returns default if no active project or file not found.
+    pub fn project_task_list(&self) -> TodoList {
+        let proj = match self.active_project() {
+            Some(p) => p,
+            None => return TodoList::default(),
+        };
+        crate::storage::load_project_meta(proj)
+            .map(|m| m.project_task_list)
+            .unwrap_or_default()
+    }
+
+    /// Write the project task list to disk (project meta.json).
+    pub fn set_project_task_list(&mut self, todo: &TodoList) {
+        let proj_id = match self.active_project_id.clone() {
+            Some(p) => p,
+            None => return,
+        };
+        let proj_idx = match self.projects.iter().position(|p| p.id == proj_id) {
+            Some(i) => i,
+            None => return,
+        };
+        let mut meta = crate::storage::load_project_meta(&self.projects[proj_idx])
+            .unwrap_or_default();
+        meta.project_task_list = todo.clone();
+        if let Err(e) = crate::storage::save_project_meta(&self.projects[proj_idx], &meta) {
+            eprintln!("[state] Failed to save project task list: {}", e);
+        }
     }
 
     /// Maximum number of sessions kept in memory. Oldest sessions are pruned

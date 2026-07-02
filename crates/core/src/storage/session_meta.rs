@@ -1,4 +1,4 @@
-use crate::state::{ProjectTaskList, TodoList};
+use crate::state::TodoList;
 
 fn default_sess_temperature() -> f32 {
     0.2
@@ -24,8 +24,6 @@ pub struct SessionMeta {
     pub model: String,
     #[serde(default)]
     pub todo_list: TodoList,
-    #[serde(default)]
-    pub project_task_list: ProjectTaskList,
     #[serde(default)]
     pub show_todo: bool,
     #[serde(default)]
@@ -75,6 +73,10 @@ pub struct SessionMeta {
     /// Learned correction ratio for token estimation drift.
     #[serde(default)]
     pub token_correction_ratio: f32,
+
+    /// Whether the looping window (LRU pruning) is enabled for this session.
+    #[serde(default)]
+    pub looping_window: bool,
 }
 
 impl SessionMeta {
@@ -86,8 +88,7 @@ impl SessionMeta {
             next_message_id: session.next_message_id,
             provider_label: session.provider_label.clone(),
             model: session.model.clone(),
-            todo_list: session.todo_list.clone(),
-            project_task_list: session.project_task_list.clone(),
+            todo_list: TodoList::default(),
             show_todo: session.show_todo,
             todo_user_dismissed: session.todo_user_dismissed,
             handoff_enabled: session.handoff_enabled,
@@ -107,6 +108,7 @@ impl SessionMeta {
             show_project_tasks: session.show_project_tasks,
             draft_input: session.draft_input.clone(),
             token_correction_ratio: session.token_correction_ratio,
+            looping_window: session.looping_window,
         }
     }
 }

@@ -141,8 +141,6 @@ impl AutocodeApp {
                     sess.messages = sess.messages.split_off(total - keep);
                     sess.messages.shrink_to(0);
                 }
-                state.todo_list = sess.todo_list.clone();
-                state.project_task_list = sess.project_task_list.clone();
                 state.show_todo = sess.show_todo;
                 state.todo_user_dismissed = sess.todo_user_dismissed;
                 state.handoff_enabled = sess.handoff_enabled;
@@ -457,7 +455,6 @@ impl eframe::App for AutocodeApp {
                 .active_provider()
                 .map(|p| p.model.clone())
                 .unwrap_or_default();
-            let todo_list = self.state.todo_list.clone();
             let show_todo = self.state.show_todo;
             let todo_user_dismissed = self.state.todo_user_dismissed;
             let handoff_enabled = self.state.handoff_enabled;
@@ -475,12 +472,9 @@ impl eframe::App for AutocodeApp {
                     p.handoff_percent,
                 )
             });
-            let ptl = self.state.project_task_list.clone();
             if let Some(sess) = self.state.active_session_mut() {
                 sess.provider_label = prov_label;
                 sess.model = model;
-                sess.todo_list = todo_list;
-                sess.project_task_list = ptl;
                 sess.show_todo = show_todo;
                 sess.todo_user_dismissed = todo_user_dismissed;
                 sess.handoff_enabled = handoff_enabled;
@@ -525,10 +519,6 @@ impl eframe::App for AutocodeApp {
                 sess.provider_label = prov_label;
                 sess.model = model;
             }
-        }
-        let ptl = self.state.project_task_list.clone();
-        if let Some(sess) = self.state.active_session_mut() {
-            sess.project_task_list = ptl;
         }
         self.save_sessions();
 

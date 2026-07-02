@@ -53,6 +53,11 @@ pub fn update_runtime(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
     repaint |= shell::poll_live_shell(state, runtime);
     repaint |= shell::poll_network(runtime);
 
+    // Apply looping window pruning after tool results or text completions land.
+    if let Some(sid) = runtime.active_session_id.as_deref() {
+        super::looping::apply_looping_window(state, sid);
+    }
+
     // Auto-handoff: if token usage exceeds the configured threshold and the
     // model hasn't initiated a handoff, trigger one automatically.
     check_auto_handoff(state, runtime);

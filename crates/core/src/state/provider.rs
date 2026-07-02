@@ -161,6 +161,48 @@ impl ThinkingApi {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum LoopAggressiveness {
+    #[default]
+    Balanced,
+    Conservative,
+    Aggressive,
+}
+
+impl LoopAggressiveness {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Conservative => "Conservative",
+            Self::Balanced => "Balanced",
+            Self::Aggressive => "Aggressive",
+        }
+    }
+
+    pub fn variants() -> &'static [LoopAggressiveness] {
+        &[Self::Balanced, Self::Conservative, Self::Aggressive]
+    }
+
+    pub fn trigger_pct(self) -> f32 {
+        match self {
+            Self::Conservative => 0.85,
+            Self::Balanced => 0.75,
+            Self::Aggressive => 0.65,
+        }
+    }
+
+    pub fn remove_per_trigger(self) -> usize {
+        1
+    }
+
+    pub fn recency_floor_pct(self) -> f32 {
+        match self {
+            Self::Conservative => 0.40,
+            Self::Balanced => 0.30,
+            Self::Aggressive => 0.20,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ApiProvider {
     pub kind: ProviderKind,
@@ -301,6 +343,7 @@ impl ApiProvider {
                         top_p: 1.0,
                         frequency_penalty: 0.0,
                         presence_penalty: 0.0,
+                        loop_aggressiveness: crate::state::LoopAggressiveness::default(),
                     };
                     (id.clone(), entry)
                 })

@@ -63,6 +63,9 @@ pub struct ModelEntry {
     /// Presence penalty (-2.0-2.0). Defaults to 0.0.
     #[serde(default)]
     pub presence_penalty: f32,
+    /// Looping window aggressiveness per model.
+    #[serde(default)]
+    pub loop_aggressiveness: crate::state::LoopAggressiveness,
 }
 
 fn default_handoff_pct() -> u8 {
@@ -217,6 +220,7 @@ fn convert_from_providers(providers: &HashMap<String, ApiProvider>) -> ProviderF
                         top_p: ap.top_p,
                         frequency_penalty: ap.frequency_penalty,
                         presence_penalty: ap.presence_penalty,
+                        loop_aggressiveness: crate::state::LoopAggressiveness::default(),
                     });
                 }
             }
@@ -242,6 +246,7 @@ fn convert_from_providers(providers: &HashMap<String, ApiProvider>) -> ProviderF
                         top_p: ap.top_p,
                         frequency_penalty: ap.frequency_penalty,
                         presence_penalty: ap.presence_penalty,
+                        loop_aggressiveness: crate::state::LoopAggressiveness::default(),
                     }
                 })
                 .collect()

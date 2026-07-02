@@ -347,6 +347,7 @@ pub fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Se
                                                                     top_p: p.top_p,
                                                                     frequency_penalty: p.frequency_penalty,
                                                                     presence_penalty: p.presence_penalty,
+                                                                    loop_aggressiveness: autocode_core::state::LoopAggressiveness::default(),
                                                                 };
                                                                 let cm = p.models_config.get_or_insert_with(std::collections::HashMap::new);
                                                                  cm.insert(m.clone(), entry);
@@ -445,8 +446,9 @@ pub fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Se
                                                   temperature: p.temperature,
                                                   top_p: p.top_p,
                                                   frequency_penalty: p.frequency_penalty,
-                                                  presence_penalty: p.presence_penalty,
-                                              }
+                                                   presence_penalty: p.presence_penalty,
+                                                   loop_aggressiveness: autocode_core::state::LoopAggressiveness::default(),
+                                               }
                                          });
                                     let mut cfg_changed = false;
 
@@ -664,6 +666,28 @@ pub fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Se
                                                                 RichText::new("req/hr (0 = unlimited)")
                                                                     .size(10.5).color(Palette::TEXT_MUTED),
                                                             );
+                                                        });
+                                                        ui.end_row();
+
+                                                        ui.label(helpers::field_label("LRU Aggression"))
+                                                            .on_hover_text("Controls when LRU pruning triggers and how aggressively old messages are removed. Balanced = default.");
+                                                        ui.horizontal(|ui| {
+                                                            let current = mc.loop_aggressiveness;
+                                                            for variant in autocode_core::state::LoopAggressiveness::variants() {
+                                                                let is_sel = *variant == current;
+                                                                if ui.add(
+                                                                    egui::Button::new(
+                                                                        RichText::new(variant.label()).size(11.0)
+                                                                    ).selected(is_sel).stroke(if is_sel {
+                                                                        egui::Stroke::new(1.0, Palette::ACCENT)
+                                                                    } else {
+                                                                        egui::Stroke::new(1.0, Palette::BORDER)
+                                                                    })
+                                                                ).clicked() {
+                                                                    mc.loop_aggressiveness = *variant;
+                                                                    cfg_changed = true;
+                                                                }
+                                                            }
                                                         });
                                                         ui.end_row();
                                                     });

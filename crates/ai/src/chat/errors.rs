@@ -206,6 +206,7 @@ pub fn fix_provider_params(state: &mut autocode_core::state::AppState, err_msg: 
                         top_p: prov.top_p,
                         frequency_penalty: prov.frequency_penalty,
                         presence_penalty: prov.presence_penalty,
+                        loop_aggressiveness: autocode_core::state::LoopAggressiveness::default(),
                     }
                 });
             match param {

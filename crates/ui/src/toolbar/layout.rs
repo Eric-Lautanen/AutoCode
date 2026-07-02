@@ -79,6 +79,20 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                     {
                         state.show_reasoning_inline = !state.show_reasoning_inline;
                     }
+
+                    // LRU looping window toggle.
+                    let looping_active = state.active_session().map(|s| s.looping_window).unwrap_or(false);
+                    if buttons::lit_btn(ui, "LRU", looping_active)
+                        .on_hover_text("LRU pruning: automatically remove old messages when context fills, keeping recent working set. Disables auto-handoff.")
+                        .clicked()
+                    {
+                        if let Some(sid) = state.active_session_id.as_ref()
+                            && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == *sid)
+                        {
+                            sess.looping_window = !sess.looping_window;
+                            state.session_meta_dirty = true;
+                        }
+                    }
                 });
             });
         });

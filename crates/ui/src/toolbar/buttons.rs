@@ -23,14 +23,20 @@ pub fn lit_btn(ui: &mut egui::Ui, label: &str, lit: bool) -> egui::Response {
 }
 
 pub fn show_handoff_toggle(ui: &mut egui::Ui, state: &mut AppState) {
+    let looping_active = state.active_session().map(|s| s.looping_window).unwrap_or(false);
     let enabled = state.handoff_enabled;
-    let resp = lit_btn(ui, "Handoff", enabled);
-    if resp.clicked() {
-        state.handoff_enabled = !enabled;
-    }
-    resp.on_hover_text(if enabled {
-        "Handoff enabled — agent can call `handoff` to start a fresh session"
+    if looping_active {
+        let resp = lit_btn(ui, "Handoff", false);
+        resp.on_hover_text("Handoff is disabled while LRU pruning is active — LRU manages context by pruning old messages instead of handing off to a new session");
     } else {
-        "Handoff disabled — context will fill until manual intervention"
-    });
+        let resp = lit_btn(ui, "Handoff", enabled);
+        if resp.clicked() {
+            state.handoff_enabled = !enabled;
+        }
+        resp.on_hover_text(if enabled {
+            "Handoff enabled — agent can call `handoff` to start a fresh session"
+        } else {
+            "Handoff disabled — context will fill until manual intervention"
+        });
+    }
 }

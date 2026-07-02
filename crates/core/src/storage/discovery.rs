@@ -8,13 +8,11 @@ use super::session_meta::SessionMeta;
 
 pub fn switch_to_project(state: &mut AppState, project_id: &str) {
     // Persist the current session's working state back to its SessionMeta on disk
-    // before clearing. This ensures task lists and per-session flags are not lost
+    // before clearing. This ensures per-session flags are not lost
     // when the caller switches to a different project.
     if let Some(ref sid) = state.active_session_id.clone()
         && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == *sid)
     {
-        sess.todo_list = std::mem::take(&mut state.todo_list);
-        sess.project_task_list = std::mem::take(&mut state.project_task_list);
         sess.show_todo = state.show_todo;
         sess.todo_user_dismissed = state.todo_user_dismissed;
         sess.show_project_tasks = state.show_project_tasks;
@@ -30,9 +28,7 @@ pub fn switch_to_project(state: &mut AppState, project_id: &str) {
     state.active_project_id = Some(project_id.to_string());
     state.active_session_id = None;
     // Clear session-level state — the active session's data is loaded on session restore.
-    state.project_task_list.clear();
     state.show_project_tasks = false;
-    state.todo_list.clear();
     state.show_todo = false;
     state.todo_user_dismissed = false;
 }
@@ -195,8 +191,6 @@ pub fn discover_sessions_from_disk(project: &Project) -> Vec<Session> {
                     actual_tokens_used: meta.actual_tokens_used,
                     provider_label: meta.provider_label,
                     model: meta.model,
-                    todo_list: meta.todo_list,
-                    project_task_list: meta.project_task_list,
                     show_todo: meta.show_todo,
                     todo_user_dismissed: meta.todo_user_dismissed,
                     session_named: meta.session_named,
@@ -221,6 +215,10 @@ pub fn discover_sessions_from_disk(project: &Project) -> Vec<Session> {
                     estimated_full_at_request: 0,
                     cached_tool_tokens: 0,
                     cached_tool_key: None,
+                    looping_window: meta.looping_window,
+                    turn_count: 0,
+                    access_log: Default::default(),
+                    loop_dry_run: false,
                 });
             }
         }

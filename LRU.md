@@ -74,12 +74,13 @@ pub enum FileOp {
 
 /// Single shared mapping from tool name to FileOp, used by every call site
 /// below (recording, disk rebuild, scoring) so the match arms aren't
-/// duplicated three times and drifting out of sync with each other.
+```rust
 pub fn tool_name_to_op(tool_name: &str) -> Option<FileOp> {
     match tool_name {
         "read_file" | "read_entire_file" | "read_files" => Some(FileOp::Read),
-        "write_file" | "patch_file" | "patch_lines" => Some(FileOp::Edit),
-        "grep" | "search" => Some(FileOp::Grep),
+        "write_file" | "patch_file" | "patch_lines" | "delete_file" | "rename_file"
+        | "create_dir" => Some(FileOp::Edit),
+        "grep" => Some(FileOp::Grep),
         "glob" => Some(FileOp::Glob),
         "list_dir" | "project_tree" => Some(FileOp::Search),
         _ => None,
@@ -157,13 +158,13 @@ Add alongside the existing per-model fields (context window size, handoff thresh
 ```rust
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum LoopAggressiveness {
+    /// Default. Good balance for most models on most workloads.
+    /// Trigger at 75% context full. Remove 1 group. Keep newest 30% as floor.
+    #[default]
+    Balanced,
     /// Trigger at 85% context full. Remove 1 group. Keep newest 40% as floor.
     /// Best for models that struggle with lost context or tend to repeat work.
     Conservative,
-    /// Trigger at 75% context full. Remove 1 group. Keep newest 30% as floor.
-    /// Default. Good balance for most models on most workloads.
-    #[default]
-    Balanced,
     /// Trigger at 65% context full. Remove 1 group. Keep newest 20% as floor.
     /// For models that pick up from breadcrumbs well and you want a tight window.
     Aggressive,
@@ -244,7 +245,8 @@ For each tool call, after `execute_tool_with_cache()` returns, extract file path
 let accessed_paths = match tc.name.as_str() {
     "read_file" | "read_entire_file" | "write_file"
     | "patch_file" | "patch_lines" | "delete_file"
-    | "list_dir" | "grep" =>
+    | "list_dir" | "grep" | "glob" | "project_tree"
+    | "create_dir" =>
         args["path"].as_str().map(|p| vec![p.to_string()]).unwrap_or_default(),
     "read_files" =>
         args["paths"].as_array()
@@ -252,8 +254,8 @@ let accessed_paths = match tc.name.as_str() {
             .unwrap_or_default(),
     "rename_file" => {
         let mut paths = Vec::new();
-        if let Some(p) = args["path"].as_str() { paths.push(p.to_string()); }
-        if let Some(p) = args["new_path"].as_str() { paths.push(p.to_string()); }
+        if let Some(p) = args["from"].as_str() { paths.push(p.to_string()); }
+        if let Some(p) = args["to"].as_str() { paths.push(p.to_string()); }
         paths
     }
     _ => vec![],
@@ -301,11 +303,17 @@ This is a general session persistence improvement that the looping work makes ne
 **File:** `crates/core/src/storage/messages.rs` (single-file JSONL — migrated from the former chunked format)
 
 ```rust
-/// Write multiple messages to the current chunk in one pass with a single
+/// Write multiple messages to the JSONL file in one pass with a single
 /// fsync. Preferred over calling append() in a loop — avoids per-message
 /// fsync overhead when a frame produces several messages at once (e.g. 5
 /// parallel tool results).
-pub fn append_batch(msg_dir: &Path, messages: &[ChatMessage]) -> Result<()> {
+/// NOTE: The actual function name is `append_messages()` (not `append_batch`).
+pub fn append_messages(
+    dir: &Path,
+    _session_id: &str,
+    _session_label: &str,
+    messages: &[ChatMessage],
+) -> Result<()> {
     if messages.is_empty() { return Ok(()); }
     // Open/create the messages file, write all messages as JSONL lines,
     // fsync once. No chunk rotation — single file.
@@ -314,23 +322,29 @@ pub fn append_batch(msg_dir: &Path, messages: &[ChatMessage]) -> Result<()> {
 
 **File:** `crates/ai/src/chat/session_ops.rs`, `push_tool_results_to_state()`
 
-Replace the per-message push loop with:
+The actual implementation pushes messages one at a time through `push_to_session()`, which queues them in `state.pending_writes` for rate-limited batched flushing to disk. The access log recording happens in a second pass after all messages are pushed:
 
 ```rust
-// 1. Convert all ToolResults → ChatMessages in RAM
-let mut messages_to_write: Vec<ChatMessage> = results.iter()
-    .map(|tr| /* existing ToolResult → ChatMessage conversion */ )
-    .collect();
-
-// 2. Single batched disk write for the whole frame.
-// NOTE: verify the exact helper for resolving the session message directory
-// against session_io.rs — it may be named differently from session_msg_dir().
-if let Some(msg_dir) = session_msg_dir(state, session_id) {
-    messages::append_batch(&msg_dir, &messages_to_write)?;
+// 1. Push each ToolResult as a ChatMessage via push_to_session()
+for tr in results {
+    let mut msg = ChatMessage::new(Role::Tool, tr.content.clone());
+    msg.tool_call_id = Some(tr.tool_call.id.clone());
+    msg.tool_meta = Some(tr.meta.clone());
+    push_to_session(state, sess_id, msg);
 }
 
-// 3. Update RAM state (access log, session.messages if still used)
-// 4. apply_looping_window() fires after this, on a fully consistent disk state
+// 2. Record file accesses into the access log for looping window scoring.
+if let Some(sid) = sess_id {
+    let turn = state.sessions.iter().find(|s| s.id == sid).map(|s| s.turn_count).unwrap_or(0);
+    for tr in results {
+        let Some(op) = tool_name_to_op(&tr.tool_call.name) else { continue };
+        for path in &tr.accessed_paths {
+            if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
+                sess.access_log.record(path, op, turn);
+            }
+        }
+    }
+}
 ```
 
 **Ordering guarantee**: the batch write completes and fsyncs before `apply_looping_window()` runs. This means the prune pass always operates on a disk state that includes the just-landed tool results — no race between "write new messages" and "decide what to remove."
@@ -420,10 +434,15 @@ struct GroupSignals {
     in_working_set: bool,        // group touches a path in active_working_set()
 }
 
-fn group_signals(sess: &Session, (start, end): (usize, usize), working_set: &HashSet<&str>) -> GroupSignals {
-    let group_turn = sess.messages[start].turn; // Assistant message anchors the group's turn
+fn group_signals(
+    messages: &[ChatMessage],
+    access_log: &FileAccessLog,
+    (start, end): (usize, usize),
+    working_set: &HashSet<&str>,
+) -> GroupSignals {
+    let group_turn = messages[start].turn; // Assistant message anchors the group's turn
     let mut s = GroupSignals { has_unverified_edit: false, superseded_reference: false, in_working_set: false };
-    for msg in &sess.messages[start..=end] {
+    for msg in &messages[start..=end] {
         let Some(meta) = msg.tool_meta.as_ref() else { continue };
         let Some(path) = meta.file_path.as_deref() else { continue };
         let Some(op) = tool_name_to_op(&meta.tool_name) else { continue };
@@ -460,17 +479,17 @@ pub fn apply_looping_window(state: &mut AppState, session_id: &str) -> Option<()
     if !state.sessions[idx].looping_window { return None; }
 
     // Resolve the active model's aggressiveness config.
-    // provider.rs already has the pattern for looking up the active model — follow it.
-    let agg = state.active_model_aggressiveness(session_id)
+    // Implemented as local functions in looping.rs (not AppState methods).
+    let agg = active_model_aggressiveness(state, session_id)
         .unwrap_or(LoopAggressiveness::Balanced);
 
     // Token-based trigger: only prune when the session is sufficiently full.
-    // session.estimated_tokens and model context_window are already tracked —
-    // verify the exact field names against session.rs and provider.rs.
-    let ctx_window = state.active_model_context_window(session_id).unwrap_or(200_000);
-    let used_tokens = state.sessions[idx].estimated_tokens;
+    // Uses corrected_full_tokens() which applies a learned correction ratio
+    // from actual API prompt_tokens responses.
+    let ctx_window = active_model_context_window(state, session_id).unwrap_or(200_000);
+    let used_tokens = state.sessions[idx].corrected_full_tokens();
     let trigger_pct = agg.trigger_pct();
-    if used_tokens as f32 / ctx_window as f32 < trigger_pct {
+    if ctx_window == 0 || (used_tokens as f32 / ctx_window as f32) < trigger_pct {
         return None; // not full enough yet
     }
 
@@ -490,12 +509,14 @@ pub fn apply_looping_window(state: &mut AppState, session_id: &str) -> Option<()
     // time means the next trigger sees updated token counts and working-set
     // data before making the next decision, rather than bulk-removing N groups
     // with stale information and potentially over-pruning.
+    let messages = &state.sessions[idx].messages;
+    let access_log = &state.sessions[idx].access_log;
     let mut scored: Vec<(usize, i32)> = groups[..removable_end].iter().enumerate()
         .filter_map(|(gi, &(start, end))| {
-            let signals = group_signals(&state.sessions[idx], (start, end), &working_set);
+            let signals = group_signals(messages, access_log, (start, end), &working_set);
             if signals.has_unverified_edit { return None; }
             let mut score = 0i32;
-            for msg in &state.sessions[idx].messages[start..=end] {
+            for msg in &messages[start..=end] {
                 if msg.role == Role::Assistant { score += 1; }
                 if msg.role == Role::Tool && msg.full_token_estimate > 2000 && !signals.in_working_set {
                     score -= 2;
@@ -532,13 +553,15 @@ pub fn apply_looping_window(state: &mut AppState, session_id: &str) -> Option<()
     let breadcrumb_for: HashMap<usize, ChatMessage> = scored.iter().take(agg.remove_per_trigger())
         .map(|&(gi, _)| {
             let (start, end) = groups[gi];
-            let paths: HashSet<String> = state.sessions[idx].messages[start..=end].iter()
+            let paths: HashSet<String> = messages[start..=end].iter()
                 .filter_map(|m| m.tool_meta.as_ref()?.file_path.clone())
                 .collect();
             let summary = if paths.is_empty() {
                 "[pruned: 1 turn, no file activity]".to_string()
             } else {
-                format!("[pruned: 1 turn — touched {}]", paths.into_iter().collect::<Vec<_>>().join(", "))
+                let mut p: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
+                p.sort();
+                format!("[pruned: 1 turn — touched {}]", p.join(", "))
             };
             let mut bc = ChatMessage::prune_marker(summary);
             bc.turn = turn;
@@ -550,16 +573,17 @@ pub fn apply_looping_window(state: &mut AppState, session_id: &str) -> Option<()
     if let Some(ref pid) = pid {
         if let Some(proj) = state.projects.iter().find(|p| p.id == *pid) {
             let msg_dir = autocode_core::storage::session_messages_dir(proj, &state.sessions[idx]);
-            // remove_messages_by_id is in crates/core/src/storage/session_io.rs (389 lines —
-            // "session dir management, atomic JSON writes, load/save/delete session meta & messages").
-            // Verify the exact function signature there before calling.
+            // remove_messages_by_id is in crates/core/src/storage/messages.rs.
             let _ = autocode_core::storage::remove_messages_by_id(&msg_dir, &to_remove);
-            // Append each breadcrumb through whatever disk-write path
-            // push_to_session() already uses for new messages (the
-            // JSONL appender in core/src/storage/messages.rs) — don't
-            // add a second, separate "append_message" entry point.
+            // Append each breadcrumb through the same disk-write path
+            // that push_to_session already uses for new messages
+            // (append_messages_to_jsonl in core/src/storage/session_io.rs).
             for bc in breadcrumb_for.values() {
-                let _ = autocode_core::storage::messages::append(&msg_dir, bc);
+                let _ = autocode_core::storage::append_messages_to_jsonl(
+                    proj,
+                    &state.sessions[idx],
+                    &[bc.clone()],
+                );
             }
         }
     }
@@ -627,10 +651,10 @@ pub fn apply_looping_window(state: &mut AppState, session_id: &str) -> Option<()
 **File:** `crates/ui/src/toolbar/layout.rs` (85 lines total — add after the "Reasoning" toggle near the end of the right-side toggles block; verify exact insertion point against current file)
 
 ```rust
-// Looping window toggle (lights up when enabled).
+// LRU looping window toggle (lights up when enabled).
 let looping_active = active_session.map(|s| s.looping_window).unwrap_or(false);
-if buttons::lit_btn(ui, "Loop", looping_active)
-    .on_hover_text("Looping window: prune old messages when context fills")
+if buttons::lit_btn(ui, "LRU", looping_active)
+    .on_hover_text("LRU pruning: automatically remove old messages when context fills, keeping recent working set. Disables auto-handoff.")
     .clicked()
 {
     if let Some(sid) = state.active_session_id.as_ref()
@@ -737,7 +761,7 @@ When set, `apply_looping_window()` computes `to_remove` and the breadcrumb summa
 | `crates/core/src/state/mod.rs` | Add `pub mod access_log;` |
 | `crates/core/src/state/session.rs` | Add `looping_window`, `loop_dry_run`, `turn_count`, `access_log`; update `new()`. No `loop_max_pairs` to remove (never existed). |
 | `crates/core/src/state/chat.rs` | Add `is_prune_marker: bool` to `ChatMessage`; add `ChatMessage::prune_marker()` constructor; add `turn: u64` to `ChatMessage`. `ToolMeta` already has `is_error: bool` (line 36) — no change needed there. |
-| `crates/core/src/state/app_state.rs` | Add helper methods `active_model_aggressiveness()` and `active_model_context_window()` for use by `looping.rs`. No `loop_max_pairs` field to remove. |
+| `crates/core/src/state/app_state.rs` | No changes needed — `active_model_aggressiveness()` and `active_model_context_window()` are implemented as local functions in `looping.rs` rather than methods on `AppState`. No `loop_max_pairs` field to remove. |
 | `crates/core/src/state/provider.rs` | Add `LoopAggressiveness` enum. The per-model config lives in `ModelEntry` (`crates/core/src/storage/provider_file.rs:30`) — add `loop_aggressiveness` field there. |
 | `crates/core/src/storage/provider_file.rs` | Add `loop_aggressiveness: LoopAggressiveness` to `ModelEntry` struct (line 30). Also update `ApiProvider::new()` in `provider.rs` which constructs `ModelEntry` defaults (line ~289). |
 | `crates/core/src/helpers/serde_defaults.rs` | No changes needed — `LoopAggressiveness` uses `#[default]` attribute. |
@@ -770,7 +794,7 @@ When set, `apply_looping_window()` computes `to_remove` and the breadcrumb summa
 ### Modified — UI
 | File | Changes |
 |---|---|
-| `crates/ui/src/toolbar/layout.rs` | Add "Loop" toggle button (alongside the existing "Reasoning" toggle among the right-side toggles) |
+| `crates/ui/src/toolbar/layout.rs` | Add "LRU" toggle button (alongside the existing "Reasoning" toggle among the right-side toggles) |
 | `crates/ui/src/toolbar/meters.rs` | Update hover text when looping active to show current aggressiveness setting |
 | `crates/ui/src/chat/session.rs` | Restore `looping_window` on tab switch (this file already owns save_old/load_new lifecycle, so no separate `app.rs` change needed) |
 | `crates/ui/src/settings/providers.rs` | Add `LoopAggressiveness` picker per model (Conservative / Balanced / Aggressive) alongside the existing handoff threshold control. This is the right home since aggressiveness is per-model config, not per-session. Add `loop_dry_run` toggle here too, clearly labeled as a developer/debug option. |

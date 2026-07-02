@@ -1,4 +1,4 @@
-use autocode_core::{state::AppState, storage};
+use autocode_core::state::AppState;
 
 use crate::helpers;
 use crate::tasks::task_window::{TodoWindowConfig, show_todo_window};
@@ -34,22 +34,17 @@ pub fn show_session_tasks(ctx: &egui::Context, state: &mut AppState) {
         return;
     }
 
-    let list = state.todo_list.clone();
+    let list = state.todo_list();
     let out = show_todo_window(ctx, &SESSION_TASKS_CONFIG, &list, state.show_todo);
 
     if out.clear_clicked {
-        state.todo_list.clear();
-        let proj = state.active_project().cloned();
-        if let Some(sess) = state.active_session_mut() {
-            sess.todo_list.clear();
-            if let Some(proj) = proj.as_ref() {
-                let _ = storage::save_session_meta(proj, sess);
-            }
-        }
+        let empty = autocode_core::state::TodoList::default();
+        state.set_todo_list(&empty);
     }
 
     if out.all_done_triggered {
-        state.todo_list.clear();
+        let empty = autocode_core::state::TodoList::default();
+        state.set_todo_list(&empty);
         state.todo_user_dismissed = false;
         state.show_todo = true;
         helpers::set_temp_bool(ctx, helpers::data::TODO_OPEN, false);
@@ -66,31 +61,18 @@ pub fn show_project_tasks(ctx: &egui::Context, state: &mut AppState) {
         return;
     }
 
-    let list = autocode_core::state::TodoList::from(state.project_task_list.clone());
+    let list = state.project_task_list();
     let out = show_todo_window(ctx, &PROJECT_TASKS_CONFIG, &list, state.show_project_tasks);
 
     if out.clear_clicked {
-        state.project_task_list.clear();
-        let proj = state.active_project().cloned();
-        if let Some(sess) = state.active_session_mut() {
-            sess.project_task_list.clear();
-            if let Some(ref proj) = proj {
-                let _ = storage::save_session_meta(proj, sess);
-            }
-        }
+        let empty = autocode_core::state::TodoList::default();
+        state.set_project_task_list(&empty);
     }
 
     if out.all_done_triggered {
-        state.project_task_list.clear();
+        let empty = autocode_core::state::TodoList::default();
+        state.set_project_task_list(&empty);
         state.show_project_tasks = true;
-        // Persist the cleared state to the active session on disk.
-        let proj = state.active_project().cloned();
-        if let Some(sess) = state.active_session_mut() {
-            sess.project_task_list.clear();
-            if let Some(ref proj) = proj {
-                let _ = storage::save_session_meta(proj, sess);
-            }
-        }
         helpers::set_temp_bool(ctx, helpers::data::PROJECT_TASKS_OPEN, false);
     }
 

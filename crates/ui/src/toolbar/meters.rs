@@ -34,7 +34,30 @@ pub fn show_token_meter(ui: &mut egui::Ui, state: &AppState, frac: f32) {
         StrokeKind::Outside,
     );
 
-    resp.on_hover_text(format!("{:.0}% context used", frac * 100.0));
+    resp.on_hover_text({
+        let mut tip = format!("{:.0}% context used", frac * 100.0);
+        if let Some(sid) = state.active_session_id.as_ref()
+            && let Some(sess) = state.sessions.iter().find(|s| s.id == *sid)
+            && sess.looping_window
+        {
+            let agg = state
+                .sessions
+                .iter()
+                .find(|s| s.id == *sid)
+                .and_then(|s| {
+                    let label = if !s.provider_label.is_empty() { &s.provider_label } else { &state.active_provider };
+                    state.providers.get(label)
+                })
+                .and_then(|p| {
+                    p.models_config.as_ref()
+                        .and_then(|mc| mc.get(&p.model))
+                        .map(|m| m.loop_aggressiveness)
+                })
+                .unwrap_or_default();
+            tip.push_str(&format!("\nLRU: {} — triggers at {:.0}% context full", agg.label(), agg.trigger_pct() * 100.0));
+        }
+        tip
+    });
 
     ui.add_space(4.0);
     let usage_resp = ui.add(

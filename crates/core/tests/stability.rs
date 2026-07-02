@@ -40,7 +40,6 @@ fn make_session_dir(project: &Project, label: &str) -> (SessionMeta, PathBuf) {
         provider_label: "test".into(),
         model: "test-model".into(),
         todo_list: Default::default(),
-        project_task_list: Default::default(),
         show_todo: false,
         todo_user_dismissed: false,
         handoff_enabled: false,
@@ -60,6 +59,7 @@ fn make_session_dir(project: &Project, label: &str) -> (SessionMeta, PathBuf) {
         show_project_tasks: false,
         draft_input: String::new(),
         token_correction_ratio: 1.0,
+        looping_window: false,
     };
     let sess_dir = storage::project_sessions_dir(project);
     // Create the session subdirectory with metadata inside.
@@ -101,6 +101,8 @@ fn test_long_running_simulation() {
                     tool_calls: None,
                     tool_meta: None,
                     reasoning_content: None,
+                    turn: 0,
+                    is_prune_marker: false,
                 })
                 .collect();
 
@@ -172,6 +174,8 @@ fn test_crash_recovery() {
             tool_calls: None,
             tool_meta: None,
             reasoning_content: None,
+            turn: 0,
+            is_prune_marker: false,
         })
         .collect();
 
@@ -228,6 +232,8 @@ fn test_truncate_preserves_early_messages() {
             tool_calls: None,
             tool_meta: None,
             reasoning_content: None,
+            turn: 0,
+            is_prune_marker: false,
         })
         .collect();
 
@@ -284,6 +290,8 @@ fn test_remove_messages_by_id() {
             tool_calls: None,
             tool_meta: None,
             reasoning_content: None,
+            turn: 0,
+            is_prune_marker: false,
         })
         .collect();
 

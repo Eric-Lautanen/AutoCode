@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use autocode_core::helpers::compute_request_estimate;
-use autocode_core::state::{AppState, ChatMessage, Role};
+use autocode_core::state::{AppState, ChatMessage, Role, TodoList};
+use autocode_core::state::tool_name_to_op;
 
 use super::runtime::ChatRuntime;
 
@@ -20,6 +21,7 @@ pub fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: 
     // Push to in-memory display window first.
     if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
         msg.id = sess.next_message_id;
+        msg.turn = sess.turn_count;
         sess.next_message_id += 1;
         msg.full_token_estimate = autocode_core::helpers::estimate_single_message_json_tokens(&msg);
         // Error messages are display-only - never persist to disk.
@@ -253,10 +255,10 @@ pub fn trim_session_ram(state: &mut AppState, session_id: &str) {
         return;
     }
     let keep = window;
-    let drop_count = len - keep;
+    let _drop_count = len - keep;
     let _first_dropped_id = state.sessions[idx].messages[0].id;
-    let _last_dropped_id = state.sessions[idx].messages[drop_count - 1].id;
-    let _first_kept_id = state.sessions[idx].messages[drop_count].id;
+    let _last_dropped_id = state.sessions[idx].messages[_drop_count - 1].id;
+    let _first_kept_id = state.sessions[idx].messages[_drop_count].id;
     let _last_kept_id = state.sessions[idx]
         .messages
         .last()
@@ -297,36 +299,58 @@ pub fn push_tool_results_to_state(
         push_to_session(state, sess_id, msg);
     }
     for tr in results {
-        if let Some((title, items)) = &tr.todo_update
-            && let Some(sid) = sess_id
-            && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
-        {
-            let was_empty = sess.todo_list.is_empty();
-            sess.todo_list.set_items(title.clone(), items.clone());
-            if was_empty || !sess.todo_user_dismissed {
-                sess.todo_user_dismissed = false;
-                sess.show_todo = true;
+        if let Some((title, items)) = &tr.todo_update {
+            // Write session todo list to disk (session.json).
+            let todo = {
+                let mut t = TodoList::default();
+                t.set_items(title.clone(), items.clone());
+                t
+            };
+            if let Some(sid) = sess_id {
+                let pid = state
+                    .sessions
+                    .iter()
+                    .find(|s| s.id == sid)
+                    .and_then(|s| s.project_id.clone());
+                if let Some(pid) = pid {
+                    let proj_idx = state.projects.iter().position(|p| p.id == pid);
+                    let sess_idx = state.sessions.iter().position(|s| s.id == sid);
+                    if let (Some(pi), Some(si)) = (proj_idx, sess_idx) {
+                        let _ = autocode_core::storage::save_session_todo_list(
+                            &state.projects[pi],
+                            &state.sessions[si],
+                            &todo,
+                        );
+                    }
+                }
             }
-            // Always sync to global state so the UI panel shows the latest data
-            // regardless of which session the runtime is targeting.
-            state.todo_list = sess.todo_list.clone();
-            state.show_todo = sess.show_todo;
-            state.todo_user_dismissed = sess.todo_user_dismissed;
+            let was_empty = todo.items.is_empty()
+                || state.todo_list().is_empty();
+            if was_empty || !state.todo_user_dismissed {
+                state.todo_user_dismissed = false;
+                state.show_todo = true;
+            }
         }
-        if let Some((title, items)) = &tr.project_todo_update
-            && let Some(sid) = sess_id
-            && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
-        {
-            sess.project_task_list
-                .set_items(title.clone(), items.clone());
+        if let Some((title, items)) = &tr.project_todo_update {
+            // Write project task list to disk (project meta.json).
+            let todo = {
+                let mut t = TodoList::default();
+                t.set_items(title.clone(), items.clone());
+                t
+            };
+            state.set_project_task_list(&todo);
             state.show_project_tasks = true;
-            // Always sync to global state so the UI panel shows the latest data.
-            state.project_task_list = sess.project_task_list.clone();
-            // Persist to disk immediately — session meta is the source of truth.
-            if let Some(pid) = sess.project_id.as_ref()
-                && let Some(proj) = state.projects.iter().find(|p| &p.id == pid)
-            {
-                let _ = autocode_core::storage::save_session_meta(proj, sess);
+        }
+    }
+    // Record file accesses into the access log for looping window scoring.
+    if let Some(sid) = sess_id {
+        let turn = state.sessions.iter().find(|s| s.id == sid).map(|s| s.turn_count).unwrap_or(0);
+        for tr in results {
+            let Some(op) = tool_name_to_op(&tr.tool_call.name) else { continue };
+            for path in &tr.accessed_paths {
+                if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
+                    sess.access_log.record(path, op, turn);
+                }
             }
         }
     }

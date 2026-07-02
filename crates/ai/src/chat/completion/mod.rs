@@ -59,6 +59,16 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
     if runtime.stream_rx.is_some() {
         return;
     }
+    // Increment turn counter for FileAccessLog working-set calculations.
+    if let Some(sid) = runtime.active_session_id.as_deref()
+        && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
+    {
+        sess.turn_count = sess.turn_count.saturating_add(1);
+    }
+    // Apply looping window pruning before building the request.
+    if let Some(sid) = runtime.active_session_id.as_deref() {
+        super::looping::apply_looping_window(state, sid);
+    }
     // Clear stale error messages — they should only show during the backoff
     // period, not when a retry actually fires.
     if let Some(sid) = runtime.active_session_id.as_deref()
@@ -273,11 +283,8 @@ pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
             format!("Failed to save session meta before handoff: {}", e),
         );
     }
-    // Capture the old session's project_task_list before creating the new session.
-    let old_ptl = state
-        .active_session()
-        .map(|s| s.project_task_list.clone())
-        .unwrap_or_default();
+    // Capture the project task list from disk before creating the new session.
+    let old_ptl = state.project_task_list();
     state.flush_pending_writes(true);
     let handoff_was_enabled = state.handoff_enabled;
     state.new_session_for_project(state.active_project_id.clone());
@@ -285,10 +292,7 @@ pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     // Carry forward the handoff setting so the chain continues.
     if let Some(sess) = state.active_session_mut() {
         sess.handoff_enabled = handoff_was_enabled;
-        sess.project_task_list = old_ptl.clone();
     }
-    state.project_task_list = old_ptl.clone();
-    state.todo_list.clear();
     state.show_todo = false;
 
     // Point the runtime at the new session before pushing messages.
@@ -383,7 +387,7 @@ pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
 
     // Use the AI-generated next_prompt as the first user message in the fresh session.
     let handoff_msg = runtime.handoff_next_prompt.take().unwrap_or_else(|| {
-        if state.project_task_list.has_incomplete() {
+        if state.project_task_list().has_incomplete() {
             "Project tasks remain. Continue working and create a todo list to track progress."
                 .to_string()
         } else {
@@ -428,6 +432,15 @@ pub fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     let Some(sid) = runtime.active_session_id.as_ref() else {
         return;
     };
+    // Suppress auto-handoff when looping window is active.
+    if state
+        .sessions
+        .iter()
+        .find(|s| s.id == *sid)
+        .is_some_and(|s| s.looping_window)
+    {
+        return;
+    }
     let Some(sess) = state.sessions.iter().find(|s| s.id == *sid) else {
         return;
     };
@@ -483,9 +496,9 @@ fn auto_continue_impl(
     if runtime.handoff_in_progress {
         return;
     }
-    let has_todo_incomplete = state.todo_list.has_incomplete();
+    let has_todo_incomplete = state.todo_list().has_incomplete();
     let has_project_tasks_incomplete =
-        state.project_task_list.has_incomplete() && !state.todo_list.has_incomplete();
+        state.project_task_list().has_incomplete() && !state.todo_list().has_incomplete();
     if !has_todo_incomplete
         && !has_project_tasks_incomplete
         && !truncated
@@ -500,12 +513,12 @@ fn auto_continue_impl(
     runtime.continuation_chain += 1;
 
     let msg = if has_todo_incomplete {
-        let (done, total) = state.todo_list.progress();
+        let (done, total) = state.todo_list().progress();
         format!(
             "Session tasks remain ({done}/{total} complete). Update the todo list with your next concrete steps and continue working.",
         )
     } else if has_project_tasks_incomplete {
-        let (done, total) = state.project_task_list.progress();
+        let (done, total) = state.project_task_list().progress();
         format!(
             "Project milestones remain ({done}/{total} complete). Update project_task_list when a phase is finished and continue working.",
         )

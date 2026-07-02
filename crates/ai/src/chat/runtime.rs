@@ -67,6 +67,7 @@ pub struct ToolResult {
     pub tool_call: ToolCall,
     pub content: String,
     pub meta: ToolMeta,
+    pub accessed_paths: Vec<String>,
     pub todo_update: Option<(String, Vec<TodoItem>)>,
     pub project_todo_update: Option<(String, Vec<TodoItem>)>,
 }
