@@ -6,12 +6,10 @@
 .gitignore         |  40
 AGENTS.md           |   7
 Cargo.lock          |  —
-Cargo.toml          |  24  Workspace manifest (5 crate members)
-LRU.md              | 654
-README.md           | 128
-THINKING.md         |1011
-audit.md            | 295
-structure.md        | 150
+Cargo.toml          |  21  Workspace manifest (5 crate members)
+LRU.md              | 682  Looping Context Window implementation plan
+README.md           | 131
+structure.md        | 282
 ultimate_egui.md    |2588
 ```
 
@@ -44,30 +42,31 @@ assets/linux/icon-256.png     |  —
 assets/linux/icon-512.png     |  —
 ```
 
-## `crates/ai/` — AI Provider & Chat Orchestration (33 files, 7,074 lines)
+## `crates/ai/` — AI Provider & Chat Orchestration (33 files, 7,698 lines)
 
 ```
 crates/ai/Cargo.toml                          |  11
 crates/ai/src/lib.rs                           |  11
-crates/ai/src/chat/mod.rs                      |  24
-crates/ai/src/chat/errors.rs                   | 220
-crates/ai/src/chat/runtime.rs                  | 203
-crates/ai/src/chat/session.rs                  | 166
-crates/ai/src/chat/session_ops.rs              | 346
-crates/ai/src/chat/completion/mod.rs           | 516
+crates/ai/src/chat/mod.rs                      |  26
+crates/ai/src/chat/errors.rs                   | 221
+crates/ai/src/chat/looping.rs                  | 286  LRU pruning: scoring, pair grouping, breadcrumbs
+crates/ai/src/chat/runtime.rs                  | 201
+crates/ai/src/chat/session.rs                  | 165
+crates/ai/src/chat/session_ops.rs              | 425
+crates/ai/src/chat/completion/mod.rs           | 531
 crates/ai/src/chat/completion/preflight.rs     | 132
 crates/ai/src/chat/completion/provider.rs      | 107
-crates/ai/src/chat/polling/mod.rs              | 116
-crates/ai/src/chat/polling/shell.rs            | 288
-crates/ai/src/chat/polling/stream.rs           | 677
+crates/ai/src/chat/polling/mod.rs              | 120
+crates/ai/src/chat/polling/shell.rs            | 292
+crates/ai/src/chat/polling/stream.rs           | 705
 crates/ai/src/chat/polling/tools.rs            | 117
 crates/ai/src/chat/tools/mod.rs                |   6
-crates/ai/src/chat/tools/execute.rs            | 842
-crates/ai/src/chat/tools/meta.rs               | 324
+crates/ai/src/chat/tools/execute.rs            |1042
+crates/ai/src/chat/tools/meta.rs               | 342
 crates/ai/src/chat/tools/process.rs            |  37
 crates/ai/src/helpers/mod.rs                   |  17
 crates/ai/src/helpers/fuzzy.rs                 | 686
-crates/ai/src/helpers/misc.rs                  |  83
+crates/ai/src/helpers/misc.rs                  |  86
 crates/ai/src/helpers/strip_lines.rs           |  60
 crates/ai/src/helpers/task_detect.rs           |  18
 crates/ai/src/helpers/todo_parse.rs            |  41
@@ -76,13 +75,13 @@ crates/ai/src/provider/mod.rs                  |  17
 crates/ai/src/provider/client.rs               | 397
 crates/ai/src/provider/http.rs                 | 868
 crates/ai/src/provider/rate_limit.rs           |  61
-crates/ai/src/provider/thread_pool.rs          |  67
-crates/ai/src/provider/tool_defs.rs            |  43
+crates/ai/src/provider/thread_pool.rs          |  70
+crates/ai/src/provider/tool_defs.rs            |  44
 crates/ai/src/provider/types.rs                |  95
 crates/ai/src/provider/web.rs                  | 464
 ```
 
-## `crates/autocode/` — Binary Entry Point (4 files, 23 lines)
+## `crates/autocode/` — Binary Entry Point (3 files, 12 lines)
 
 ```
 crates/autocode/Cargo.toml                     |  11
@@ -91,7 +90,7 @@ crates/autocode/resources/app.rc               |   1
 crates/autocode/src/main.rs                    |   7
 ```
 
-## `crates/core/` — Shared Types, State, Storage, Utils (36 files, 5,949 lines)
+## `crates/core/` — Shared Types, State, Storage, Utils (34 files, 6,172 lines)
 
 ```
 crates/core/Cargo.toml                          |   8
@@ -105,34 +104,35 @@ crates/core/src/helpers/regex.rs                | 366
 crates/core/src/helpers/sanitize.rs             |  56
 crates/core/src/helpers/serde_defaults.rs       |  81
 crates/core/src/helpers/tokens.rs               | 258
-crates/core/src/helpers/utils.rs               | 307
-crates/core/src/state/mod.rs                    |  19
-crates/core/src/state/app_state.rs             | 559
-crates/core/src/state/chat.rs                   |  91
+crates/core/src/helpers/utils.rs               | 371
+crates/core/src/state/mod.rs                    |  21
+crates/core/src/state/access_log.rs             |  64  FileAccessLog — LRU file access tracking
+crates/core/src/state/app_state.rs             | 624
+crates/core/src/state/chat.rs                   | 104
 crates/core/src/state/manifest.rs               |  52
 crates/core/src/state/project.rs                |  10
-crates/core/src/state/provider.rs               | 411
+crates/core/src/state/provider.rs               | 448
 crates/core/src/state/secret.rs                 |  55
-crates/core/src/state/session.rs               | 255
-crates/core/src/state/todo.rs                   | 115
-crates/core/src/storage/mod.rs                  |  33
+crates/core/src/state/session.rs               | 278
+crates/core/src/state/todo.rs                   |  79
+crates/core/src/storage/mod.rs                  |  30
 crates/core/src/storage/app_storage.rs           |  12
-crates/core/src/storage/messages.rs             |  230
+crates/core/src/storage/messages.rs             | 265
 crates/core/src/storage/discovery.rs            | 209
-crates/core/src/storage/persistence.rs          | 147
-crates/core/src/storage/provider_file.rs        | 237
-crates/core/src/storage/session_io.rs           | 361
-crates/core/src/storage/session_meta.rs         | 104
+crates/core/src/storage/persistence.rs          | 149
+crates/core/src/storage/provider_file.rs        | 242
+crates/core/src/storage/session_io.rs           | 419
+crates/core/src/storage/session_meta.rs         | 105
 crates/core/src/storage/shell_task.rs            |  82
 crates/core/src/tokenizer/mod.rs                 |  15
 crates/core/src/utils/mod.rs                     |  15
 crates/core/src/utils/extract.rs                 | 298
 crates/core/src/utils/fsutil.rs                  | 148
 crates/core/src/utils/sysinfo.rs                 | 689
-crates/core/tests/stability.rs                   | 276
+crates/core/tests/stability.rs                   | 283
 ```
 
-## `crates/fs/` — Filesystem, Shell, Git, Skills (17 files, 1,719 lines)
+## `crates/fs/` — Filesystem, Shell, Git, Skills (18 files, 2,398 lines)
 
 ```
 crates/fs/Cargo.toml                            |   6
@@ -140,11 +140,12 @@ crates/fs/src/lib.rs                            |  10
 crates/fs/src/git.rs                            | 175
 crates/fs/src/shell.rs                          | 200
 crates/fs/src/skills.rs                         | 153
-crates/fs/src/explorer/mod.rs                   |  15
-crates/fs/src/explorer/fuzzy.rs                 | 341
+crates/fs/src/explorer/mod.rs                   |  16
+crates/fs/src/explorer/comment.rs               | 276
+crates/fs/src/explorer/fuzzy.rs                 | 736
 crates/fs/src/explorer/gitignore.rs             |  73
 crates/fs/src/explorer/glob.rs                   |  54
-crates/fs/src/explorer/grep.rs                    | 203
+crates/fs/src/explorer/grep.rs                    | 216
 crates/fs/src/explorer/listing.rs               | 149
 crates/fs/src/explorer/read_file.rs             |  14
 crates/fs/src/explorer/tree.rs                   |  89
@@ -154,22 +155,22 @@ crates/fs/src/helpers/glob_match.rs              |  72
 crates/fs/src/helpers/levenshtein.rs             |  24
 ```
 
-## `crates/ui/` — Desktop UI (egui/eframe) (46 files, 7,310 lines)
+## `crates/ui/` — Desktop UI (egui/eframe) (45 files, 7,366 lines)
 
 ```
 crates/ui/Cargo.toml                            |  14
 crates/ui/src/lib.rs                            |  58
-crates/ui/src/app.rs                            | 494
+crates/ui/src/app.rs                            | 484
 crates/ui/src/theme.rs                          | 120
 crates/ui/src/chat/mod.rs                       |  17
 crates/ui/src/chat/code_block.rs                | 177
 crates/ui/src/chat/diff_view.rs                 | 233
-crates/ui/src/chat/input.rs                     | 331
+crates/ui/src/chat/input.rs                     | 342
 crates/ui/src/chat/markdown.rs                  | 192
 crates/ui/src/chat/messages.rs                  | 108
-crates/ui/src/chat/panel.rs                     | 321
-crates/ui/src/chat/session.rs                   | 217
-crates/ui/src/chat/state.rs                     |  62
+crates/ui/src/chat/panel.rs                     | 319
+crates/ui/src/chat/session.rs                   | 216
+crates/ui/src/chat/state.rs                     |  70
 crates/ui/src/chat/tabs.rs                      | 199
 crates/ui/src/chat/theme.rs                     |  76
 crates/ui/src/chat/tool_result.rs               | 507
@@ -190,22 +191,22 @@ crates/ui/src/settings/mod.rs                   |  10
 crates/ui/src/settings/about.rs                 | 187
 crates/ui/src/settings/projects.rs              | 163
 crates/ui/src/settings/prompt.rs                |  92
-crates/ui/src/settings/providers.rs             | 732
+crates/ui/src/settings/providers.rs             | 755
 crates/ui/src/settings/session.rs               |  83
 crates/ui/src/settings/state.rs                 |  42
 crates/ui/src/settings/timeouts.rs              | 147
 crates/ui/src/settings/window.rs                | 216
 crates/ui/src/tasks/mod.rs                      |   4
-crates/ui/src/tasks/task_list.rs                |  87
+crates/ui/src/tasks/task_list.rs                |  69
 crates/ui/src/tasks/task_window.rs              | 322
 crates/ui/src/toolbar/mod.rs                    |   5
-crates/ui/src/toolbar/buttons.rs                |  33
-crates/ui/src/toolbar/layout.rs                 |  70
-crates/ui/src/toolbar/meters.rs                 |  95
-crates/ui/src/toolbar/pickers.rs                | 182
+crates/ui/src/toolbar/buttons.rs                |  42
+crates/ui/src/toolbar/layout.rs                 |  81
+crates/ui/src/toolbar/meters.rs                 | 127
+crates/ui/src/toolbar/pickers.rs                | 189
 ```
 
-## `skills/` — Agent Skill Library (76 files)
+## `skills/` — Agent Skill Library (77 files)
 
 ```
 skills/accessibility.md                         | 145
@@ -284,7 +285,7 @@ skills/web_research.md                          | 129
 skills/webscraping.md                           | 181
 skills/websocket_and_realtime.md                | 196
 skills/writing_tests.md                         | 184
-skills/yang_mills_mass_gap.md                   | 140
+skills/yang_mills_mass_gap.md                   |  46
 ```
 
 ---
@@ -293,13 +294,13 @@ skills/yang_mills_mass_gap.md                   | 140
 
 | Area | Files | Lines | Role |
 |------|-------|-------|------|
-| `crates/ai/` | 33 | 7,074 | AI provider clients, chat orchestration, tool execution, HTTP/SSE, web scraping |
-| `crates/autocode/` | 4 | 23 | Windows binary entry point, icon embedding |
-| `crates/core/` | 36 | 5,949 | State types, persistence, helpers, tokenizer, sysinfo, HTML extraction |
-| `crates/fs/` | 17 | 1,719 | File explorer, shell executor, git status, skill loader |
-| `crates/ui/` | 46 | 7,310 | egui panels — chat, settings, explorer, toolbar, todo windows |
-| **Crate subtotal** | **136** | **22,075** | |
-| `skills/` | 77 | ~15,840 | Skill markdown files bundled with the binary |
+| `crates/ai/` | 33 | 7,698 | AI provider clients, chat orchestration, tool execution, HTTP/SSE, web scraping, LRU looping |
+| `crates/autocode/` | 4 | 12 | Windows binary entry point, icon embedding |
+| `crates/core/` | 34 | 6,172 | State types, persistence, helpers, tokenizer, sysinfo, HTML extraction, FileAccessLog |
+| `crates/fs/` | 18 | 2,398 | File explorer, shell executor, git status, skill loader |
+| `crates/ui/` | 45 | 7,366 | egui panels — chat, settings, explorer, toolbar, todo windows |
+| **Crate subtotal** | **134** | **23,646** | |
+| `skills/` | 77 | ~15,784 | Skill markdown files bundled with the binary |
 | `assets/` | 11 | — | Icons, screenshot, bundled providers.json |
 | Root + config | 13 | — | Workspace manifest, CI/CD, .gitignore, documentation |
-| **Grand total** | **237** | **~37,940** | |
+| **Grand total** | **235** | **~39,430** | |

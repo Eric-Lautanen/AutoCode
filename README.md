@@ -2,8 +2,6 @@
 
 **AutoCode** is an autonomous AI coding agent — a native Rust desktop app that connects to LLMs and gives them full access to your filesystem and shell. Not a harness or scaffold — a single self-contained binary. Built-in code editor, handoff system. Run tasks for days or weeks.
 
-> **[v0.2.7 Release](https://github.com/Eric-Lautanen/AutoCode/releases/tag/v0.2.7)** — Download for Windows, Linux, and macOS
-
 > **⚠️ WARNING — You're piloting a chainsaw**
 > AutoCode reads, writes, deletes, and runs code with **zero confirmation prompts for AI-triggered operations**. No "Are you sure?" popup when the agent edits files or runs commands. No safety rail. If you tell it to `rm -rf /`, it will try its hardest. Use at your own risk.
 
@@ -22,6 +20,7 @@ It's not trying to be clever. It's trying to be durable. Transient errors retry 
 | **Streaming** | Real-time SSE with auto-recovery, exponential backoff, auto-continue on drop |
 | **Sessions** | Named sessions per project (up to 50), JSONL history, lazy-load display buffer, per-project tab colors |
 | **Token Management** | 2-tier counting (API → heuristic), auto-handoff at configurable threshold |
+| **LRU Looping Window** | Toggleable pruning of old message pairs when context fills. Scoring-based selection (working set, recency floor, unverified-edit exemption), 3 aggressiveness levels. Disables auto-handoff when active. |
 | **File Explorer** | gitignore-aware tree with git status colors, text/image preview, inline rename/delete, code editor |
 | **Task Tracking** | Session-level floating todo list + project-level task list (disk-persisted) |
 | **Session Handoff** | Auto-continuation when context limits hit — trigger prompt, RESUME.md generation |
@@ -70,15 +69,17 @@ Built in **Rust 2024** with **egui 0.34** / **eframe 0.34**. Zero async — all 
 - **2-tier token estimation** — API counting endpoint → heuristic fallback
 - **7-strategy fuzzy patching** — exact → CRLF-normalized → whitespace-normalized → tabs-normalized → anchored line → Myers DP alignment → single-line fuzzy
 - **Transient/permanent error classification** — rate limits/timeouts/5xx retry forever (5s→180s cap); auth/quota/filter surface immediately
+- **LRU looping window** — scoring-based pruning when crossing configurable context thresholds. One group removed per trigger for conservative decisions. `FileAccessLog` tracks working set. Breadcrumb markers replace removed content. 3 aggressiveness levels (Conservative / Balanced / Aggressive).
 
 ### Data Flow
 
 1. **Startup** — seeds `providers.json` from baked-in defaults on first launch, loads state from `app.ron` + provider configs (including API keys) from `providers.json`
 2. **User input** — typed in chat panel; toolbar selects project/session/provider
 3. **Chat orchestration** — loads history from disk, builds API POST with tool definitions, parses SSE stream, dispatches tool calls
-4. **Tool execution** — 21 handlers run autonomously (filesystem, shell, search, web, skills, tasks, session mgmt)
-5. **Session persistence** — atomic JSON/JSONL writes, rate-limited, temp file + rename
-6. **Auto-continuation** — near context limit → generates RESUME.md → handoff to new session
+4. **Tool execution** — 21 handlers run autonomously (filesystem, shell, search, web, skills, tasks, session mgmt); `accessed_paths` recorded into `FileAccessLog`
+5. **LRU pruning** — on every frame + before each completion, `apply_looping_window()` scores message groups by working set membership, error count, superseded references, and recency floor; removes the lowest-scored group, writes breadcrumb marker
+6. **Session persistence** — atomic JSON/JSONL writes, rate-limited, temp file + rename
+7. **Auto-continuation** — near context limit → generates RESUME.md → handoff to new session (suppressed when LRU is active)
 
 ## Configuration
 
@@ -86,7 +87,7 @@ Settings are persisted across restarts. Most settings in `app.ron`; **provider c
 
 | Tab | What you can configure |
 |-----|----------------------|
-| **Providers** | API keys, models, rate limits, thinking API mode, handoff %, sampling params |
+| **Providers** | API keys, models, rate limits, thinking API mode, handoff %, sampling params, **LRU aggressiveness per model (Conservative/Balanced/Aggressive)** |
 | **Projects** | Add/manage project directories via native folder picker |
 | **Prompts** | System prompt, handoff trigger, handoff continuation, connection drop prompts |
 | **Session** | Display window size (default 50 messages), completion delay, web rate limit, disk write rate |
@@ -156,15 +157,15 @@ AutoCode ships with built-in configs for popular providers. You can also add any
 
 ## Project Structure
 
-**22,075 lines across 136 source files (5 crates).** See [`structure.md`](structure.md) for the full file-by-file breakdown.
+**~23,650 lines across 134 source files (5 crates).** See [`structure.md`](structure.md) for the full file-by-file breakdown.
 
 | Crate | Files | Lines | Role |
 |-------|-------|-------|------|
-| `autocode` (bin) | 4 | 23 | Entry point, icon embedding |
-| `autocode-core` (lib) | 36 | 5,949 | State types, storage, helpers, token estimator, sysinfo, HTML extraction |
-| `autocode-ai` (lib) | 33 | 7,074 | Chat loop, HTTP/SSE client, tool dispatch, retry/backoff, web scraping |
-| `autocode-fs` (lib) | 17 | 1,719 | Shell executor, file explorer, git status, skill loader |
-| `autocode-ui` (lib) | 46 | 7,310 | egui panels — chat, settings, explorer, toolbar, todo windows |
+| `autocode` (bin) | 4 | 12 | Entry point, icon embedding |
+| `autocode-core` (lib) | 34 | 6,172 | State types, storage, helpers, token estimator, sysinfo, HTML extraction, `FileAccessLog` |
+| `autocode-ai` (lib) | 33 | 7,698 | Chat loop, HTTP/SSE client, tool dispatch, retry/backoff, web scraping, LRU looping window |
+| `autocode-fs` (lib) | 18 | 2,398 | Shell executor, file explorer, git status, skill loader |
+| `autocode-ui` (lib) | 45 | 7,366 | egui panels — chat, settings, explorer, toolbar, todo windows, LRU toggle |
 
 ---
 
