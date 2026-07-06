@@ -399,9 +399,26 @@ impl AppState {
             .as_ref()
             .is_some_and(|sid| state.sessions.iter().any(|s| s.id == *sid));
         if !active_ok {
+            // Clear ALL per-session UI flags so stale app.ron values from the
+            // last active session don't leak into the UI or into the next
+            // session's session.json. The active session will re-populate
+            // these from disk via restore_active_session / load_new_session.
             state.show_todo = false;
             state.todo_user_dismissed = false;
             state.settings_open = false;
+            state.handoff_enabled = false;
+            state.show_explorer = false;
+            state.show_reasoning_inline = false;
+            state.show_project_tasks = false;
+            // Reset active_provider to the first available provider so a stale
+            // app.ron label (which may belong to a session the user won't
+            // reopen) doesn't point at an unrelated provider. The next session
+            // load will set active_provider from that session's provider_label.
+            let mut fallback_keys: Vec<&String> = manifest().providers.keys().collect();
+            fallback_keys.sort();
+            if let Some(first) = fallback_keys.first() {
+                state.active_provider = ProviderKind((*first).clone()).label().to_string();
+            }
         }
 
         state
@@ -474,19 +491,24 @@ impl AppState {
             self.sessions.retain(|s| !stale.contains(&s.id));
         }
 
-        // 4. Clean up orphaned session-level state.
-        if self.sessions.is_empty() {
+        // 4. Clean up orphaned session-level state. When there are no
+        // sessions, or the active session id no longer refers to a real
+        // session, drop the id and reset all per-session UI flags so stale
+        // app.ron values don't leak into the next session.
+        let active_orphaned = self.active_session_id.is_some()
+            && !self
+                .sessions
+                .iter()
+                .any(|s| Some(&s.id) == self.active_session_id.as_ref());
+        if self.sessions.is_empty() || active_orphaned {
             self.active_session_id = None;
             self.show_todo = false;
             self.todo_user_dismissed = false;
             self.handoff_enabled = false;
-        } else if self.active_session_id.is_some()
-            && !self
-                .sessions
-                .iter()
-                .any(|s| Some(&s.id) == self.active_session_id.as_ref())
-        {
-            self.active_session_id = None;
+            self.show_explorer = false;
+            self.show_reasoning_inline = false;
+            self.show_project_tasks = false;
+            self.settings_open = false;
         }
 
         // 6. Ensure project directories still exist.
@@ -638,6 +660,17 @@ impl AppState {
             eprintln!("[state] Failed to save new session meta: {}", e);
         }
         self.active_session_id = Some(sess.id.clone());
+        // Sync the global working-copy UI flags to the new session's defaults
+        // so the next auto-save (which copies global → session → disk) does
+        // not overwrite the new session's session.json with stale values
+        // left over from the previously active session via app.ron.
+        self.show_todo = sess.show_todo;
+        self.todo_user_dismissed = sess.todo_user_dismissed;
+        self.handoff_enabled = sess.handoff_enabled;
+        self.show_explorer = sess.show_explorer;
+        self.settings_open = sess.settings_open;
+        self.show_reasoning_inline = sess.show_reasoning_inline;
+        self.show_project_tasks = sess.show_project_tasks;
         self.sessions.push(sess);
     }
 

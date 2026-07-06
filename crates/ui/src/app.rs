@@ -515,9 +515,42 @@ impl eframe::App for AutocodeApp {
                 .active_provider()
                 .map(|p| p.model.clone())
                 .unwrap_or_default();
+            let show_todo = self.state.show_todo;
+            let todo_user_dismissed = self.state.todo_user_dismissed;
+            let handoff_enabled = self.state.handoff_enabled;
+            let show_explorer = self.state.show_explorer;
+            let settings_open = self.state.settings_open;
+            let show_reasoning_inline = self.state.show_reasoning_inline;
+            let show_project_tasks = self.state.show_project_tasks;
+            let provider_params = self.state.active_provider().map(|p| {
+                (
+                    p.temperature,
+                    p.top_p,
+                    p.frequency_penalty,
+                    p.presence_penalty,
+                    p.requests_per_hour,
+                    p.handoff_percent,
+                )
+            });
             if let Some(sess) = self.state.active_session_mut() {
                 sess.provider_label = prov_label;
                 sess.model = model;
+                sess.show_todo = show_todo;
+                sess.todo_user_dismissed = todo_user_dismissed;
+                sess.handoff_enabled = handoff_enabled;
+                sess.show_explorer = show_explorer;
+                sess.settings_open = settings_open;
+                sess.show_reasoning_inline = show_reasoning_inline;
+                sess.show_project_tasks = show_project_tasks;
+                sess.draft_input = self.chat_panel.input.clone();
+                if let Some((temp, top_p, freq, pres, rph, handoff)) = provider_params {
+                    sess.temperature = temp;
+                    sess.top_p = top_p;
+                    sess.frequency_penalty = freq;
+                    sess.presence_penalty = pres;
+                    sess.requests_per_hour = rph;
+                    sess.handoff_percent = handoff;
+                }
             }
         }
         self.save_sessions();

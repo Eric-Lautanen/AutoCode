@@ -231,6 +231,7 @@ pub(crate) fn show_input_row(
                                         available.first().cloned().unwrap_or_else(|| "high".into());
                                 }
                             }
+                            state.session_meta_dirty = true;
                         }
 
                         // Reasoning effort selector (always visible, greyed if unsupported/off)
@@ -291,6 +292,7 @@ pub(crate) fn show_input_row(
                                                 state.sessions.iter_mut().find(|s| &s.id == sid)
                                         {
                                             sess.reasoning_effort = label.clone();
+                                            state.session_meta_dirty = true;
                                         }
                                         egui::Popup::close_id(ui.ctx(), popup_id);
                                     }
