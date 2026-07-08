@@ -63,6 +63,20 @@ pub fn load_project_meta(project: &Project) -> Option<crate::state::ProjectMeta>
     }
 }
 
+/// Mirror the user's thinking/effort choice into the project-level defaults
+/// (meta.json) so newly created sessions inherit the last selection.
+/// Called from the chat input bar's thinking toggle and effort picker.
+pub fn sync_project_thinking_defaults(project: &Project, thinking: bool, effort: &str) {
+    let mut meta = load_project_meta(project).unwrap_or_default();
+    meta.project_thinking_mode = thinking;
+    meta.project_reasoning_effort = if thinking {
+        effort.to_string()
+    } else {
+        String::new()
+    };
+    let _ = save_project_meta(project, &meta);
+}
+
 fn project_dir(data_dir_name: &str) -> PathBuf {
     fsutil::exe_dir()
         .join("AutoCode_data")

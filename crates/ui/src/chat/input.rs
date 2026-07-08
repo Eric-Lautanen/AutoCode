@@ -184,6 +184,12 @@ pub(crate) fn show_input_row(
                             }
                         }
 
+                        // Pending project-meta sync (thinking default + effort) so the
+                        // next new session inherits the user's last toggle. The actual
+                        // disk write happens after the effort picker below; gather first
+                        // because the session borrow ends before we can touch projects.
+                        let mut project_meta_update: Option<(Option<String>, bool, String)> = None;
+
                         // Thinking toggle button (always visible, greyed if unsupported)
                         let th_enabled = thinking_supported;
                         if ui
@@ -233,6 +239,11 @@ pub(crate) fn show_input_row(
                                 }
                             }
                             state.session_meta_dirty = true;
+                            project_meta_update = Some((
+                                sess.project_id.clone(),
+                                sess.thinking_mode,
+                                sess.reasoning_effort.clone(),
+                            ));
                         }
 
                         // Reasoning effort selector (always visible, greyed if unsupported/off)
@@ -294,12 +305,28 @@ pub(crate) fn show_input_row(
                                         {
                                             sess.reasoning_effort = label.clone();
                                             state.session_meta_dirty = true;
+                                            project_meta_update = Some((
+                                                sess.project_id.clone(),
+                                                true,
+                                                sess.reasoning_effort.clone(),
+                                            ));
                                         }
                                         egui::Popup::close_id(ui.ctx(), popup_id);
                                     }
                                 });
                             }
                         });
+
+                        // Persist the user's thinking/effort choice to the project-level
+                        // meta.json so new sessions in this project start with these on.
+                        if let Some((pid, th, effort)) = project_meta_update
+                            && let Some(pid) = pid
+                            && let Some(proj) = state.projects.iter().find(|p| p.id == pid)
+                        {
+                            autocode_core::storage::sync_project_thinking_defaults(
+                                proj, th, &effort,
+                            );
+                        }
 
                         let todo_icon = "[=]";
                         let todo_color = if state.show_todo {
