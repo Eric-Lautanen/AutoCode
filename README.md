@@ -145,7 +145,7 @@ Settings are persisted across restarts. Most settings in `app.ron`; **provider c
 | `project_task_list` | Create/update project-level task list (persists across sessions) |
 | `handoff` | Signal context limit and continue in new session |
 | `name_session` | Auto-label the current session |
-| `verify_proof` | Submit proofs to external verifiers (Lean, Coq, Z3) |
+| `verify_proof` | Submit proofs to external verifiers (Lean, Coq, Z3) — auto-detect, subprocess exec, output parsing, Yang-Mills structural checks, JSONL attempt log at `proofs/attempts.jsonl` |
 | `search_literature` | Search academic literature (arXiv API) by keyword |
 | `explore_theorem` | Decompose theorems into sub-goals and track proof state |
 

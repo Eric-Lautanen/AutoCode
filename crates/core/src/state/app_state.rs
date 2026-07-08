@@ -651,6 +651,39 @@ impl AppState {
         let mut sess = Session::new(project_id, prov_label, model);
         sess.id = id.clone();
         sess.label = format!("S{}", id);
+
+        // Apply project-level thinking defaults if configured. The project
+        // default only seeds new sessions; the session's own thinking_mode /
+        // reasoning_effort (persisted to session.json) remain the runtime
+        // source of truth. If the active model doesn't support thinking, the
+        // default is silently ignored — matching the per-session toggle.
+        if let Some(ref pid) = sess.project_id
+            && let Some(proj) = self.projects.iter().find(|p| &p.id == pid)
+            && let Some(meta) = crate::storage::load_project_meta(proj)
+            && meta.project_thinking_mode
+        {
+            let kind = self.active_provider().map(|p| p.kind.clone());
+            let model = self
+                .active_provider()
+                .map(|p| p.model.clone())
+                .unwrap_or_default();
+            let can_think = self.active_provider().is_some_and(|p| {
+                p.thinking_api.supports_thinking()
+                    || p.thinking_overrides.iter().any(|(k, _)| k != "off")
+            });
+            if can_think && let Some(ref kind) = kind {
+                sess.thinking_mode = true;
+                let available = crate::helpers::reasoning_efforts_for_provider(kind, &model);
+                if !meta.project_reasoning_effort.is_empty()
+                    && available.contains(&meta.project_reasoning_effort)
+                {
+                    sess.reasoning_effort = meta.project_reasoning_effort;
+                } else if let Some(first) = available.first() {
+                    sess.reasoning_effort = first.clone();
+                }
+            }
+        }
+
         // Persist metadata immediately so the session survives app restarts.
         // The JSONL message file is created later by flush_pending_writes.
         if let Some(ref pid) = sess.project_id

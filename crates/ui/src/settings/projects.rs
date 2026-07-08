@@ -111,6 +111,44 @@ pub fn show_projects(ui: &mut egui::Ui, state: &mut AppState) {
                                 }
                             });
                     }
+
+                    // Project-level thinking defaults for new sessions.
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new("Thinking defaults for new sessions:")
+                            .size(11.0)
+                            .color(Palette::TEXT_MUTED),
+                    );
+                    ui.horizontal(|ui| {
+                        let mut meta =
+                            autocode_core::storage::load_project_meta(p).unwrap_or_default();
+                        let mut thinking = meta.project_thinking_mode;
+                        let changed_thinking = ui.checkbox(&mut thinking, "Thinking").changed();
+                        let mut effort_buf = meta.project_reasoning_effort.clone();
+                        let effort_resp = egui::ComboBox::from_id_salt(("proj_effort", &p.id))
+                            .selected_text(if effort_buf.is_empty() {
+                                "default".to_string()
+                            } else {
+                                effort_buf.clone()
+                            })
+                            .show_ui(ui, |ui| {
+                                for label in ["high", "medium", "low", "max"] {
+                                    ui.selectable_value(&mut effort_buf, label.to_string(), label);
+                                }
+                                ui.selectable_value(
+                                    &mut effort_buf,
+                                    String::new(),
+                                    "(model default)",
+                                );
+                            });
+                        let changed_effort = effort_resp.response.changed()
+                            || effort_buf != meta.project_reasoning_effort;
+                        if changed_thinking || changed_effort {
+                            meta.project_thinking_mode = thinking;
+                            meta.project_reasoning_effort = effort_buf;
+                            let _ = autocode_core::storage::save_project_meta(p, &meta);
+                        }
+                    });
                 });
 
             ui.add_space(4.0);

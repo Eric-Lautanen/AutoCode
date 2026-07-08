@@ -73,6 +73,17 @@ pub struct ProjectMeta {
     pub created_at: u64,
     #[serde(default)]
     pub project_task_list: TodoList,
+    /// Project-level default: should new sessions in this project start with
+    /// thinking enabled? Applied at session-creation time only; the session's
+    /// own `thinking_mode` (session.json) is the runtime source of truth.
+    #[serde(default)]
+    pub project_thinking_mode: bool,
+    /// Project-level default reasoning effort for new sessions
+    /// ("high", "medium", "low", "max", or "" = use Session::new() default).
+    /// Only applied when `project_thinking_mode` is true and the active model
+    /// supports thinking and lists this effort as valid.
+    #[serde(default)]
+    pub project_reasoning_effort: String,
 }
 
 impl Default for ProjectMeta {
@@ -84,6 +95,8 @@ impl Default for ProjectMeta {
             root_path: String::new(),
             created_at: 0,
             project_task_list: TodoList::default(),
+            project_thinking_mode: false,
+            project_reasoning_effort: String::new(),
         }
     }
 }

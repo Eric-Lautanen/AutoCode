@@ -53,7 +53,7 @@ Construct a non-trivial 4D quantum Yang–Mills theory (any compact simple gauge
 
 ## Tools Available
 
-- `verify_proof` — stub for calling external verifiers (Lean/Coq/Z3) on proof steps
+- `verify_proof` — full proof checker: auto-detects verifier system (Lean/Coq/Z3), discovers a backend via `$AUTOCODE_VERIFIER` / `verify/<system>.sh` / PATH, runs the verifier as a subprocess with timeout, parses output for success/failure markers, runs Yang-Mills mass-gap structural sanity checks (Pattern A/B failure modes + required-ingredient checklist), and logs every attempt to `proofs/attempts.jsonl` (JSONL) so the agent can read its prior attempts with read_file/grep and avoid repeating dead ends. Implementation: `crates/ai/src/chat/tools/proof.rs`.
 - `search_literature` — search arXiv and web for papers by keyword/topic
 - `explore_theorem` — decompose a theorem into sub-goals and track exploration state
 

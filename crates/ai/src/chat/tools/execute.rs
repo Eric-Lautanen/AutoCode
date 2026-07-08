@@ -907,28 +907,7 @@ pub fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
         }
 
         "verify_proof" => {
-            let statement = args["statement"].as_str().unwrap_or("");
-            let proof_code = args["proof_code"].as_str().unwrap_or("");
-            let system = args["system"].as_str().unwrap_or("auto");
-
-            let verifier_dir = std::path::Path::new(project_root).join("verify");
-            let configured = std::env::var("AUTOCODE_VERIFIER").is_ok() || verifier_dir.exists();
-
-            if configured {
-                format!(
-                    "verify_proof: statement submitted to {} verifier.\nStatement: {}\nProof code ({} chars, truncated to 500):\n{}\n\nNOTE: Verifier integration is a stub. Run the verifier externally and check output.\nExpected exit 0 on success.",
-                    system,
-                    statement,
-                    proof_code.len(),
-                    &proof_code.chars().take(500).collect::<String>()
-                )
-            } else {
-                format!(
-                    "verify_proof: no verifier configured.\nStatement: {}\nProof code: {} chars\n\nTo enable, set $AUTOCODE_VERIFIER or create verify/lean.sh/coq.sh/z3.sh in project root.",
-                    statement,
-                    proof_code.len()
-                )
-            }
+            super::proof::run_verify_proof(project_root, &args)
         }
 
         "search_literature" => {

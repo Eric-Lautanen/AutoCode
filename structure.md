@@ -60,9 +60,10 @@ crates/ai/src/chat/polling/mod.rs              | 120
 crates/ai/src/chat/polling/shell.rs            | 292
 crates/ai/src/chat/polling/stream.rs           | 705
 crates/ai/src/chat/polling/tools.rs            | 117
-crates/ai/src/chat/tools/mod.rs                |   6
-crates/ai/src/chat/tools/execute.rs            |1042
-crates/ai/src/chat/tools/meta.rs               | 342
+crates/ai/src/chat/tools/mod.rs                |   7
+crates/ai/src/chat/tools/execute.rs            |1093
+crates/ai/src/chat/tools/meta.rs               | 354
+crates/ai/src/chat/tools/proof.rs              | 820  Yang-Mills proof checker (verifier discovery, exec, output parsing, structural checks, JSONL attempt log)
 crates/ai/src/chat/tools/process.rs            |  37
 crates/ai/src/helpers/mod.rs                   |  17
 crates/ai/src/helpers/fuzzy.rs                 | 686
