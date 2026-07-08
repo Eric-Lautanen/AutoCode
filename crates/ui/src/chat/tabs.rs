@@ -7,7 +7,7 @@ use egui::{Color32, Frame, Margin, RichText, ScrollArea, Stroke, Vec2};
 
 use crate::theme::{Palette, ROUND_SM, project_accent};
 use autocode_ai::chat::ChatRuntime;
-use autocode_core::state::{AppState, Role};
+use autocode_core::state::AppState;
 
 use super::state::ChatPanelState;
 use super::theme::theme;
@@ -153,30 +153,23 @@ pub(crate) fn show_session_tabs(
                                     if close_resp.on_hover_text("Close session").clicked() {
                                         autocode_ai::chat::abort_for_session(runtimes, &id);
                                         panel_state.scroll_offsets.remove(&id);
-                                        let was_used =
-                                            state.sessions.iter().find(|s| s.id == id).is_some_and(
-                                                |s| s.messages.iter().any(|m| m.role == Role::User),
-                                            );
-                                        if was_used {
-                                            // Session was used — mark closed so it can be reopened.
-                                            if let Some(sess) =
-                                                state.sessions.iter_mut().find(|s| s.id == id)
+                                        // Close the tab only — never delete from disk. The disk
+                                        // is the source of truth and sessions persist until the
+                                        // user manually deletes them (in the settings UI).
+                                        if let Some(sess) =
+                                            state.sessions.iter_mut().find(|s| s.id == id)
+                                        {
+                                            sess.closed = true;
+                                            if let Some(pid) = sess.project_id.as_ref()
+                                                && let Some(proj) =
+                                                    state.projects.iter().find(|p| &p.id == pid)
                                             {
-                                                sess.closed = true;
-                                                if let Some(pid) = sess.project_id.as_ref()
-                                                    && let Some(proj) =
-                                                        state.projects.iter().find(|p| &p.id == pid)
-                                                {
-                                                    let _ =
-                                                        autocode_core::storage::save_session_meta(
-                                                            proj, sess,
-                                                        );
-                                                }
-                                                sess.messages.clear();
+                                                let _ =
+                                                    autocode_core::storage::save_session_meta(
+                                                        proj, sess,
+                                                    );
                                             }
-                                        } else {
-                                            // Never used — delete entirely.
-                                            autocode_ai::chat::delete_session(state, &id);
+                                            sess.messages.clear();
                                         }
                                         // Show welcome screen — never auto-switch to another tab.
                                         if state.active_session_id.as_deref() == Some(&id) {
