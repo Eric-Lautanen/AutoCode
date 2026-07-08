@@ -106,9 +106,25 @@ pub struct ChatRuntime {
     pub next_completion_allowed: Option<std::time::Instant>,
     /// Guard to prevent re-entrant handoff handling.
     pub handoff_in_progress: bool,
+    /// Count of consecutive reasoning-only completions (model streamed thinking
+    /// but no visible text). Used to break the think-loop where the model
+    /// reasons forever without ever emitting a response or tool call.
+    pub reasoning_only_streak: u8,
+    /// Reasoning captured from a stream that was torn down mid-flight (e.g. the
+    /// provider dropped the connection or the runtime was drained while still
+    /// streaming). Recovered by poll_stream and pushed into the conversation so
+    /// the thinking isn't silently lost.
+    pub salvaged_reasoning: String,
+    /// Set by the Stop button before drain(), so salvage logic knows not to
+    /// re-inject reasoning the user explicitly discarded.
+    pub stopped_by_user: bool,
     /// Set when the handoff trigger prompt has been sent to the model
     /// to prevent re-sending on subsequent frames.
     pub handoff_trigger_sent: bool,
+    /// Set for one turn after mid-stream reasoning was salvaged and re-injected
+    /// as a USER message, so auto_continue skips the "Session tasks remain"
+    /// reminder and lets the model resume the interrupted reasoning instead.
+    pub reasoning_dropped: bool,
     /// The AI-generated next_prompt from the handoff tool call,
     /// used as the first user message in the fresh session.
     pub handoff_next_prompt: Option<String>,
@@ -151,7 +167,11 @@ impl Default for ChatRuntime {
             retry_after: None,
             next_completion_allowed: None,
             handoff_in_progress: false,
+            reasoning_only_streak: 0,
+            salvaged_reasoning: String::new(),
+            stopped_by_user: false,
             handoff_trigger_sent: false,
+            reasoning_dropped: false,
             handoff_next_prompt: None,
             orphaned_retry_count: 0,
             pending_start: 0,
@@ -170,6 +190,13 @@ impl ChatRuntime {
     }
 
     pub fn drain(&mut self) {
+        // Salvage in-flight reasoning if the stream was torn down unexpectedly
+        // (provider dropped, drained mid-stream) and the user didn't hit Stop.
+        // The reasoning is recovered by poll_stream and re-injected so the
+        // model can continue from where it left off instead of starting over.
+        if !self.stopped_by_user && self.stream_rx.is_some() && !self.reasoning_buf.is_empty() {
+            self.salvaged_reasoning = std::mem::take(&mut self.reasoning_buf);
+        }
         self.stream_rx = None;
         self.tool_rx = None;
         for (_, _, pid) in self.running_tasks.drain(..) {

@@ -906,9 +906,7 @@ pub fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
             )
         }
 
-        "verify_proof" => {
-            super::proof::run_verify_proof(project_root, &args)
-        }
+        "verify_proof" => super::proof::run_verify_proof(project_root, &args),
 
         "search_literature" => {
             let query = args["query"].as_str().unwrap_or("");

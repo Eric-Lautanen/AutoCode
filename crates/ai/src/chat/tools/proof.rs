@@ -165,8 +165,9 @@ impl VerifyOutcome {
     /// Wall-clock duration in milliseconds, when available.
     pub fn duration_ms(&self) -> Option<u64> {
         match self {
-            Self::Verified { duration_ms, .. }
-            | Self::Rejected { duration_ms, .. } => Some(*duration_ms),
+            Self::Verified { duration_ms, .. } | Self::Rejected { duration_ms, .. } => {
+                Some(*duration_ms)
+            }
             _ => None,
         }
     }
@@ -182,8 +183,7 @@ impl VerifyOutcome {
     /// Captured verifier output, when available.
     pub fn output(&self) -> Option<String> {
         match self {
-            Self::Verified { output, .. }
-            | Self::Rejected { output, .. } => Some(output.clone()),
+            Self::Verified { output, .. } | Self::Rejected { output, .. } => Some(output.clone()),
             Self::Timeout { partial_output, .. } => Some(partial_output.clone()),
             _ => None,
         }
@@ -202,28 +202,61 @@ pub fn run_verify_proof(project_root: &str, args: &serde_json::Value) -> String 
     // Resolve the attempts log path up front so we can report history and
     // detect duplicates even on early-exit paths.
     let log_path = attempts_path(project_root);
-    let prior_count = log_path
-        .as_ref()
-        .map(|p| count_attempts(p))
-        .unwrap_or(0);
+    let prior_count = log_path.as_ref().map(|p| count_attempts(p)).unwrap_or(0);
     let hash = proof_hash(proof_code);
 
     // Duplicate detection: if this exact proof was already submitted, note it
     // in the report but still re-run (the verifier may have changed).
-    let dup_status = log_path
-        .as_ref()
-        .and_then(|p| find_duplicate(p, &hash));
+    let dup_status = log_path.as_ref().and_then(|p| find_duplicate(p, &hash));
 
     if statement.is_empty() {
         let outcome = VerifyOutcome::InvalidInput("missing 'statement' argument".into());
-        let report = outcome_report(&outcome, statement, proof_code, &log_path, prior_count, &dup_status);
-        log_outcome(&log_path, prior_count, statement, "auto", "auto", proof_code, &hash, &outcome, None);
+        let report = outcome_report(
+            &outcome,
+            statement,
+            proof_code,
+            &log_path,
+            prior_count,
+            &dup_status,
+        );
+        log_outcome(
+            &log_path,
+            prior_count,
+            &ProofContext {
+                statement,
+                system: "auto",
+                system_source: "auto",
+                proof_code,
+                hash: &hash,
+            },
+            &outcome,
+            None,
+        );
         return report;
     }
     if proof_code.trim().is_empty() {
         let outcome = VerifyOutcome::InvalidInput("missing or empty 'proof_code' argument".into());
-        let report = outcome_report(&outcome, statement, proof_code, &log_path, prior_count, &dup_status);
-        log_outcome(&log_path, prior_count, statement, "auto", "auto", proof_code, &hash, &outcome, None);
+        let report = outcome_report(
+            &outcome,
+            statement,
+            proof_code,
+            &log_path,
+            prior_count,
+            &dup_status,
+        );
+        log_outcome(
+            &log_path,
+            prior_count,
+            &ProofContext {
+                statement,
+                system: "auto",
+                system_source: "auto",
+                proof_code,
+                hash: &hash,
+            },
+            &outcome,
+            None,
+        );
         return report;
     }
     if proof_code.len() > MAX_PROOF_BYTES {
@@ -232,8 +265,27 @@ pub fn run_verify_proof(project_root: &str, args: &serde_json::Value) -> String 
             proof_code.len(),
             MAX_PROOF_BYTES
         ));
-        let report = outcome_report(&outcome, statement, proof_code, &log_path, prior_count, &dup_status);
-        log_outcome(&log_path, prior_count, statement, "auto", "auto", proof_code, &hash, &outcome, None);
+        let report = outcome_report(
+            &outcome,
+            statement,
+            proof_code,
+            &log_path,
+            prior_count,
+            &dup_status,
+        );
+        log_outcome(
+            &log_path,
+            prior_count,
+            &ProofContext {
+                statement,
+                system: "auto",
+                system_source: "auto",
+                proof_code,
+                hash: &hash,
+            },
+            &outcome,
+            None,
+        );
         return report;
     }
 
@@ -242,14 +294,34 @@ pub fn run_verify_proof(project_root: &str, args: &serde_json::Value) -> String 
         match detect_system(proof_code) {
             Some(s) => (s, "auto"),
             None => {
-                let outcome = VerifyOutcome::InvalidInput(format!(
+                let outcome = VerifyOutcome::InvalidInput(
                     "system='auto' but the proof language could not be detected. \
                      Set 'system' explicitly to 'lean', 'coq', or 'z3'.\n\
                      Detection heuristics look for: Lean (`theorem`/`lemma`/`by`), \
                      Coq (`Theorem`/`Proof`/`Qed`), Z3 (`(declare-fun`/`(assert`/`(check-sat`)."
-                ));
-                let report = outcome_report(&outcome, statement, proof_code, &log_path, prior_count, &dup_status);
-                log_outcome(&log_path, prior_count, statement, "auto", "auto", proof_code, &hash, &outcome, None);
+                        .to_string(),
+                );
+                let report = outcome_report(
+                    &outcome,
+                    statement,
+                    proof_code,
+                    &log_path,
+                    prior_count,
+                    &dup_status,
+                );
+                log_outcome(
+                    &log_path,
+                    prior_count,
+                    &ProofContext {
+                        statement,
+                        system: "auto",
+                        system_source: "auto",
+                        proof_code,
+                        hash: &hash,
+                    },
+                    &outcome,
+                    None,
+                );
                 return report;
             }
         }
@@ -261,8 +333,27 @@ pub fn run_verify_proof(project_root: &str, args: &serde_json::Value) -> String 
                     "unknown verifier system '{}'. Use 'lean', 'coq', 'z3', or 'auto'.",
                     system_str
                 ));
-                let report = outcome_report(&outcome, statement, proof_code, &log_path, prior_count, &dup_status);
-                log_outcome(&log_path, prior_count, statement, system_str, "explicit", proof_code, &hash, &outcome, None);
+                let report = outcome_report(
+                    &outcome,
+                    statement,
+                    proof_code,
+                    &log_path,
+                    prior_count,
+                    &dup_status,
+                );
+                log_outcome(
+                    &log_path,
+                    prior_count,
+                    &ProofContext {
+                        statement,
+                        system: system_str,
+                        system_source: "explicit",
+                        proof_code,
+                        hash: &hash,
+                    },
+                    &outcome,
+                    None,
+                );
                 return report;
             }
         }
@@ -285,10 +376,29 @@ pub fn run_verify_proof(project_root: &str, args: &serde_json::Value) -> String 
                         .to_string(),
                 );
             }
-            searched.push(format!("PATH lookup for `lean`/`coqc`/`z3`"));
+            searched.push("PATH lookup for `lean`/`coqc`/`z3`".to_string());
             let outcome = VerifyOutcome::NoBackend { system, searched };
-            let report = outcome_report(&outcome, statement, proof_code, &log_path, prior_count, &dup_status);
-            log_outcome(&log_path, prior_count, statement, system.as_str(), system_source, proof_code, &hash, &outcome, None);
+            let report = outcome_report(
+                &outcome,
+                statement,
+                proof_code,
+                &log_path,
+                prior_count,
+                &dup_status,
+            );
+            log_outcome(
+                &log_path,
+                prior_count,
+                &ProofContext {
+                    statement,
+                    system: system.as_str(),
+                    system_source,
+                    proof_code,
+                    hash: &hash,
+                },
+                &outcome,
+                None,
+            );
             return report;
         }
     };
@@ -298,20 +408,44 @@ pub fn run_verify_proof(project_root: &str, args: &serde_json::Value) -> String 
     // Write proof to a temp file and run the verifier.
     let outcome = run_verifier(system, &backend, proof_code, timeout_secs);
     let structural = structural_check(statement, proof_code);
-    let report = outcome_report(&outcome, statement, proof_code, &log_path, prior_count, &dup_status);
-    log_outcome(&log_path, prior_count, statement, system.as_str(), system_source, proof_code, &hash, &outcome, Some(&structural));
+    let report = outcome_report(
+        &outcome,
+        statement,
+        proof_code,
+        &log_path,
+        prior_count,
+        &dup_status,
+    );
+    log_outcome(
+        &log_path,
+        prior_count,
+        &ProofContext {
+            statement,
+            system: system.as_str(),
+            system_source,
+            proof_code,
+            hash: &hash,
+        },
+        &outcome,
+        Some(&structural),
+    );
     report
+}
+
+/// The proof input context shared by every outcome log entry.
+struct ProofContext<'a> {
+    statement: &'a str,
+    system: &'a str,
+    system_source: &'a str,
+    proof_code: &'a str,
+    hash: &'a str,
 }
 
 /// Build a `ProofAttempt` from the outcome and append it to the JSONL log.
 fn log_outcome(
     log_path: &Option<PathBuf>,
     prior_count: usize,
-    statement: &str,
-    system: &str,
-    system_source: &str,
-    proof_code: &str,
-    hash: &str,
+    ctx: &ProofContext,
     outcome: &VerifyOutcome,
     structural: Option<&StructuralReport>,
 ) {
@@ -319,11 +453,11 @@ fn log_outcome(
     let attempt = ProofAttempt {
         attempt: prior_count + 1,
         timestamp: autocode_core::helpers::unix_now(),
-        statement: statement.to_string(),
-        system: system.to_string(),
-        system_source: system_source.to_string(),
-        proof_code: proof_code.to_string(),
-        proof_hash: hash.to_string(),
+        statement: ctx.statement.to_string(),
+        system: ctx.system.to_string(),
+        system_source: ctx.system_source.to_string(),
+        proof_code: ctx.proof_code.to_string(),
+        proof_hash: ctx.hash.to_string(),
         status: outcome.status_label().to_string(),
         backend: outcome.backend_label(),
         exit_code: outcome.exit_code(),
@@ -346,24 +480,53 @@ fn detect_system(code: &str) -> Option<VerifierSystem> {
     let lean_score = count_markers(
         code,
         &[
-            "theorem ", "lemma ", " def ", "theorem\n", "lemma\n", " by ",
-            "begin", "end", "instance ", "noncomputable", "axiom ", "Lean",
+            "theorem ",
+            "lemma ",
+            " def ",
+            "theorem\n",
+            "lemma\n",
+            " by ",
+            "begin",
+            "end",
+            "instance ",
+            "noncomputable",
+            "axiom ",
+            "Lean",
         ],
     );
     let coq_score = count_markers(
         code,
         &[
-            "Theorem ", "Lemma ", "Proof.", "Qed.", "Definition ", "Inductive ",
-            "Require Import", "Require Export", "intros", "exact", "apply",
-            "rewrite", "destruct", "Coq",
+            "Theorem ",
+            "Lemma ",
+            "Proof.",
+            "Qed.",
+            "Definition ",
+            "Inductive ",
+            "Require Import",
+            "Require Export",
+            "intros",
+            "exact",
+            "apply",
+            "rewrite",
+            "destruct",
+            "Coq",
         ],
     );
     let z3_score = count_markers(
         code,
         &[
-            "(declare-fun", "(declare-const", "(assert", "(check-sat)",
-            "(declare-sort", "(define-fun", "(push)", "(pop)", "(get-model)",
-            "set-logic", "set-info",
+            "(declare-fun",
+            "(declare-const",
+            "(assert",
+            "(check-sat)",
+            "(declare-sort",
+            "(define-fun",
+            "(push)",
+            "(pop)",
+            "(get-model)",
+            "set-logic",
+            "set-info",
         ],
     );
 
@@ -498,10 +661,10 @@ fn which(exe: &str) -> bool {
 }
 
 fn resolve_timeout() -> u64 {
-    if let Ok(v) = std::env::var("AUTOCODE_VERIFIER_TIMEOUT") {
-        if let Ok(secs) = v.parse::<u64>() {
-            return secs.min(MAX_TIMEOUT_SECS);
-        }
+    if let Ok(v) = std::env::var("AUTOCODE_VERIFIER_TIMEOUT")
+        && let Ok(secs) = v.parse::<u64>()
+    {
+        return secs.min(MAX_TIMEOUT_SECS);
     }
     DEFAULT_TIMEOUT_SECS
 }
@@ -627,11 +790,7 @@ fn run_verifier(
         };
     }
 
-    let exit_code = child
-        .wait()
-        .ok()
-        .and_then(|s| s.code())
-        .unwrap_or(-1);
+    let exit_code = child.wait().ok().and_then(|s| s.code()).unwrap_or(-1);
 
     // Parse the output for success/failure markers.
     let (verified, reason) = parse_verifier_output(system, exit_code, &combined);
@@ -656,11 +815,7 @@ fn run_verifier(
 }
 
 /// Build the `Command` for the given backend and proof file path.
-fn build_command(
-    system: VerifierSystem,
-    backend: &VerifierBackend,
-    proof_path: &str,
-) -> Command {
+fn build_command(system: VerifierSystem, backend: &VerifierBackend, proof_path: &str) -> Command {
     if backend.is_script {
         // Run the script directly. On Windows, .cmd/.bat/.ps1 need the shell.
         if cfg!(target_os = "windows")
@@ -672,7 +827,14 @@ fn build_command(
         }
         if cfg!(target_os = "windows") && backend.program.ends_with(".ps1") {
             let mut c = Command::new("powershell");
-            c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", &backend.program, proof_path]);
+            c.args([
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                &backend.program,
+                proof_path,
+            ]);
             return c;
         }
         // .sh on any platform — run via sh for portability.
@@ -745,10 +907,18 @@ fn parse_verifier_output(system: VerifierSystem, exit_code: i32, output: &str) -
     let lower = output.to_ascii_lowercase();
 
     // Hard failure markers common across systems.
-    let hard_errors = ["error:", "syntax error", "type mismatch", "unknown identifier"];
+    let hard_errors = [
+        "error:",
+        "syntax error",
+        "type mismatch",
+        "unknown identifier",
+    ];
     for he in hard_errors {
         if lower.contains(he) {
-            return (false, format!("verifier reported '{}'", he.trim_end_matches(':')));
+            return (
+                false,
+                format!("verifier reported '{}'", he.trim_end_matches(':')),
+            );
         }
     }
 
@@ -858,10 +1028,13 @@ pub fn structural_check(statement: &str, proof_code: &str) -> StructuralReport {
     let mentions_renorm = p_lower.contains("renormal")
         || p_lower.contains("continuum limit")
         || p_lower.contains("continuum-limit");
-    let mentions_4d = p_lower.contains("4d") || p_lower.contains("four-dimensional") || p_lower.contains("4-dimensional");
-    report
-        .checklist
-        .push(("Addresses 4D renormalization / continuum limit".into(), mentions_renorm));
+    let mentions_4d = p_lower.contains("4d")
+        || p_lower.contains("four-dimensional")
+        || p_lower.contains("4-dimensional");
+    report.checklist.push((
+        "Addresses 4D renormalization / continuum limit".into(),
+        mentions_renorm,
+    ));
 
     if mentions_4d && !mentions_renorm {
         report.warnings.push(
@@ -873,36 +1046,41 @@ pub fn structural_check(statement: &str, proof_code: &str) -> StructuralReport {
     }
 
     // --- Required ingredients for a mass-gap proof ----------------------
-    let mentions_mass_gap = p_lower.contains("mass gap") || p_lower.contains("δ > 0") || p_lower.contains("delta > 0");
-    report
-        .checklist
-        .push(("States a strictly positive mass gap Δ > 0".into(), mentions_mass_gap));
+    let mentions_mass_gap =
+        p_lower.contains("mass gap") || p_lower.contains("δ > 0") || p_lower.contains("delta > 0");
+    report.checklist.push((
+        "States a strictly positive mass gap Δ > 0".into(),
+        mentions_mass_gap,
+    ));
 
     let mentions_gauge_group = p_lower.contains("gauge group")
         || p_lower.contains("compact simple")
         || p_lower.contains("su(")
         || p_lower.contains("so(")
         || p_lower.contains("sp(");
-    report
-        .checklist
-        .push(("Specifies a compact simple gauge group".into(), mentions_gauge_group));
+    report.checklist.push((
+        "Specifies a compact simple gauge group".into(),
+        mentions_gauge_group,
+    ));
 
     let mentions_construction = p_lower.contains("construct")
         || p_lower.contains("measure")
         || p_lower.contains("stochastic")
         || p_lower.contains("lattice")
         || p_lower.contains("continuum");
-    report
-        .checklist
-        .push(("Provides a constructive definition of the theory".into(), mentions_construction));
+    report.checklist.push((
+        "Provides a constructive definition of the theory".into(),
+        mentions_construction,
+    ));
 
     let mentions_spectral = p_lower.contains("spectral")
         || p_lower.contains("transfer operator")
         || p_lower.contains("hamiltonian")
         || p_lower.contains("energy gap");
-    report
-        .checklist
-        .push(("Argues the spectral gap / transfer operator".into(), mentions_spectral));
+    report.checklist.push((
+        "Argues the spectral gap / transfer operator".into(),
+        mentions_spectral,
+    ));
 
     // Aggregate missing-ingredient warnings.
     let missing: Vec<&str> = report
@@ -1001,7 +1179,11 @@ fn proof_hash(code: &str) -> String {
 fn attempts_path(project_root: &str) -> Option<PathBuf> {
     let dir = Path::new(project_root).join(PROOFS_DIR);
     if let Err(e) = std::fs::create_dir_all(&dir) {
-        eprintln!("[proof] failed to create proofs dir {}: {}", dir.display(), e);
+        eprintln!(
+            "[proof] failed to create proofs dir {}: {}",
+            dir.display(),
+            e
+        );
         return None;
     }
     Some(dir.join(ATTEMPTS_FILE))
@@ -1035,7 +1217,11 @@ fn log_attempt(path: &Path, attempt: &ProofAttempt) {
     let mut line = json;
     line.push('\n');
     if let Err(e) = append_line(path, &line) {
-        eprintln!("[proof] failed to write attempt log {}: {}", path.display(), e);
+        eprintln!(
+            "[proof] failed to write attempt log {}: {}",
+            path.display(),
+            e
+        );
     }
 }
 
@@ -1043,10 +1229,7 @@ fn log_attempt(path: &Path, attempt: &ProofAttempt) {
 /// append mode so concurrent tool calls don't clobber each other.
 fn append_line(path: &Path, line: &str) -> std::io::Result<()> {
     use std::fs::OpenOptions;
-    let mut f = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)?;
+    let mut f = OpenOptions::new().create(true).append(true).open(path)?;
     f.write_all(line.as_bytes())?;
     f.flush()
 }
@@ -1150,15 +1333,18 @@ fn outcome_report(
     let mut out = String::new();
 
     let status = outcome.status_label();
-    let sys_label = outcome
-        .system()
-        .map(|s| s.as_str())
-        .unwrap_or("unknown");
+    let sys_label = outcome.system().map(|s| s.as_str()).unwrap_or("unknown");
 
     out.push_str(&format!("verify_proof: {}\n", status));
     out.push_str(&format!("System: {}\n", sys_label));
-    out.push_str(&format!("Statement: {}\n", truncate_one_line(statement, 200)));
-    out.push_str(&format!("Proof code: {} chars\n", proof_code.chars().count()));
+    out.push_str(&format!(
+        "Statement: {}\n",
+        truncate_one_line(statement, 200)
+    ));
+    out.push_str(&format!(
+        "Proof code: {} chars\n",
+        proof_code.chars().count()
+    ));
 
     // Attempt number for this run.
     out.push_str(&format!("Attempt: #{}\n", prior_count + 1));
@@ -1233,13 +1419,19 @@ fn outcome_report(
             }
             out.push_str("\nTo enable verification, do one of:\n");
             out.push_str("  1. Set $AUTOCODE_VERIFIER to a verifier script path, or\n");
-            out.push_str("  2. Create verify/<system>.sh (or .cmd on Windows) in the project root, or\n");
+            out.push_str(
+                "  2. Create verify/<system>.sh (or .cmd on Windows) in the project root, or\n",
+            );
             out.push_str("  3. Install the verifier (lean / coqc / z3) on your PATH.\n");
         }
         VerifyOutcome::InvalidInput(msg) => {
             out.push_str(&format!("Invalid input: {}\n", msg));
         }
-        VerifyOutcome::SpawnError { system: _, backend, error } => {
+        VerifyOutcome::SpawnError {
+            system: _,
+            backend,
+            error,
+        } => {
             out.push_str(&format!("Backend: {}\n", backend));
             out.push_str(&format!("Failed to spawn verifier: {}\n", error));
         }
@@ -1436,8 +1628,13 @@ mod tests {
         // the env var for this test.
         // SAFETY: tests are single-threaded by default; no other thread is
         // reading the environment concurrently.
-        unsafe { std::env::remove_var("AUTOCODE_VERIFIER"); }
-        let dir = std::env::temp_dir().join(format!("ac_proof_test_{}", autocode_core::helpers::generate_id()));
+        unsafe {
+            std::env::remove_var("AUTOCODE_VERIFIER");
+        }
+        let dir = std::env::temp_dir().join(format!(
+            "ac_proof_test_{}",
+            autocode_core::helpers::generate_id()
+        ));
         let _ = std::fs::create_dir_all(&dir);
         let args = serde_json::json!({
             "statement": "test theorem",
@@ -1464,7 +1661,10 @@ mod tests {
 
     #[test]
     fn test_log_and_history() {
-        let dir = std::env::temp_dir().join(format!("ac_proof_log_{}", autocode_core::helpers::generate_id()));
+        let dir = std::env::temp_dir().join(format!(
+            "ac_proof_log_{}",
+            autocode_core::helpers::generate_id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("proofs").join("attempts.jsonl");
@@ -1531,21 +1731,30 @@ mod tests {
 
     #[test]
     fn test_attempt_logged_on_invalid_input() {
-        let dir = std::env::temp_dir().join(format!("ac_proof_inv_{}", autocode_core::helpers::generate_id()));
+        let dir = std::env::temp_dir().join(format!(
+            "ac_proof_inv_{}",
+            autocode_core::helpers::generate_id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::create_dir_all(&dir);
         let args = serde_json::json!({"statement": "", "proof_code": "x"});
         let _r = run_verify_proof(&dir.to_string_lossy(), &args);
         // Even invalid input should be logged.
         let path = dir.join("proofs").join("attempts.jsonl");
-        assert!(path.exists(), "attempts.jsonl should be created even on invalid input");
+        assert!(
+            path.exists(),
+            "attempts.jsonl should be created even on invalid input"
+        );
         assert_eq!(count_attempts(&path), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn test_report_includes_attempt_number_and_log_path() {
-        let dir = std::env::temp_dir().join(format!("ac_proof_rep_{}", autocode_core::helpers::generate_id()));
+        let dir = std::env::temp_dir().join(format!(
+            "ac_proof_rep_{}",
+            autocode_core::helpers::generate_id()
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::create_dir_all(&dir);
         let args = serde_json::json!({"statement": "foo", "proof_code": "  "});

@@ -153,6 +153,7 @@ pub(crate) fn show_input_row(
                                 && let Some(r) =
                                     active_sid.as_ref().and_then(|sid| runtimes.get_mut(sid))
                             {
+                                r.stopped_by_user = true;
                                 r.drain();
                                 r.status = "Stopped.".into();
                             }

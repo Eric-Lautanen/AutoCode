@@ -696,8 +696,8 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
         } else {
             let response = std::mem::take(&mut runtime.pending_response);
             let reasoning = std::mem::take(&mut runtime.reasoning_buf);
-            if response.trim().is_empty() {
-                // Empty response -- retry with backoff.
+            if response.trim().is_empty() && reasoning.trim().is_empty() {
+                // Truly empty response (no text AND no reasoning) -- retry with backoff.
                 let max_retries = state.max_retries;
                 if runtime.retry_count < max_retries {
                     runtime.retry_count += 1;
@@ -719,6 +719,30 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                 }
                 return true;
             }
+            if response.trim().is_empty() && !reasoning.trim().is_empty() {
+                // Reasoning-only turn: the model streamed thinking but no visible
+                // text. Re-inject the reasoning as a USER message so the model
+                // sees its prior thinking as input and continues from where it
+                // left off (producing the tool call / answer it was about to
+                // write) instead of repeating the reasoning. The automated task
+                // reminder is skipped this turn.
+                runtime.retry_count = 0;
+                let content = format!(
+                    "Your previous turn produced reasoning but no response before stopping. \
+                     Read the reasoning below and CONTINUE from where it ends, producing the \
+                     tool call(s) or final answer you were about to write. Do not repeat the \
+                     reasoning; just resume and finish.\n\n\
+                     --- captured reasoning ---\n{}\n--- end captured reasoning ---",
+                    reasoning
+                );
+                runtime.reasoning_dropped = true;
+                push_runtime(state, runtime, ChatMessage::new(Role::User, content));
+                runtime.reasoning_only_streak += 1;
+                runtime.status = "Reasoning-only turn -- resuming from captured thinking.".into();
+                // Resume immediately with the captured reasoning as input.
+                start_completion(state, runtime);
+                return true;
+            }
 
             let mut msg = ChatMessage::new(Role::Assistant, response.clone());
             if !reasoning.is_empty() {
@@ -737,6 +761,33 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
             }
             auto_continue(state, runtime, &response, truncated);
         }
+    }
+
+    // Recover reasoning salvaged from a stream that was torn down mid-flight
+    // (provider dropped the connection / runtime drained while still streaming,
+    // and the user did NOT hit Stop). Re-inject it as a USER message so the
+    // model sees the prior thinking as input and can continue from where it
+    // left off, rather than as its own assistant reasoning it would ignore or
+    // re-derive. The automated task reminders are suppressed this turn so the
+    // model focuses on resuming the interrupted reasoning instead.
+    if !runtime.salvaged_reasoning.is_empty() {
+        let salvaged = std::mem::take(&mut runtime.salvaged_reasoning);
+        let content = format!(
+            "Your previous response was interrupted while you were still reasoning. \
+             Below is the reasoning you had produced so far — read it and CONTINUE \
+             from where it ends, producing the tool call(s) or final answer you were \
+             about to write. Do not repeat the reasoning; just resume and finish.\n\n\
+             --- captured reasoning ---\n{}\n--- end captured reasoning ---",
+            salvaged
+        );
+        // Mark this turn so auto_continue skips the "Session tasks remain"
+        // reminder; the model should pick up the salvaged reasoning instead.
+        runtime.reasoning_dropped = true;
+        push_runtime(state, runtime, ChatMessage::new(Role::User, content));
+        runtime.status = "Reasoning stream interrupted -- thinking preserved, resuming.".into();
+        // Resume the conversation: the model now has the prior reasoning as
+        // input and should produce the response it was about to write.
+        start_completion(state, runtime);
     }
 
     got_something || done

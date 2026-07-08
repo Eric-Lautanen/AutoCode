@@ -164,10 +164,9 @@ pub(crate) fn show_session_tabs(
                                                 && let Some(proj) =
                                                     state.projects.iter().find(|p| &p.id == pid)
                                             {
-                                                let _ =
-                                                    autocode_core::storage::save_session_meta(
-                                                        proj, sess,
-                                                    );
+                                                let _ = autocode_core::storage::save_session_meta(
+                                                    proj, sess,
+                                                );
                                             }
                                             sess.messages.clear();
                                         }

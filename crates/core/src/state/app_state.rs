@@ -763,13 +763,10 @@ impl AppState {
         for (sid, msg) in pending {
             grouped.entry(sid).or_default().push(msg);
         }
-        // Strip reasoning content before persisting to disk —
-        // it belongs only in the in-RAM display, not in the JSONL files.
-        for msgs in grouped.values_mut() {
-            for msg in msgs.iter_mut() {
-                msg.reasoning_content = None;
-            }
-        }
+        // NOTE: reasoning_content is intentionally preserved on disk (not
+        // stripped here) so salvaged / completed thinking stays part of the
+        // conversation context and is sent back to the model on subsequent
+        // requests. A dropped or reasoning-only turn must not be silently lost.
         let mut batches = Vec::new();
         for (sid, msgs) in grouped {
             let Some(sess) = self.sessions.iter().find(|s| s.id == sid) else {

@@ -112,7 +112,10 @@ pub fn append_messages_to_jsonl(
         .map(|m| {
             let mut m = m.clone();
             helpers::sanitize_tool_calls(&mut m.tool_calls);
-            m.reasoning_content = None;
+            // NOTE: reasoning_content is intentionally preserved on disk so that
+            // salvaged / completed thinking remains part of the conversation
+            // context and is sent back to the model on subsequent requests
+            // (otherwise a dropped or reasoning-only turn is silently lost).
             m
         })
         .collect();

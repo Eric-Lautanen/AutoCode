@@ -223,6 +223,15 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
     runtime.pending_tool_calls.clear();
     runtime.assistant_tool_calls_json = None;
     runtime.provider_error = None;
+    // A fresh request starts a new reasoning turn: clear the loop-guard streak
+    // and any salvaged reasoning from a prior dropped stream, and clear the
+    // user-stop flag so a later unexpected drop can still be salvaged.
+    runtime.reasoning_only_streak = 0;
+    runtime.salvaged_reasoning.clear();
+    runtime.stopped_by_user = false;
+    // Consumed: the salvaged-reasoning user message was already injected and
+    // this request carries it, so don't suppress task reminders on later turns.
+    runtime.reasoning_dropped = false;
     if runtime.active_session_id.is_none() {
         runtime.active_session_id = state.active_session_id.clone();
     }
@@ -504,6 +513,12 @@ fn auto_continue_impl(
         && !truncated
         && !helpers::is_incomplete_task_response(response)
     {
+        return;
+    }
+    // When mid-stream reasoning was salvaged and re-injected as a user message,
+    // skip the automated task reminder this turn — the model should resume the
+    // interrupted reasoning instead of being nudged about task progress.
+    if runtime.reasoning_dropped {
         return;
     }
     let max_chain = state.max_retries.max(5);

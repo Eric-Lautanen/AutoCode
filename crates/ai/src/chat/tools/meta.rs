@@ -323,12 +323,22 @@ pub fn build_tool_meta(tc: &ToolCall, result: &str, duration_ms: u64) -> ToolMet
             let verified = result.contains("verify_proof: VERIFIED");
             let rejected = result.contains("verify_proof: REJECTED");
             let no_backend = result.contains("verify_proof: NO_BACKEND");
-            let is_error = rejected || no_backend || result.contains("verify_proof: INVALID_INPUT") || result.contains("verify_proof: SPAWN_ERROR") || result.contains("verify_proof: TIMEOUT");
+            let is_error = rejected
+                || no_backend
+                || result.contains("verify_proof: INVALID_INPUT")
+                || result.contains("verify_proof: SPAWN_ERROR")
+                || result.contains("verify_proof: TIMEOUT");
             ToolMeta {
                 tool_name: "verify_proof".into(),
                 file_path: Some(system),
                 old_text: Some(statement),
-                exit_code: if verified { Some(0) } else if rejected { Some(1) } else { None },
+                exit_code: if verified {
+                    Some(0)
+                } else if rejected {
+                    Some(1)
+                } else {
+                    None
+                },
                 is_error,
                 duration_ms: Some(duration_ms),
                 ..Default::default()

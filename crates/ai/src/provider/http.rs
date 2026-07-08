@@ -530,8 +530,12 @@ pub(crate) fn parse_sse_stream_from_reader<R: BufRead>(
     for line in &mut lines {
         let line = match line {
             Ok(l) => l,
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-            Err(e) => return Err(e.into()),
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                break;
+            }
+            Err(e) => {
+                return Err(e.into());
+            }
         };
 
         if last_log.elapsed().as_secs() >= 30 {
