@@ -162,7 +162,11 @@ pub(crate) fn load_new_session(
                     prov.top_p = top_p;
                     prov.frequency_penalty = freq;
                     prov.presence_penalty = pres;
-                    prov.requests_per_hour = rph;
+                    // `requests_per_hour` is Option<u32>; None means "no
+                    // per-session override" (e.g. a fresh session). Don't let
+                    // None wipe the manifest value `fill_from_config` just set,
+                    // or the API rate limiter would be silently disabled.
+                    prov.requests_per_hour = rph.or(prov.requests_per_hour);
                     prov.handoff_percent = handoff;
                 }
             }

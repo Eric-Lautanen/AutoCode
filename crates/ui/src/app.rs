@@ -181,7 +181,10 @@ impl AutocodeApp {
                 prov.top_p = top_p;
                 prov.frequency_penalty = freq;
                 prov.presence_penalty = pres;
-                prov.requests_per_hour = rph;
+                // `requests_per_hour` is Option<u32>; None means "no per-session
+                // override". Keep the manifest value fill_from_config just set
+                // in that case so the API rate limiter stays active.
+                prov.requests_per_hour = rph.or(prov.requests_per_hour);
                 prov.handoff_percent = handoff;
             }
         }
