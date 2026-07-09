@@ -30,6 +30,9 @@ pub fn default_handoff_enabled() -> bool {
 pub fn default_handoff_continuation_prompt_string() -> String {
     crate::state::DEFAULT_HANDOFF_CONTINUATION_PROMPT.to_string()
 }
+pub fn default_loop_warning_prompt_string() -> String {
+    crate::state::DEFAULT_LOOP_WARNING_PROMPT.to_string()
+}
 pub fn default_thinking_mode() -> bool {
     false
 }

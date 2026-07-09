@@ -136,6 +136,17 @@ pub struct ChatRuntime {
     /// Live file write progress — (filepath, content) shown immediately
     /// when a write_file tool call is received, before disk write completes.
     pub live_write_progress: Option<(String, String)>,
+    /// Loop-detection: signature of the previous turn's committed tool-call
+    /// batch (sorted `name|arguments` joined). Used to detect when the model
+    /// emits the identical tool call(s) turn after turn.
+    pub last_tool_batch_signature: Option<String>,
+    /// Loop-detection: how many consecutive turns produced the same batch
+    /// signature. When this reaches 3, `pending_loop_warning` is raised.
+    pub repeat_batch_count: u8,
+    /// Loop-detection: raised when 3 identical tool-call batches in a row were
+    /// detected. Consumed (and cleared) by `start_completion`, which injects the
+    /// warning as a USER message before the next request so the model sees it.
+    pub pending_loop_warning: bool,
 }
 
 impl Default for ChatRuntime {
@@ -176,6 +187,9 @@ impl Default for ChatRuntime {
             orphaned_retry_count: 0,
             pending_start: 0,
             live_write_progress: None,
+            last_tool_batch_signature: None,
+            repeat_batch_count: 0,
+            pending_loop_warning: false,
         }
     }
 }
@@ -228,6 +242,11 @@ impl ChatRuntime {
         self.retry_after = None;
         self.next_completion_allowed = None;
         self.live_write_progress = None;
+        // Loop-detection state is transient — clear on drain/stop so a fresh
+        // user action or session reset doesn't carry a stale warning forward.
+        self.last_tool_batch_signature = None;
+        self.repeat_batch_count = 0;
+        self.pending_loop_warning = false;
 
         // Force deallocation of large buffers (clear + shrink once each).
         self.pending_response.clear();

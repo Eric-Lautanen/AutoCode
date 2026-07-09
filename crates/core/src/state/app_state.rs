@@ -151,6 +151,11 @@ Do NOT continue working or write any more code. Use the handoff tool now.";
 /// this in settings.
 pub const DEFAULT_HANDOFF_CONTINUATION_PROMPT: &str = "Read the project task list.";
 
+/// Default message injected as a user message when the model makes the exact
+/// same tool call (same name + arguments) three turns in a row, signalling it
+/// is stuck in a loop. Customizable in settings.
+pub const DEFAULT_LOOP_WARNING_PROMPT: &str = "You appear to be stuck in a loop — you have made the exact same tool call 3 times in a row with the same arguments. Re-examine the previous tool results, verify your assumptions (file contents, paths, search terms), and try a different tool or different arguments before continuing.";
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AppState {
     /// In-memory project list — loaded from disk on startup, not serialized to app.ron.
@@ -175,6 +180,12 @@ pub struct AppState {
 
     #[serde(default = "crate::helpers::default_handoff_continuation_prompt_string")]
     pub handoff_continuation_prompt: String,
+
+    /// Message injected as a USER message when the model repeats the exact same
+    /// tool call (name + arguments) three turns in a row. Defaults to on with
+    /// a sensible warning; customizable via Settings.
+    #[serde(default = "crate::helpers::default_loop_warning_prompt_string")]
+    pub loop_warning_prompt: String,
 
     #[serde(default = "crate::helpers::default_handoff_enabled")]
     pub handoff_enabled: bool,
@@ -300,6 +311,7 @@ impl Default for AppState {
             system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
             handoff_trigger_prompt: DEFAULT_HANDOFF_TRIGGER_PROMPT.to_string(),
             handoff_continuation_prompt: DEFAULT_HANDOFF_CONTINUATION_PROMPT.to_string(),
+            loop_warning_prompt: DEFAULT_LOOP_WARNING_PROMPT.to_string(),
             handoff_enabled: true,
             shell_tasks: Vec::new(),
             show_explorer: true,

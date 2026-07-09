@@ -51,6 +51,12 @@ pub fn send_message(
     runtime.retry_after = None;
     runtime.next_completion_allowed = None;
     runtime.live_write_progress = None;
+    // A fresh user message breaks any in-progress tool-call loop — clear the
+    // detection counters and any pending warning so it isn't carried into the
+    // new conversation flow.
+    runtime.last_tool_batch_signature = None;
+    runtime.repeat_batch_count = 0;
+    runtime.pending_loop_warning = false;
     runtime.active_session_id = Some(sid);
     runtime.pending_start = 2;
 }
@@ -58,6 +64,15 @@ pub fn send_message(
 pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
     if runtime.stream_rx.is_some() {
         return;
+    }
+    // Loop guard: if the previous three turns produced identical tool-call
+    // batches, inject the warning as a USER message before this request so
+    // the model sees it and breaks out of the cycle. The flag is consumed
+    // here; `drain()` / fresh user messages clear the underlying counters.
+    if runtime.pending_loop_warning {
+        runtime.pending_loop_warning = false;
+        let warn = state.loop_warning_prompt.clone();
+        push_runtime(state, runtime, ChatMessage::new(Role::User, warn));
     }
     // Increment turn counter for FileAccessLog working-set calculations.
     if let Some(sid) = runtime.active_session_id.as_deref()
@@ -421,6 +436,11 @@ pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     runtime.last_delta_time = None;
     runtime.live_shell_rx = None;
     runtime.live_shell_buf.clear();
+    // The new session is a clean slate — drop loop-detection state from the
+    // previous session so a stale signature can't trigger a false warning.
+    runtime.last_tool_batch_signature = None;
+    runtime.repeat_batch_count = 0;
+    runtime.pending_loop_warning = false;
     for (_, _, pid) in runtime.running_tasks.drain(..) {
         kill_process(pid);
     }

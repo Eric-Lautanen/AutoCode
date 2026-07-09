@@ -12,7 +12,7 @@ pub use access_log::{AccessEntry, FileAccessLog, FileOp, tool_name_to_op};
 
 pub use app_state::{
     AppState, DEFAULT_HANDOFF_CONTINUATION_PROMPT, DEFAULT_HANDOFF_TRIGGER_PROMPT,
-    DEFAULT_SYSTEM_PROMPT,
+    DEFAULT_LOOP_WARNING_PROMPT, DEFAULT_SYSTEM_PROMPT,
 };
 pub use chat::{ChatMessage, Role, ToolMeta};
 pub use manifest::{ModelManifest, ProviderManifest};

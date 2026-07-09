@@ -102,4 +102,39 @@ pub fn show_prompt(ui: &mut egui::Ui, state: &mut AppState) {
     }
 
     ui.add_space(16.0);
+
+    // -- Loop warning prompt ---------------------------------------------
+    ui.label(
+        RichText::new("Loop Warning Prompt")
+            .size(14.0)
+            .strong()
+            .color(Palette::TEXT_PRIMARY),
+    );
+    ui.add_space(4.0);
+    ui.label(
+        RichText::new(
+            "Injected as a user message when the model makes the exact same tool \
+             call (same name and arguments) three turns in a row, signalling it \
+             is stuck in a loop. The counters reset after firing, so the model \
+             gets a fresh slate — three more identical turns will re-trigger it.",
+        )
+        .size(11.0)
+        .color(Palette::TEXT_MUTED),
+    );
+    ui.add_space(8.0);
+
+    ui.add(
+        TextEdit::multiline(&mut state.loop_warning_prompt)
+            .desired_rows(6)
+            .desired_width(ui.available_width())
+            .font(egui::TextStyle::Monospace)
+            .text_color(Palette::TEXT_PRIMARY),
+    );
+
+    ui.add_space(8.0);
+    if ui.button("Reset to Default").clicked() {
+        state.loop_warning_prompt = autocode_core::state::DEFAULT_LOOP_WARNING_PROMPT.to_string();
+    }
+
+    ui.add_space(16.0);
 }

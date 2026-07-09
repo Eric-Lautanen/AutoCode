@@ -409,6 +409,33 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                     })
                     .collect(),
             );
+
+            // Loop detection: build a stable signature for this turn's tool-call
+            // batch (sorted `name|arguments` joined) and tally consecutive
+            // identical batches. Three in a row raises a pending warning that
+            // `start_completion` injects as a USER message on the next request.
+            // Signature + count are dropped after firing so the model gets a
+            // fresh slate — if it loops again, three more identical turns will
+            // re-trigger the warning rather than nagging every turn.
+            let batch_sig: String = {
+                let mut sigs: Vec<String> = tool_calls
+                    .iter()
+                    .map(|tc| format!("{}|{}", tc.name, tc.arguments))
+                    .collect();
+                sigs.sort();
+                sigs.join("\x01")
+            };
+            if runtime.last_tool_batch_signature.as_deref() == Some(batch_sig.as_str()) {
+                runtime.repeat_batch_count = runtime.repeat_batch_count.saturating_add(1);
+            } else {
+                runtime.last_tool_batch_signature = Some(batch_sig);
+                runtime.repeat_batch_count = 1;
+            }
+            if runtime.repeat_batch_count >= 3 {
+                runtime.pending_loop_warning = true;
+                runtime.repeat_batch_count = 0;
+                runtime.last_tool_batch_signature = None;
+            }
             let assistant_text = runtime.pending_response.clone();
             let mut assistant_msg = ChatMessage::new(Role::Assistant, assistant_text.clone());
             assistant_msg.tool_calls = Some(filtered_json);
