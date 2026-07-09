@@ -51,16 +51,19 @@
       "supports_cache_control": false,
       "supports_parallel_tool_calls": false,
       "supports_strict_tools": false,
-      "default_model": "z-ai/glm-5.1",
+      "default_model": "z-ai/glm-5.2",
       "counting_endpoint": "{base_url}/tokenize",
       "models": {
-        "z-ai/glm-5.1": {
-          "context_window": 200000, "max_output_tokens": 16384,
-          "thinking_api": "off", "reasoning_efforts": ["high"],
+        "z-ai/glm-5.2": {
+          "context_window": 1048576, "max_output_tokens": 16384,
+          "thinking_api": "off", "reasoning_efforts": ["low", "medium", "high", "max"],
           "supports_cache_control": false, "requests_per_hour": 30,
           "thinking_overrides": {
-            "high": { "chat_template_kwargs": { "enable_thinking": true } },
-            "off":  { "chat_template_kwargs": { "enable_thinking": false, "clear_thinking": true } }
+            "low":    { "chat_template_kwargs": { "enable_thinking": true, "reasoning_effort": "low" } },
+            "medium": { "chat_template_kwargs": { "enable_thinking": true, "reasoning_effort": "medium" } },
+            "high":   { "chat_template_kwargs": { "enable_thinking": true, "reasoning_effort": "high" } },
+            "max":    { "chat_template_kwargs": { "enable_thinking": true, "reasoning_effort": "max" } },
+            "off":    { "chat_template_kwargs": { "enable_thinking": false, "clear_thinking": true } }
           }
         },
         "moonshotai/kimi-k2.6": {
@@ -157,10 +160,18 @@
       "supports_cache_control": false,
       "supports_parallel_tool_calls": true,
       "supports_strict_tools": true,
-      "default_model": "glm-5.1",
+      "default_model": "glm-5.2",
       "model_prefix_strip": "opencode-go/",
       "models": {
-        "glm-5.1": { "context_window": 131072, "max_output_tokens": 65536, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": false },
+        "glm-5.2": { "context_window": 1000000, "max_output_tokens": 65536, "thinking_api": "off", "reasoning_efforts": ["low", "medium", "high", "max"], "supports_cache_control": false,
+          "thinking_overrides": {
+            "low":    { "thinking": { "type": "enabled" }, "reasoning_effort": "low" },
+            "medium": { "thinking": { "type": "enabled" }, "reasoning_effort": "medium" },
+            "high":   { "thinking": { "type": "enabled" }, "reasoning_effort": "high" },
+            "max":    { "thinking": { "type": "enabled" }, "reasoning_effort": "max" },
+            "off":    { "thinking": { "type": "disabled" } }
+          }
+        },
         "kimi-k2.6": { "context_window": 262144, "max_output_tokens": 8192, "thinking_api": "openai", "reasoning_efforts": ["high"], "supports_cache_control": false },
         "deepseek-v4-pro": { "context_window": 1048576, "max_output_tokens": 192000, "max_output_tokens_thinking": 16384, "thinking_api": "deepseek", "reasoning_efforts": ["high", "max"], "supports_cache_control": false },
         "deepseek-v4-flash": { "context_window": 1048576, "max_output_tokens": 65536, "max_output_tokens_thinking": 16384, "thinking_api": "deepseek", "reasoning_efforts": ["high", "max"], "supports_cache_control": false },
