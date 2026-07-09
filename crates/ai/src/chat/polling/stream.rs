@@ -1,4 +1,4 @@
-use crate::provider::{ProviderEvent, ToolCall};
+use crate::provider::{ProviderEvent, ToolCall, api_rate_limit_wait_ms};
 use autocode_core::state::{AppState, ChatMessage, Role, ToolMeta};
 
 use super::super::completion::{auto_continue, auto_execute, start_completion};
@@ -289,14 +289,60 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                 // Forever retry: exponential backoff 5s -> 180s cap, never gives up.
                 let backoff_secs = (5u64 << runtime.retry_count.min(6)).min(180);
                 runtime.retry_count = runtime.retry_count.saturating_add(1);
+
+                // Combine the retry backoff with the API rate-limit cooldown so
+                // the user sees ONE countdown reflecting the true remaining wait.
+                // Without this, a transient error schedules a short backoff
+                // (e.g. 5s); when it expires `start_completion` re-derives the
+                // full rate-limit remaining (~115s for a 30 RPH provider just
+                // after a request) and re-sets `retry_after`, making the
+                // counter visibly jump back up -- the "counter immediately
+                // restarts" symptom. The previous request already counted
+                // against the rate-limit budget, so collapsing the two waits
+                // here just surfaces the wait that was already going to happen.
+                let mut wait_secs = backoff_secs;
+                let mut rate_limited = false;
+                if let Some(sid) = runtime.active_session_id.as_deref()
+                    && let Some(sess) = state.sessions.iter().find(|s| s.id == *sid)
+                {
+                    let label = if !sess.provider_label.is_empty() {
+                        &sess.provider_label
+                    } else {
+                        &state.active_provider
+                    };
+                    if let Some(p) = state.providers.get(label) {
+                        let rl_ms = api_rate_limit_wait_ms(p, label);
+                        if rl_ms > 50 {
+                            let rl_secs = rl_ms.div_ceil(1000);
+                            if rl_secs > wait_secs {
+                                wait_secs = rl_secs;
+                                rate_limited = true;
+                            }
+                        }
+                    }
+                }
+
                 runtime.retry_after =
-                    Some(std::time::Instant::now() + std::time::Duration::from_secs(backoff_secs));
-                runtime.status = format!(
-                    "{} -- retry {} in {}s...",
-                    shorten_err(&err_msg),
-                    runtime.retry_count,
-                    backoff_secs,
-                );
+                    Some(std::time::Instant::now() + std::time::Duration::from_secs(wait_secs));
+                runtime.status = if rate_limited {
+                    // Prefix with "Rate limit" so `update_runtime`'s live
+                    // countdown keeps refreshing the seconds as the timer
+                    // ticks down (it only updates statuses that start with
+                    // "Rate limit").
+                    format!(
+                        "Rate limit: retry {} -- {} -- waiting ~{}s...",
+                        runtime.retry_count,
+                        shorten_err(&err_msg),
+                        wait_secs,
+                    )
+                } else {
+                    format!(
+                        "{} -- retry {} in {}s...",
+                        shorten_err(&err_msg),
+                        runtime.retry_count,
+                        wait_secs,
+                    )
+                };
             } else {
                 // Permanent error -- show and stop. User can fix and retry manually.
                 runtime.retry_count = 0;
