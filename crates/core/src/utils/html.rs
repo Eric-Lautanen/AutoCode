@@ -32,6 +32,45 @@ pub fn clean_html_to_text(html: &str) -> String {
     let mut skip_stack: Vec<String> = Vec::new();
 
     while pos < chars.len() {
+        // Inside a skipped block (script/style/head/...): scan for the matching
+        // close tag and drop everything else. Scanning for the literal close
+        // tag (instead of re-parsing every `<`) keeps us robust against `<` and
+        // `>` characters that legitimately appear inside script/style content,
+        // which previously desynced the parser and could swallow the whole
+        // document (e.g. a `<` inside a CSS media query like `media="(width <
+        // 40rem)"`, or `<`/`>` inside embedded JSON).
+        if !skip_stack.is_empty() {
+            let top = skip_stack.last().unwrap().clone();
+            let needle: Vec<char> = format!("</{}", top).chars().collect();
+            let mut closed = false;
+            while pos + needle.len() <= chars.len() {
+                let window: Vec<char> = chars[pos..pos + needle.len()]
+                    .iter()
+                    .map(|c| c.to_ascii_lowercase())
+                    .collect();
+                if window == needle {
+                    pos += needle.len();
+                    // Consume any trailing whitespace and the closing '>'.
+                    while pos < chars.len() && chars[pos].is_whitespace() {
+                        pos += 1;
+                    }
+                    if chars.get(pos) == Some(&'>') {
+                        pos += 1;
+                    }
+                    skip_stack.pop();
+                    closed = true;
+                    break;
+                }
+                pos += 1;
+            }
+            if !closed {
+                // No matching close tag: skip to end of input rather than
+                // risk desyncing on the remaining document.
+                pos = chars.len();
+            }
+            continue;
+        }
+
         let c = chars[pos];
 
         if c == '<' {
@@ -53,9 +92,29 @@ pub fn clean_html_to_text(html: &str) -> String {
                 continue;
             }
 
-            // Read the whole tag (everything up to '>').
+            // Read the whole tag (everything up to '>'), but treat `<` and `>`
+            // inside quoted attribute values as ordinary characters so they
+            // can't break the tag boundary. Without this, a URL/attribute that
+            // legitimately contains `<` or `>` (e.g. a CSS media query
+            // `media="(width < 40rem)"` or a query string with `>`) would
+            // prematurely end the tag and desync the rest of the document.
             let tag_start = pos;
-            while pos < chars.len() && chars[pos] != '>' {
+            while pos < chars.len() {
+                let ch = chars[pos];
+                if ch == '>' {
+                    break;
+                }
+                if ch == '"' || ch == '\'' {
+                    let quote = ch;
+                    pos += 1;
+                    while pos < chars.len() && chars[pos] != quote {
+                        pos += 1;
+                    }
+                    if pos < chars.len() {
+                        pos += 1; // consume the closing quote
+                    }
+                    continue;
+                }
                 pos += 1;
             }
             let tag: String = chars[tag_start..pos].iter().collect();
@@ -84,14 +143,8 @@ pub fn clean_html_to_text(html: &str) -> String {
                 // dropped but it carries no content, so we must NOT enter skip
                 // mode or we'd swallow everything after it.
             } else if SKIP_TAGS.contains(&name.as_str()) {
-                skip_stack.push(name);
+                skip_stack.push(name.clone());
             }
-            continue;
-        }
-
-        // Inside a skipped block: drop everything.
-        if !skip_stack.is_empty() {
-            pos += 1;
             continue;
         }
 
@@ -278,6 +331,40 @@ mod tests {
     fn unknown_entity_preserved() {
         // Unknown named entities must survive verbatim, not be dropped.
         assert_eq!(clean_html_to_text("foo&bar;baz"), "foo&bar;baz");
+    }
+
+    #[test]
+    fn link_with_lt_in_attribute_does_not_leak() {
+        // Verbatim Discourse-style fragment: a <script> containing a JS template
+        // literal with an embedded <svg> tag and an HTML comment, followed by
+        // <link> tags whose media query contains a `<` (media="(width < 40rem)").
+        let html = r##"<body>
+    <script nonce="Wn7bYvsSrnClRvRuB13cS8SoC">
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1"><!-- LCP candidate image ${".".repeat(5000)} --></svg>`;
+    document.querySelector("#d-splash .preloader-image").style.backgroundImage = `url('data:image/svg+xml,${svg}')`
+  </script>
+
+  <noscript>
+    <style>
+      html { overflow-y: revert !important; }
+      #d-splash { display: none; }
+    </style>
+  </noscript>
+</section>
+
+
+    <discourse-assets>
+      <discourse-assets-stylesheets>
+        <link href="x.css?ws=dev" media="(prefers-color-scheme: light)" rel="stylesheet" data-scheme-id="4"/><link href="y.css?ws=dev" media="(prefers-color-scheme: dark)" rel="stylesheet" data-scheme-id="1"/>
+
+<link href="common.css?ws=dev" media="all" rel="stylesheet" data-target="common"  />
+
+<link href="mobile.css?ws=dev" media="(width < 40rem)" rel="stylesheet" data-target="mobile"  />
+<link href="desktop.css?ws=dev" media="(max-width: 40rem)" rel="stylesheet" data-target="desktop"  />
+<p>hello world</p></discourse-assets-stylesheets></discourse-assets></body>"##;
+        let out = clean_html_to_text(html);
+        assert!(!out.contains("40rem"), "attribute text leaked: {}", out);
+        assert!(out.contains("hello world"));
     }
 
     #[test]
