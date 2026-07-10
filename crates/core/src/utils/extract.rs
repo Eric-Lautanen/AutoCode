@@ -214,8 +214,61 @@ fn url_decode(s: &str) -> String {
 /// Returns the full page content with the fluff (scripts, styles, comments,
 /// navigation, etc.) stripped out -- no truncation beyond what the caller
 /// imposes, so the model gets the complete cleaned page.
+///
+/// Many modern doc/reference sites (ReadMe, etc.) are client-rendered SPAs:
+/// the static HTML body is empty and the real content is injected by
+/// JavaScript after load. For those pages the cleaned body is empty, so we
+/// fall back to the `<title>` and `<meta name="description">` / `og:description`
+/// tags, which hold a meaningful summary the model can still use.
 pub fn extract_html_content(html: &str, _url: &str) -> String {
-    clean_html_to_text(html)
+    let body = clean_html_to_text(html);
+    if !body.trim().is_empty() {
+        return body;
+    }
+
+    let mut out = String::new();
+    if let Some(title) = extract_tag_text(html, "title")
+        && !title.is_empty()
+    {
+        out.push_str(&format!("Title: {}\n", title));
+    }
+    if let Some(desc) = extract_meta_content(html, "name", "description")
+        .or_else(|| extract_meta_content(html, "property", "og:description"))
+        && !desc.is_empty()
+    {
+        out.push_str(&format!("Description: {}\n", desc));
+    }
+
+    if out.is_empty() {
+        body
+    } else {
+        out.trim().to_string()
+    }
+}
+
+/// Extract the inner text of a simple tag such as `<title>...</title>`.
+fn extract_tag_text(html: &str, tag: &str) -> Option<String> {
+    let open = format!("<{}", tag);
+    let i = html.find(&open)?;
+    let gt = html[i..].find('>').map(|g| i + g)?;
+    let close = format!("</{}>", tag);
+    let ce = html[gt..].find(&close).map(|c| gt + c)?;
+    let raw = &html[gt + 1..ce];
+    Some(clean_html_to_text(raw))
+}
+
+/// Extract the `content` attribute of a `<meta ...>` tag selected by one of its
+/// other attributes, e.g. `extract_meta_content(html, "name", "description")`
+/// matches `<meta name="description" content="...">`.
+fn extract_meta_content(html: &str, attr: &str, val: &str) -> Option<String> {
+    let needle = format!("{}=\"{}\"", attr, val);
+    let i = html.find(&needle)?;
+    let tag_start = html[..i].rfind('<')?;
+    let tag = &html[tag_start..];
+    let gt = tag.find('>')?;
+    let content = grab_attr(&tag[..gt], "content")?;
+    // Attribute values may contain HTML entities (e.g. &amp;); decode them.
+    Some(clean_html_to_text(&content))
 }
 
 #[cfg(test)]
@@ -310,5 +363,39 @@ mod tests {
         assert!(out.contains("Body text here."));
         assert!(!out.contains("bad()"));
         assert!(!out.contains("menu"));
+    }
+
+    #[test]
+    fn spa_falls_back_to_head_metadata() {
+        // A client-rendered SPA: empty body, but useful <title>/<meta>.
+        let page = r#"<!DOCTYPE html><html><head>
+            <title>z-ai / glm-5.2</title>
+            <meta name="description" content="GLM-5.2 is the latest flagship LLM from Z.ai.">
+            <script src="app.js"></script>
+        </head><body><div id="root"></div></body></html>"#;
+        let out = extract_html_content(
+            page,
+            "https://docs.api.nvidia.com/nim/reference/z-ai-glm-5.2",
+        );
+        assert!(out.contains("Title: z-ai / glm-5.2"));
+        assert!(out.contains("Description: GLM-5.2 is the latest flagship LLM from Z.ai."));
+        assert!(!out.contains("<div id=\"root\""));
+        assert!(!out.contains("app.js"));
+    }
+
+    #[test]
+    fn empty_body_without_metadata_stays_empty() {
+        let page = "<html><head></head><body><script>x()</script></body></html>";
+        let out = extract_html_content(page, "https://example.com");
+        assert!(out.trim().is_empty());
+    }
+
+    #[test]
+    fn meta_content_decodes_entities() {
+        let page = r#"<html><head><title>A &amp; B</title>
+            <meta property="og:description" content="Tom &amp; Jerry &lt;3"></head><body></body></html>"#;
+        let out = extract_html_content(page, "https://example.com");
+        assert!(out.contains("Title: A & B"));
+        assert!(out.contains("Description: Tom & Jerry <3"));
     }
 }
