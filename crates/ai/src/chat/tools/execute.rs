@@ -709,14 +709,15 @@ pub fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                             == autocode_core::utils::extract::ExtractQuality::MetadataOnly
                         {
                             text.push_str(
-                                "\n\n[Note: this page is a JavaScript-rendered SPA; its static \
-                                 HTML contained no readable body, only title/description \
-                                 metadata. The full content is injected by the browser at \
+                                "\n\n[Note: this page is a JavaScript-rendered web app; its \
+                                 static HTML contained no readable body, only title/description \
+                                 metadata. The full content is generated in the browser at \
                                  runtime and cannot be fetched directly. To get the actual \
-                                 content, try a server-rendered alternative source (e.g. the \
-                                 project's model card, GitHub repository, or NGC/catalog page) \
-                                 or run web_search with more specific terms and prefer \
-                                 non-docs result URLs.]",
+                                 content, look for a server-rendered alternative on the same \
+                                 topic (e.g. an article, wiki, forum post, or official page that \
+                                 sends complete HTML), or run web_search with more specific terms \
+                                 and prefer result URLs that are not interactive app/dashboard \
+                                 sites.]",
                             );
                         }
                         text

@@ -240,7 +240,8 @@ pub struct ExtractedPage {
 /// tags, which hold a meaningful summary the model can still use. The
 /// `quality` field tells the caller whether that fallback happened, so it can
 /// warn the model that the page is not fully readable and it should try an
-/// alternate, server-rendered source.
+/// alternate, server-rendered source (e.g. an article or wiki that sends
+/// complete HTML rather than an interactive web app).
 pub fn extract_html_content(html: &str, _url: &str) -> ExtractedPage {
     let body = clean_html_to_text(html);
     if !body.trim().is_empty() {
