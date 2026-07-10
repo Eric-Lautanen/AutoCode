@@ -679,17 +679,47 @@ pub fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                     let is_html = body.trim_start().starts_with("<!")
                         || body.trim_start().starts_with("<html")
                         || body.contains("<html");
-                    let text = if is_html {
+                    let extracted = if is_html {
                         autocode_core::utils::extract::extract_html_content(&body, url)
                     } else {
-                        body.to_string()
+                        autocode_core::utils::extract::ExtractedPage {
+                            content: body.to_string(),
+                            quality: autocode_core::utils::extract::ExtractQuality::Full,
+                        }
                     };
 
-                    if text.trim().is_empty() {
-                        format!("Empty response from {}", url)
+                    if extracted.content.trim().is_empty() {
+                        // Nothing usable came back at all.
+                        let tail = if extracted.quality
+                            == autocode_core::utils::extract::ExtractQuality::Empty
+                        {
+                            " The page returned no readable content (this is common for \
+                             JavaScript-rendered sites). Try a server-rendered alternative \
+                             source or a more specific web_search."
+                        } else {
+                            ""
+                        };
+                        format!("Empty response from {}{}", url, tail)
                     } else {
-                        // Cap at max_bytes to prevent runaway token usage
-                        text.chars().take(max_bytes).collect()
+                        // Cap at max_bytes to prevent runaway token usage.
+                        let mut text: String = extracted.content.chars().take(max_bytes).collect();
+                        // When only metadata was recoverable (SPA), tell the model
+                        // the page is not fully readable and suggest alternatives.
+                        if extracted.quality
+                            == autocode_core::utils::extract::ExtractQuality::MetadataOnly
+                        {
+                            text.push_str(
+                                "\n\n[Note: this page is a JavaScript-rendered SPA; its static \
+                                 HTML contained no readable body, only title/description \
+                                 metadata. The full content is injected by the browser at \
+                                 runtime and cannot be fetched directly. To get the actual \
+                                 content, try a server-rendered alternative source (e.g. the \
+                                 project's model card, GitHub repository, or NGC/catalog page) \
+                                 or run web_search with more specific terms and prefer \
+                                 non-docs result URLs.]",
+                            );
+                        }
+                        text
                     }
                 }
             }

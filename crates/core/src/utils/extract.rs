@@ -210,6 +210,24 @@ fn url_decode(s: &str) -> String {
     String::from_utf8_lossy(&bytes).to_string()
 }
 
+/// How much usable content we were able to recover from a page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtractQuality {
+    /// Real body text was present in the static HTML.
+    Full,
+    /// The body was empty (typically a JavaScript-rendered SPA); we fell back
+    /// to the page's `<title>` / `<meta description>` summary instead.
+    MetadataOnly,
+    /// Nothing usable at all could be recovered.
+    Empty,
+}
+
+/// Result of extracting content from a fetched HTML page.
+pub struct ExtractedPage {
+    pub content: String,
+    pub quality: ExtractQuality,
+}
+
 /// Extract the main textual content from an HTML page for fetch_url.
 /// Returns the full page content with the fluff (scripts, styles, comments,
 /// navigation, etc.) stripped out -- no truncation beyond what the caller
@@ -219,11 +237,17 @@ fn url_decode(s: &str) -> String {
 /// the static HTML body is empty and the real content is injected by
 /// JavaScript after load. For those pages the cleaned body is empty, so we
 /// fall back to the `<title>` and `<meta name="description">` / `og:description`
-/// tags, which hold a meaningful summary the model can still use.
-pub fn extract_html_content(html: &str, _url: &str) -> String {
+/// tags, which hold a meaningful summary the model can still use. The
+/// `quality` field tells the caller whether that fallback happened, so it can
+/// warn the model that the page is not fully readable and it should try an
+/// alternate, server-rendered source.
+pub fn extract_html_content(html: &str, _url: &str) -> ExtractedPage {
     let body = clean_html_to_text(html);
     if !body.trim().is_empty() {
-        return body;
+        return ExtractedPage {
+            content: body,
+            quality: ExtractQuality::Full,
+        };
     }
 
     let mut out = String::new();
@@ -240,9 +264,15 @@ pub fn extract_html_content(html: &str, _url: &str) -> String {
     }
 
     if out.is_empty() {
-        body
+        ExtractedPage {
+            content: body,
+            quality: ExtractQuality::Empty,
+        }
     } else {
-        out.trim().to_string()
+        ExtractedPage {
+            content: out.trim().to_string(),
+            quality: ExtractQuality::MetadataOnly,
+        }
     }
 }
 
@@ -358,11 +388,12 @@ mod tests {
             <nav>menu</nav>\
             <main><h1>Title</h1><p>Body text here.</p></main>\
             </body></html>";
-        let out = extract_html_content(page, "https://example.com");
-        assert!(out.contains("Title"));
-        assert!(out.contains("Body text here."));
-        assert!(!out.contains("bad()"));
-        assert!(!out.contains("menu"));
+        let res = extract_html_content(page, "https://example.com");
+        assert_eq!(res.quality, ExtractQuality::Full);
+        assert!(res.content.contains("Title"));
+        assert!(res.content.contains("Body text here."));
+        assert!(!res.content.contains("bad()"));
+        assert!(!res.content.contains("menu"));
     }
 
     #[test]
@@ -373,29 +404,35 @@ mod tests {
             <meta name="description" content="GLM-5.2 is the latest flagship LLM from Z.ai.">
             <script src="app.js"></script>
         </head><body><div id="root"></div></body></html>"#;
-        let out = extract_html_content(
+        let res = extract_html_content(
             page,
             "https://docs.api.nvidia.com/nim/reference/z-ai-glm-5.2",
         );
-        assert!(out.contains("Title: z-ai / glm-5.2"));
-        assert!(out.contains("Description: GLM-5.2 is the latest flagship LLM from Z.ai."));
-        assert!(!out.contains("<div id=\"root\""));
-        assert!(!out.contains("app.js"));
+        assert_eq!(res.quality, ExtractQuality::MetadataOnly);
+        assert!(res.content.contains("Title: z-ai / glm-5.2"));
+        assert!(
+            res.content
+                .contains("Description: GLM-5.2 is the latest flagship LLM from Z.ai.")
+        );
+        assert!(!res.content.contains("<div id=\"root\""));
+        assert!(!res.content.contains("app.js"));
     }
 
     #[test]
     fn empty_body_without_metadata_stays_empty() {
         let page = "<html><head></head><body><script>x()</script></body></html>";
-        let out = extract_html_content(page, "https://example.com");
-        assert!(out.trim().is_empty());
+        let res = extract_html_content(page, "https://example.com");
+        assert_eq!(res.quality, ExtractQuality::Empty);
+        assert!(res.content.trim().is_empty());
     }
 
     #[test]
     fn meta_content_decodes_entities() {
         let page = r#"<html><head><title>A &amp; B</title>
             <meta property="og:description" content="Tom &amp; Jerry &lt;3"></head><body></body></html>"#;
-        let out = extract_html_content(page, "https://example.com");
-        assert!(out.contains("Title: A & B"));
-        assert!(out.contains("Description: Tom & Jerry <3"));
+        let res = extract_html_content(page, "https://example.com");
+        assert_eq!(res.quality, ExtractQuality::MetadataOnly);
+        assert!(res.content.contains("Title: A & B"));
+        assert!(res.content.contains("Description: Tom & Jerry <3"));
     }
 }
