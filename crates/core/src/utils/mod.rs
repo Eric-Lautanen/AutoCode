@@ -1,5 +1,6 @@
 pub mod extract;
 pub mod fsutil;
+pub mod html;
 pub mod sysinfo;
 
 // Re-export all public items so existing call sites continue to work.

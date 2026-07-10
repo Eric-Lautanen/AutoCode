@@ -1,9 +1,11 @@
 // extract.rs -- HTML content extraction for web_search and fetch_url tools.
-// Uses scraper (html5ever + CSS selectors) for robust extraction.
+// Uses a small, dependency-free HTML cleaner (see `html.rs`) instead of a full
+// DOM parsing crate. This avoids the empty-result failures we saw with the
+// previous parser and lets us hand the model the full cleaned page.
 
-use scraper::{Html, Selector};
+use crate::utils::html::clean_html_to_text;
 use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex, OnceLock};
+use std::sync::{LazyLock, Mutex};
 use std::time::Instant;
 
 static SEARCH_CACHE: LazyLock<Mutex<HashMap<String, (Instant, String)>>> =
@@ -91,66 +93,71 @@ fn domain_is_blacklisted(url: &str) -> bool {
 }
 
 /// Extract search results from DuckDuckGo HTML. Returns formatted results string.
+///
+/// This is a lightweight string scan (no DOM parser): it locates each
+/// `class="result__a"` anchor, pulls the real URL out of DDG's redirect
+/// (`uddg=` param), grabs the accompanying snippet, and formats the result.
 pub fn extract_ddg_results(html: &str, max_results: usize) -> String {
-    let doc = Html::parse_document(html);
     let mut out = String::new();
     let mut count = 0;
+    let mut rest = html;
 
-    // DDG result containers
-    static RESULT_SEL: OnceLock<Selector> = OnceLock::new();
-    static URL_SEL: OnceLock<Selector> = OnceLock::new();
-    static SNIPPET_SEL: OnceLock<Selector> = OnceLock::new();
-    let result_sel = RESULT_SEL.get_or_init(|| Selector::parse(".result__body").unwrap());
-    let url_sel = URL_SEL.get_or_init(|| Selector::parse(".result__a").unwrap());
-    let snippet_sel = SNIPPET_SEL.get_or_init(|| Selector::parse(".result__snippet").unwrap());
-
-    for result in doc.select(result_sel) {
-        if count >= max_results {
+    while count < max_results {
+        let Some(marker) = rest.find("class=\"result__a\"") else {
             break;
-        }
-
-        // Extract actual URL from DDG's redirect link: //duckduckgo.com/l/?uddg=ENCODED_URL
-        let raw_url = result
-            .select(url_sel)
-            .next()
-            .and_then(|a| a.value().attr("href"))
-            .unwrap_or("");
-
-        // Decode the uddg parameter from the redirect URL
-        let url = if raw_url.contains("uddg=") {
-            raw_url
-                .split("uddg=")
-                .nth(1)
-                .unwrap_or(raw_url)
-                .split('&')
-                .next()
-                .unwrap_or(raw_url)
-                .trim()
-        } else {
-            raw_url.trim()
         };
-        // URL-decode the extracted value
-        let decoded = url_decode(url);
 
-        // Skip blacklisted domains
-        if domain_is_blacklisted(&decoded) {
+        // Find the start of the enclosing <a ...> tag.
+        let tag_start = rest[..marker].rfind('<').unwrap_or(0);
+        let Some(gt) = rest[tag_start..].find('>') else {
+            break;
+        };
+        let tag = &rest[tag_start..tag_start + gt + 1];
+        let after_tag = tag_start + gt + 1;
+
+        let Some(href) = grab_attr(tag, "href") else {
+            rest = &rest[after_tag..];
+            continue;
+        };
+
+        let (title, title_end) = grab_tag_text(rest, after_tag);
+        let snippet = rest[title_end..]
+            .find("class=\"result__snippet\"")
+            .map(|si| {
+                let base = title_end + si;
+                let tstart = rest[..base].rfind('<').unwrap_or(base);
+                let g2 = rest[tstart..].find('>').unwrap_or(0);
+                grab_tag_text(rest, tstart + g2 + 1).0
+            })
+            .unwrap_or_default();
+
+        // Decode the real URL from DDG's redirect wrapper: /l/?uddg=ENCODED&...
+        let url = if let Some(idx) = href.find("uddg=") {
+            let enc = &href[idx + 5..];
+            let enc = enc.split('&').next().unwrap_or(enc).trim();
+            url_decode(enc)
+        } else {
+            url_decode(href.trim())
+        };
+
+        if domain_is_blacklisted(&url) {
+            rest = &rest[title_end..];
             continue;
         }
 
-        let snippet: String = result
-            .select(snippet_sel)
-            .next()
-            .map(|e| e.text().collect::<Vec<_>>().join(" ").trim().to_string())
-            .unwrap_or_default();
-
-        if !decoded.is_empty() {
+        if !url.is_empty() {
             count += 1;
-            out.push_str(&format!("{}. [{}]\n", count, decoded));
+            out.push_str(&format!("{}. [{}]\n", count, url));
+            if !title.is_empty() {
+                out.push_str(&format!("   {}\n", title));
+            }
             if !snippet.is_empty() {
                 out.push_str(&format!("   {}\n", snippet));
             }
             out.push('\n');
         }
+
+        rest = &rest[title_end..];
     }
 
     if count > 0 {
@@ -158,6 +165,25 @@ pub fn extract_ddg_results(html: &str, max_results: usize) -> String {
     } else {
         String::new()
     }
+}
+
+/// Return the value of an attribute (e.g. `href`) found inside a tag string.
+fn grab_attr(tag: &str, name: &str) -> Option<String> {
+    let needle = format!("{}=\"", name);
+    let i = tag.find(&needle)?;
+    let start = i + needle.len();
+    let end = tag[start..].find('"')? + start;
+    Some(tag[start..end].to_string())
+}
+
+/// Extract the text between `from` and the next `</a>`, cleaned of tags/entities.
+fn grab_tag_text(html: &str, from: usize) -> (String, usize) {
+    let end = html[from..]
+        .find("</a>")
+        .map(|e| from + e)
+        .unwrap_or(html.len());
+    let raw = &html[from..end];
+    (clean_html_to_text(raw), end)
 }
 
 fn url_decode(s: &str) -> String {
@@ -185,143 +211,104 @@ fn url_decode(s: &str) -> String {
 }
 
 /// Extract the main textual content from an HTML page for fetch_url.
-pub fn extract_html_content(html: &str, url: &str) -> String {
-    let doc = Html::parse_document(html);
-
-    if url.contains("github.com")
-        && let Some(text) = try_extract_github(&doc)
-    {
-        return text;
-    }
-
-    let main_selectors = [
-        "article",
-        "[role=main]",
-        "main",
-        ".post-content",
-        ".entry-content",
-        ".content",
-        "#content",
-        ".markdown-body",
-        "body",
-    ];
-
-    for sel_str in &main_selectors {
-        if let Ok(sel) = Selector::parse(sel_str)
-            && let Some(element) = doc.select(&sel).next()
-        {
-            let text = collect_text(&element, 100_000);
-            if text.len() > 80 {
-                return text;
-            }
-        }
-    }
-
-    collect_text_from_root(&doc)
+/// Returns the full page content with the fluff (scripts, styles, comments,
+/// navigation, etc.) stripped out -- no truncation beyond what the caller
+/// imposes, so the model gets the complete cleaned page.
+pub fn extract_html_content(html: &str, _url: &str) -> String {
+    clean_html_to_text(html)
 }
 
-// -- GitHub content extraction --------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-fn try_extract_github(doc: &Html) -> Option<String> {
-    if let Ok(sel) = Selector::parse(".highlight")
-        && let Some(el) = doc.select(&sel).next()
-    {
-        let text = collect_text(&el, 100_000);
-        if !text.is_empty() {
-            return Some(format!("```\n{}\n```", collapse_whitespace(&text)));
-        }
-    }
-    if let Ok(sel) = Selector::parse("article.markdown-body")
-        && let Some(el) = doc.select(&sel).next()
-    {
-        let text = collect_text(&el, 50_000);
-        if text.len() > 50 {
-            return Some(text);
-        }
-    }
-    if let Ok(sel) = Selector::parse(".repo-description")
-        && let Some(el) = doc.select(&sel).next()
-    {
-        let text = el.text().collect::<Vec<_>>().join(" ");
-        let trimmed = text.trim();
-        if !trimmed.is_empty() {
-            return Some(trimmed.to_string());
-        }
-    }
-    None
-}
+    /// A realistic (abbreviated) DuckDuckGo HTML results page.
+    const DDG_FIXTURE: &str = r#"
+        <div id="links">
+          <div class="result__body">
+            <a rel="nofollow" class="result__a" href="/l/?uddg=https%3A%2F%2Fwww.nvidia.com%2Fen-us%2Ftechnologies%2Fnim%2F&amp;rut=123">NVIDIA NIM | Generative AI Microservices</a>
+            <a class="result__snippet">NVIDIA NIM is a set of microservices to deploy AI models like GLM across GPUs.</a>
+          </div>
+          <div class="result__body">
+            <a rel="nofollow" class="result__a" href="/l/?uddg=https%3A%2F%2Fwww.reddit.com%2Fr%2Flocalllama%2F&amp;rut=456">Discussion on Reddit</a>
+            <a class="result__snippet">People talking about NIM and GLM models.</a>
+          </div>
+          <div class="result__body">
+            <a rel="nofollow" class="result__a" href="/l/?uddg=https%3A%2F%2Fhuggingface.co%2Fspaces%2F&amp;rut=789">GLM on Hugging Face</a>
+            <a class="result__snippet">Try GLM 5.2 directly in your browser.</a>
+          </div>
+        </div>
+    "#;
 
-// -- Text collection utilities --------------------------------------------------
+    #[test]
+    fn extract_ddg_results_basic() {
+        let out = extract_ddg_results(DDG_FIXTURE, 10);
+        // Reddit is blacklisted, so only 2 of 3 should appear.
+        assert!(out.contains("Search results (2):"));
+        assert!(out.contains("https://www.nvidia.com/en-us/technologies/nim/"));
+        assert!(out.contains("https://huggingface.co/spaces/"));
+        assert!(out.contains("NVIDIA NIM"));
+        assert!(out.contains("GLM on Hugging Face"));
+        // Blacklisted domain must be excluded.
+        assert!(!out.contains("reddit.com"));
+    }
 
-fn collect_text(element: &scraper::ElementRef, max_chars: usize) -> String {
-    let mut result = String::with_capacity(max_chars.min(4096));
-    collect_text_inner(element, &mut result, max_chars);
-    result.shrink_to_fit();
-    collapse_whitespace(&result)
-}
+    #[test]
+    fn extract_ddg_respects_max_results() {
+        let out = extract_ddg_results(DDG_FIXTURE, 1);
+        assert!(out.contains("Search results (1):"));
+        // Only the first non-blacklisted result (nvidia) is present.
+        assert!(out.contains("nvidia.com"));
+        assert!(!out.contains("huggingface.co"));
+    }
 
-fn collect_text_inner(node: &scraper::ElementRef, result: &mut String, max: usize) {
-    if result.len() >= max {
-        return;
+    #[test]
+    fn extract_ddg_decodes_uddg_url() {
+        let out = extract_ddg_results(DDG_FIXTURE, 10);
+        // The uddg param is percent-encoded; verify it decodes to a real URL.
+        assert!(out.contains("https://www.nvidia.com/en-us/technologies/nim/"));
+        assert!(!out.contains("uddg="));
     }
-    let skip_tags = [
-        "script", "style", "nav", "footer", "header", "aside", "noscript", "svg", "form", "button",
-        "select", "textarea", "iframe", "canvas",
-    ];
-    if skip_tags.contains(&node.value().name()) {
-        return;
-    }
-    for child in node.children() {
-        if let Some(text) = child.value().as_text() {
-            let s = text.text.trim();
-            if !s.is_empty() {
-                if !result.is_empty() && !result.ends_with(' ') {
-                    result.push(' ');
-                }
-                let remaining = max.saturating_sub(result.len());
-                if remaining == 0 {
-                    return;
-                }
-                if s.len() <= remaining {
-                    result.push_str(s);
-                } else {
-                    result.push_str(&s[..remaining]);
-                    return;
-                }
-            }
-        } else if let Some(el) = child.value().as_element() {
-            if skip_tags.contains(&el.name()) {
-                continue;
-            }
-            if let Some(child_ref) = scraper::ElementRef::wrap(child) {
-                collect_text_inner(&child_ref, result, max);
-            }
-        }
-    }
-}
 
-fn collapse_whitespace(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut in_space = false;
-    for c in s.chars() {
-        if c.is_whitespace() {
-            if !in_space {
-                out.push(' ');
-                in_space = true;
-            }
-        } else {
-            out.push(c);
-            in_space = false;
-        }
+    #[test]
+    fn extract_ddg_empty_input() {
+        assert_eq!(extract_ddg_results("", 5), "");
+        assert_eq!(
+            extract_ddg_results("<html><body>no results</body></html>", 5),
+            ""
+        );
     }
-    out
-}
 
-fn collect_text_from_root(doc: &Html) -> String {
-    if let Ok(sel) = Selector::parse("body")
-        && let Some(body) = doc.select(&sel).next()
-    {
-        return collect_text(&body, 100_000);
+    #[test]
+    fn domain_blacklist_checks() {
+        assert!(domain_is_blacklisted("https://reddit.com/x"));
+        assert!(domain_is_blacklisted("http://www.youtube.com/watch"));
+        assert!(domain_is_blacklisted("https://old.reddit.com/r/foo"));
+        assert!(!domain_is_blacklisted("https://nvidia.com/nim"));
+        assert!(!domain_is_blacklisted("https://example.com"));
     }
-    String::new()
+
+    #[test]
+    fn url_decode_checks() {
+        assert_eq!(
+            url_decode("https%3A%2F%2Fexample.com"),
+            "https://example.com"
+        );
+        assert_eq!(url_decode("a+b"), "a b");
+        assert_eq!(url_decode("foo%20bar"), "foo bar");
+    }
+
+    #[test]
+    fn html_content_cleaned() {
+        let page = "<html><head><style>x{}</style></head><body>\
+            <script>bad()</script>\
+            <nav>menu</nav>\
+            <main><h1>Title</h1><p>Body text here.</p></main>\
+            </body></html>";
+        let out = extract_html_content(page, "https://example.com");
+        assert!(out.contains("Title"));
+        assert!(out.contains("Body text here."));
+        assert!(!out.contains("bad()"));
+        assert!(!out.contains("menu"));
+    }
 }

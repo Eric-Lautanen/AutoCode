@@ -506,3 +506,63 @@ pub fn native_post(
     let body_bytes = http_response_body(&buffer);
     Ok(String::from_utf8_lossy(&body_bytes).to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::native_get;
+    use autocode_core::utils::extract::extract_ddg_results;
+
+    /// Live end-to-end check against DuckDuckGo's HTML endpoint.
+    ///
+    /// This performs a real network request, so it is marked `#[ignore]` to
+    /// keep `cargo test` deterministic/offline-friendly. Run it explicitly with:
+    ///
+    ///   cargo test -p autocode-ai --lib -- --ignored live_ddg_search
+    #[test]
+    #[ignore]
+    fn live_ddg_search_nvidia_nim_glm() {
+        let query = "Nvidia NIM GLM 5.2";
+        let encoded: String = query
+            .chars()
+            .map(|c| match c {
+                'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
+                ' ' => "+".to_string(),
+                c => format!("%{:02X}", c as u32),
+            })
+            .collect();
+        let url = format!("https://html.duckduckgo.com/html/?q={}", encoded);
+
+        let data = match native_get(&url, 15, 512_000) {
+            Ok(d) => d,
+            Err(e) => {
+                // No network / blocked: skip rather than fail the suite.
+                eprintln!("live_ddg_search: skipping (request failed: {}).", e);
+                return;
+            }
+        };
+
+        let html = String::from_utf8_lossy(&data);
+        let results = extract_ddg_results(&html, 5);
+
+        println!("==== DDG search results for \"{}\" ====", query);
+        println!("{}", results);
+        println!("===========================================");
+
+        // The parser should have extracted at least one real http(s) link.
+        assert!(
+            results.contains("http://") || results.contains("https://"),
+            "expected at least one search result URL in the parsed output"
+        );
+        assert!(
+            results.starts_with("Search results"),
+            "expected the 'Search results (N):' header"
+        );
+
+        // Print the first result line for quick eyeballing.
+        let first = results
+            .lines()
+            .find(|l| l.trim_start().starts_with(|c: char| c.is_ascii_digit()))
+            .unwrap_or("(none)");
+        println!("FIRST RESULT: {}", first);
+    }
+}
