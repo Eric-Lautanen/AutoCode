@@ -147,6 +147,15 @@ pub struct ChatRuntime {
     /// detected. Consumed (and cleared) by `start_completion`, which injects the
     /// warning as a USER message before the next request so the model sees it.
     pub pending_loop_warning: bool,
+    /// Tracks whether the provider actually delivered any content (text delta,
+    /// reasoning, or tool call) during the current in-flight request. Reset to
+    /// `false` at request start in `start_completion`. Some providers emit a
+    /// `Done` event with no preceding content — a "silent done drop" — which
+    /// the app would otherwise mistake for a genuine (empty) completion. When
+    /// `Done` arrives and this is still `false` (and there is no buffered
+    /// pending content), we inject a "Continue" user message and re-issue the
+    /// request instead of stalling or erroring out.
+    pub got_response_this_turn: bool,
 }
 
 impl Default for ChatRuntime {
@@ -190,6 +199,7 @@ impl Default for ChatRuntime {
             last_tool_batch_signature: None,
             repeat_batch_count: 0,
             pending_loop_warning: false,
+            got_response_this_turn: false,
         }
     }
 }
@@ -247,6 +257,7 @@ impl ChatRuntime {
         self.last_tool_batch_signature = None;
         self.repeat_batch_count = 0;
         self.pending_loop_warning = false;
+        self.got_response_this_turn = false;
 
         // Force deallocation of large buffers (clear + shrink once each).
         self.pending_response.clear();

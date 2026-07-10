@@ -244,6 +244,10 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
     runtime.reasoning_only_streak = 0;
     runtime.salvaged_reasoning.clear();
     runtime.stopped_by_user = false;
+    // Reset the "did the provider actually send content this turn" tracker.
+    // It flips to true on the first Delta/Reasoning/ToolCall event and is
+    // consulted when Done arrives to detect silent done drops.
+    runtime.got_response_this_turn = false;
     // Consumed: the salvaged-reasoning user message was already injected and
     // this request carries it, so don't suppress task reminders on later turns.
     runtime.reasoning_dropped = false;

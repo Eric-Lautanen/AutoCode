@@ -33,6 +33,7 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                 runtime.net_status.bytes += text.len() as u64;
                 append_to_pending(&mut runtime.pending_response, &text);
                 runtime.last_delta_time = Some(std::time::Instant::now());
+                runtime.got_response_this_turn = true;
                 got_something = true;
                 events_this_frame += 1;
                 if events_this_frame >= 256 {
@@ -43,6 +44,7 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                 runtime.net_status.bytes += text.len() as u64;
                 append_to_reasoning(&mut runtime.reasoning_buf, &text);
                 runtime.last_delta_time = Some(std::time::Instant::now());
+                runtime.got_response_this_turn = true;
                 got_something = true;
             }
             Ok(ProviderEvent::ToolCall(tc)) => {
@@ -59,6 +61,7 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                 }
                 runtime.pending_tool_calls.push(tc);
                 runtime.last_delta_time = Some(std::time::Instant::now());
+                runtime.got_response_this_turn = true;
                 got_something = true;
             }
             Ok(ProviderEvent::Done {
@@ -157,6 +160,36 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
         };
         if state.sessions.iter().all(|s| s.id != owned_id) {
             runtime.drain();
+            return true;
+        }
+
+        // Silent done drop: the provider sent Done without ever emitting any
+        // content (no Delta, Reasoning, or ToolCall). Some providers do this
+        // when they have nothing to say or when an upstream filter silently
+        // truncates the response. The existing empty-response retry path
+        // treats this as a transient error and gives up after `max_retries`,
+        // stalling the session. Instead, inject a bare "Continue" user
+        // message and re-issue the request so the model picks back up.
+        // This only fires when there is genuinely nothing buffered (no text,
+        // no reasoning, no tool calls) and no provider error was reported.
+        if !runtime.got_response_this_turn
+            && runtime.provider_error.is_none()
+            && runtime.pending_response.trim().is_empty()
+            && runtime.reasoning_buf.trim().is_empty()
+            && runtime.pending_tool_calls.is_empty()
+        {
+            runtime.retry_count = 0;
+            runtime.status =
+                "Provider returned no content (silent done) -- sending Continue.".into();
+            push_runtime(
+                state,
+                runtime,
+                ChatMessage::new(Role::User, "Continue".to_string()),
+            );
+            if let Some(sid) = runtime.active_session_id.as_deref() {
+                super::super::session_ops::recompute_estimate_from_disk(state, sid);
+            }
+            start_completion(state, runtime);
             return true;
         }
 
