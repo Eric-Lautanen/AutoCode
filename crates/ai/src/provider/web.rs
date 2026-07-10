@@ -247,7 +247,14 @@ fn store_cookies(host: &str, buffer: &[u8]) {
 /// Perform a native HTTP GET request, returning the response body with
 /// HTTP headers stripped. Supports both HTTP and HTTPS. Does not follow
 /// redirects. The max_bytes limit applies to the body only (headers excluded).
-pub fn native_get(url: &str, timeout_secs: u64, max_bytes: usize) -> Result<Vec<u8>, String> {
+/// `extra_headers` (e.g. a custom `Accept`) is appended after the rotating
+/// browser-profile headers.
+pub fn native_get(
+    url: &str,
+    timeout_secs: u64,
+    max_bytes: usize,
+    extra_headers: Option<&[(&str, &str)]>,
+) -> Result<Vec<u8>, String> {
     // Rate limit: enforce minimum delay between web requests.
     enforce_web_rate_limit();
 
@@ -302,6 +309,13 @@ pub fn native_get(url: &str, timeout_secs: u64, max_bytes: usize) -> Result<Vec<
     let profile = next_profile();
     let cookie_line = cookie_header(&host);
     let cookie_str = cookie_line.as_deref().unwrap_or("");
+    let extra = extra_headers
+        .map(|hs| {
+            hs.iter()
+                .map(|(k, v)| format!("{}: {}\r\n", k, v))
+                .collect::<String>()
+        })
+        .unwrap_or_default();
 
     let request = format!(
         "GET {path} HTTP/1.1\r\n\
@@ -319,6 +333,7 @@ pub fn native_get(url: &str, timeout_secs: u64, max_bytes: usize) -> Result<Vec<
          Sec-Fetch-Site: none\r\n\
          Sec-Fetch-User: ?1\r\n\
          {cookie_str}\
+         {extra}\
          Connection: close\r\n\
          \r\n",
         ua = profile.user_agent,
@@ -532,7 +547,7 @@ mod tests {
             .collect();
         let url = format!("https://html.duckduckgo.com/html/?q={}", encoded);
 
-        let data = match native_get(&url, 15, 512_000) {
+        let data = match native_get(&url, 15, 512_000, None) {
             Ok(d) => d,
             Err(e) => {
                 // No network / blocked: skip rather than fail the suite.

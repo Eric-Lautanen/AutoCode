@@ -25,6 +25,52 @@ fn read_json(path: &std::path::Path) -> serde_json::Value {
         .unwrap_or(serde_json::Value::Null)
 }
 
+/// GitHub serves an unrendered SPA shell to plain GET requests, so a repo or
+/// file URL yields no readable content without JavaScript. Rewrite GitHub
+/// *repo* URLs to the REST API README endpoint (which returns rendered HTML
+/// without JS) and *blob* file URLs to `raw.githubusercontent.com` so the
+/// readable content comes back. Returns `(resolved_url, extra_headers)`.
+fn resolve_github_url(url: &str) -> Option<(String, Vec<(&'static str, &'static str)>)> {
+    let https = url.starts_with("https://github.com/");
+    let http = url.starts_with("http://github.com/");
+    if !https && !http {
+        return None;
+    }
+    let prefix = if https {
+        "https://github.com/"
+    } else {
+        "http://github.com/"
+    };
+    let parts: Vec<&str> = url[prefix.len()..]
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    let (owner, repo) = (parts[0], parts[1]);
+
+    // /blob/<branch>/<path...> -> raw file content.
+    if parts.len() >= 4 && parts[2] == "blob" {
+        let branch = parts[3];
+        let file_path = parts[4..].join("/");
+        return Some((
+            format!(
+                "https://raw.githubusercontent.com/{}/{}/{}/{}",
+                owner, repo, branch, file_path
+            ),
+            Vec::new(),
+        ));
+    }
+
+    // Repo root / tree / (anything else) -> README via the API. The API
+    // auto-resolves the default branch, so we don't need to know it.
+    Some((
+        format!("https://api.github.com/repos/{}/{}/readme", owner, repo),
+        vec![("Accept", "application/vnd.github.html")],
+    ))
+}
+
 pub struct ToolExecCtx<'a> {
     pub tc: &'a crate::provider::ToolCall,
     pub project_root: &'a str,
@@ -640,7 +686,7 @@ pub fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                 .collect();
 
             let url = format!("https://html.duckduckgo.com/html/?q={}", encoded);
-            match crate::provider::native_get(&url, 15, 512_000) {
+            match crate::provider::native_get(&url, 15, 512_000, None) {
                 Err(e) => format!("Web search error: {}", e),
                 Ok(data) => {
                     let html = String::from_utf8_lossy(&data);
@@ -672,42 +718,64 @@ pub fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
             }
             let max_bytes = args["max_bytes"].as_u64().unwrap_or(32_768).min(131_072) as usize;
 
-            match crate::provider::native_get(url, 20, max_bytes) {
+            // GitHub serves an unrendered SPA shell to plain GETs; resolve repo
+            // and file URLs to endpoints that return readable content.
+            let (fetch_target, extra_headers) = match resolve_github_url(url) {
+                Some((u, h)) => (u, h),
+                None => (url.to_string(), Vec::new()),
+            };
+
+            match crate::provider::native_get(&fetch_target, 20, max_bytes, Some(&extra_headers)) {
                 Err(e) => format!("fetch error for {}: {}", url, e),
                 Ok(data) => {
                     let body = String::from_utf8_lossy(&data);
-                    let is_html = body.trim_start().starts_with("<!")
-                        || body.trim_start().starts_with("<html")
-                        || body.contains("<html");
-                    let extracted = if is_html {
-                        autocode_core::utils::extract::extract_html_content(&body, url)
+
+                    // The GitHub API README endpoint returns rendered HTML; force
+                    // it through the cleaner (it's a fragment without `<html`).
+                    let (content, quality) = if fetch_target.starts_with("https://api.github.com/")
+                    {
+                        if body.trim_start().starts_with('{') {
+                            return format!(
+                                "GitHub API error for {}: {}",
+                                url,
+                                body.chars().take(200).collect::<String>()
+                            );
+                        }
+                        let cleaned = autocode_core::utils::html::clean_html_to_text(&body);
+                        (cleaned, autocode_core::utils::extract::ExtractQuality::Full)
                     } else {
-                        autocode_core::utils::extract::ExtractedPage {
-                            content: body.to_string(),
-                            quality: autocode_core::utils::extract::ExtractQuality::Full,
+                        let is_html = body.trim_start().starts_with("<!")
+                            || body.trim_start().starts_with("<html")
+                            || body.contains("<html");
+                        if is_html {
+                            let ex =
+                                autocode_core::utils::extract::extract_html_content(&body, url);
+                            (ex.content, ex.quality)
+                        } else {
+                            (
+                                body.to_string(),
+                                autocode_core::utils::extract::ExtractQuality::Full,
+                            )
                         }
                     };
 
-                    if extracted.content.trim().is_empty() {
+                    if content.trim().is_empty() {
                         // Nothing usable came back at all.
-                        let tail = if extracted.quality
-                            == autocode_core::utils::extract::ExtractQuality::Empty
-                        {
-                            " The page returned no readable content (this is common for \
+                        let tail =
+                            if quality == autocode_core::utils::extract::ExtractQuality::Empty {
+                                " The page returned no readable content (this is common for \
                              JavaScript-rendered sites). Try a server-rendered alternative \
                              source or a more specific web_search."
-                        } else {
-                            ""
-                        };
+                            } else {
+                                ""
+                            };
                         format!("Empty response from {}{}", url, tail)
                     } else {
                         // Cap at max_bytes to prevent runaway token usage.
-                        let mut text: String = extracted.content.chars().take(max_bytes).collect();
+                        let mut text: String = content.chars().take(max_bytes).collect();
                         // When only metadata was recoverable (SPA), tell the model
                         // the page is not fully readable and suggest alternatives.
-                        if extracted.quality
-                            == autocode_core::utils::extract::ExtractQuality::MetadataOnly
-                        {
+                        if quality == autocode_core::utils::extract::ExtractQuality::MetadataOnly {
                             text.push_str(
                                 "\n\n[Note: this page is a JavaScript-rendered web app; its \
                                  static HTML contained no readable body, only title/description \
@@ -950,7 +1018,7 @@ pub fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                 urlencoding(query),
                 max_results
             );
-            match crate::provider::native_get(&url, 15, 65536) {
+            match crate::provider::native_get(&url, 15, 65536, None) {
                 Ok(bytes) => {
                     let xml = String::from_utf8_lossy(&bytes);
                     let mut results = Vec::new();
@@ -1111,5 +1179,61 @@ pub fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
         other => {
             format!("Unknown tool: {}", other)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_github_url;
+
+    #[test]
+    fn resolve_github_repo_root() {
+        let (url, headers) = resolve_github_url("https://github.com/owner/repo").unwrap();
+        assert_eq!(url, "https://api.github.com/repos/owner/repo/readme");
+        assert_eq!(headers, vec![("Accept", "application/vnd.github.html")]);
+    }
+
+    #[test]
+    fn resolve_github_repo_with_tree_suffix() {
+        let (url, _) = resolve_github_url("https://github.com/owner/repo/tree/main/sub").unwrap();
+        assert_eq!(url, "https://api.github.com/repos/owner/repo/readme");
+    }
+
+    #[test]
+    fn resolve_github_blob_to_raw() {
+        let (url, headers) =
+            resolve_github_url("https://github.com/owner/repo/blob/dev/src/main.rs").unwrap();
+        assert_eq!(
+            url,
+            "https://raw.githubusercontent.com/owner/repo/dev/src/main.rs"
+        );
+        assert!(headers.is_empty());
+    }
+
+    #[test]
+    fn resolve_github_ignores_non_github() {
+        assert!(resolve_github_url("https://example.com/owner/repo").is_none());
+        assert!(resolve_github_url("https://github.com/owner").is_none());
+    }
+
+    #[test]
+    #[ignore]
+    fn live_fetch_github_readme() {
+        let url = "https://github.com/FAI-Solutions/Continue-NIM-Proxy";
+        let (target, headers) = resolve_github_url(url).unwrap();
+        let data = crate::provider::native_get(&target, 20, 131_072, Some(&headers))
+            .expect("request failed");
+        let body = String::from_utf8_lossy(&data);
+        assert!(
+            !body.trim_start().starts_with('{'),
+            "got JSON error from GitHub API: {}",
+            &body[..body.len().min(200)]
+        );
+        let text = autocode_core::utils::html::clean_html_to_text(&body);
+        assert!(
+            text.contains("NIM Proxy") || text.contains("Continue"),
+            "README text not extracted: {}",
+            &text[..text.len().min(200)]
+        );
     }
 }
