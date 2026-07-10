@@ -765,11 +765,13 @@ pub fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                             }
                         };
 
-                    // If a plain GET yielded nothing usable and this isn't an
+                    // If a plain GET yielded no real body (empty, or only
+                    // title/description metadata from an SPA) and this isn't an
                     // already-handled GitHub page, fall back to headless Chrome
-                    // to render the JavaScript-heavy (SPA) page.
+                    // to render the JavaScript-heavy page.
                     let is_github = fetch_target.starts_with("https://api.github.com/");
-                    if content.trim().is_empty()
+                    if (content.trim().is_empty()
+                        || quality != autocode_core::utils::extract::ExtractQuality::Full)
                         && !is_github
                         && use_headless_chrome
                         && let Some(chrome) = chrome_path.as_deref()
