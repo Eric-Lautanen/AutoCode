@@ -7,7 +7,9 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::{
     io::{Read, Write},
     net::TcpStream,
-    time::Duration,
+    process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 
 use rustls::pki_types::ServerName;
@@ -395,6 +397,86 @@ pub fn native_get(
     // Cap body to max_bytes
     let end = body.len().min(max_bytes);
     Ok(body[..end].to_vec())
+}
+
+/// Render a URL with a headless Chrome/Chromium instance and return the
+/// serialized DOM after JavaScript has run. Used by `fetch_url` as a fallback
+/// for JavaScript-rendered (SPA) pages that a plain HTTP GET cannot read.
+///
+/// `chrome` is the full path to the executable (from sysinfo detection). The
+/// page is loaded with `--dump-dom`, which prints the post-hydration DOM to
+/// stdout. A virtual-time budget lets async JS settle before the dump. The
+/// child is killed if it exceeds `timeout_secs`.
+pub fn render_via_chrome(
+    url: &str,
+    chrome: &str,
+    timeout_secs: u64,
+    max_bytes: usize,
+) -> Option<String> {
+    let mut cmd = Command::new(chrome);
+    cmd.arg("--headless=old")
+        .arg("--no-startup-window")
+        .arg("--disable-gpu")
+        .arg("--no-sandbox")
+        .arg("--disable-dev-shm-usage")
+        .arg("--disable-extensions")
+        .arg("--no-first-run")
+        .arg("--no-default-browser-check")
+        .arg("--disable-background-networking")
+        .arg("--virtual-time-budget=8000")
+        .arg("--dump-dom")
+        .arg(url)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let mut child = cmd.spawn().ok()?;
+    let mut stdout = child.stdout.take()?;
+
+    let reader = thread::spawn(move || {
+        let mut buf = Vec::with_capacity(64 * 1024);
+        let mut tmp = [0u8; 8192];
+        loop {
+            match stdout.read(&mut tmp) {
+                Ok(0) => break,
+                Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                Err(_) => break,
+            }
+        }
+        buf
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    break;
+                }
+                thread::sleep(Duration::from_millis(150));
+            }
+            Err(_) => break,
+        }
+    }
+    // Ensure the process is reaped even on early exit.
+    let _ = child.kill();
+
+    let raw = reader.join().ok()?;
+    let dom = String::from_utf8_lossy(&raw);
+    if dom.trim().is_empty() {
+        return None;
+    }
+    // Allow some headroom over max_bytes so the cleaner can strip tags/whitespace
+    // and still leave a meaningful chunk after the final cap in fetch_url.
+    let cap = max_bytes.saturating_mul(4).max(65_536);
+    Some(dom.chars().take(cap).collect())
 }
 
 /// Perform a native HTTP POST request, returning the response body with

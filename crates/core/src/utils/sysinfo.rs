@@ -11,6 +11,11 @@ use std::sync::OnceLock;
 pub struct SysInfo {
     pub report: String,
     pub tool_probes: Vec<ToolProbeEntry>,
+    /// Full path to a Chrome/Chromium executable, if one was detected. Used by
+    /// the `fetch_url` tool to render JavaScript-heavy (SPA) pages that a plain
+    /// HTTP GET cannot read.
+    #[serde(default)]
+    pub chrome_path: Option<String>,
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -86,9 +91,11 @@ pub fn start_detect() -> std::sync::mpsc::Receiver<SysInfo> {
 fn build_sysinfo() -> SysInfo {
     let report = build_report();
     let tool_probes = build_tool_probes();
+    let chrome_path = detect_chrome();
     SysInfo {
         report,
         tool_probes,
+        chrome_path,
     }
 }
 
@@ -108,6 +115,7 @@ fn build_report() -> String {
     lines.push(memory_info());
     lines.push(gpu_info());
     lines.push(shell_info());
+    lines.push(browser_info());
 
     // Tool summary is appended from tool_probes later in detect flow.
     // For the report string we include it inline for the system prompt.
@@ -138,6 +146,23 @@ fn build_tool_probes() -> Vec<ToolProbeEntry> {
             available: probe_cmd(name),
         })
         .collect()
+}
+
+/// Summarize the detected browser for the system-prompt report.
+fn browser_info() -> String {
+    match detect_chrome() {
+        Some(p) => {
+            let name = if p.to_ascii_lowercase().contains("chromium") {
+                "Chromium"
+            } else if p.to_ascii_lowercase().contains("edge") {
+                "Edge"
+            } else {
+                "Chrome"
+            };
+            format!("Browser: {} ({})", name, p)
+        }
+        None => "Browser: none detected".to_string(),
+    }
 }
 
 // ── Platform dispatch ────────────────────────────────────────────────
@@ -632,6 +657,105 @@ fn probe_cmd(name: &str) -> bool {
     }
 }
 
+/// Locate a Chrome/Chromium/Edge executable for headless rendering of
+/// JavaScript-heavy pages. Returns the full path if found, else `None`.
+/// Detection order: PATH lookup of common binary names, then platform-specific
+/// install locations (Windows registry + known dirs, macOS app bundle).
+pub fn detect_chrome() -> Option<String> {
+    let names: &[&str] = if cfg!(target_os = "windows") {
+        &[
+            "chrome.exe",
+            "chromium.exe",
+            "google-chrome.exe",
+            "msedge.exe",
+        ]
+    } else if cfg!(target_os = "macos") {
+        &["google-chrome", "chromium", "chrome", "msedge"]
+    } else {
+        &[
+            "google-chrome",
+            "chromium",
+            "chromium-browser",
+            "chrome",
+            "msedge",
+        ]
+    };
+    for name in names {
+        if let Some(p) = which_path(name) {
+            return Some(p);
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(p) = detect_chrome_windows() {
+            return Some(p);
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let bundle = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+        if std::path::Path::new(bundle).exists() {
+            return Some(bundle.to_string());
+        }
+    }
+    None
+}
+
+/// Resolve a binary name to its full path using the platform `where`/`which`.
+fn which_path(name: &str) -> Option<String> {
+    let out = if cfg!(target_os = "windows") {
+        run_capture_hidden("where", &[name])
+    } else {
+        run_capture_hidden("which", &[name])
+    };
+    out.lines()
+        .next()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+}
+
+#[cfg(target_os = "windows")]
+fn detect_chrome_windows() -> Option<String> {
+    // 1. App Paths registry entries (most reliable when installed).
+    for hive in ["HKLM", "HKCU"] {
+        let key = format!(
+            r"{}:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe",
+            hive
+        );
+        if let Some(p) = reg_query_default(&key)
+            && std::path::Path::new(&p).exists()
+        {
+            return Some(p);
+        }
+    }
+    // 2. Known install directories.
+    let local = std::env::var("LOCALAPPDATA").unwrap_or_default();
+    let pf = std::env::var("ProgramFiles").unwrap_or_default();
+    let pf86 = std::env::var("ProgramFiles(x86)").unwrap_or_default();
+    let candidates = [
+        format!("{}\\Google\\Chrome\\Application\\chrome.exe", local),
+        format!("{}\\Google\\Chrome\\Application\\chrome.exe", pf),
+        format!("{}\\Google\\Chrome\\Application\\chrome.exe", pf86),
+        format!("{}\\Chromium\\Application\\chrome.exe", local),
+        format!("{}\\Chromium\\Application\\chrome.exe", pf),
+        format!("{}\\Microsoft\\Edge\\Application\\msedge.exe", pf),
+        format!("{}\\Microsoft\\Edge\\Application\\msedge.exe", pf86),
+    ];
+    candidates
+        .iter()
+        .find(|p| std::path::Path::new(p).exists())
+        .cloned()
+}
+
+#[cfg(target_os = "windows")]
+fn reg_query_default(key: &str) -> Option<String> {
+    let out = run_capture_hidden("reg", &["query", key, "/ve"]);
+    out.lines()
+        .find_map(|line| line.split("REG_SZ").nth(1).map(|s| s.trim().to_string()))
+        .filter(|s| s.to_ascii_lowercase().ends_with(".exe"))
+}
+
 // ── Hidden subprocess helpers ────────────────────────────────────────
 // On Windows, CREATE_NO_WINDOW (0x08000000) prevents console flash.
 
@@ -707,6 +831,12 @@ pub fn shell_tools_note() -> String {
         .get()
         .map(shell_tools_note_from)
         .unwrap_or_default()
+}
+
+/// Returns the detected Chrome/Chromium executable path from the live cache,
+/// if detection has run and a browser was found.
+pub fn cached_chrome_path() -> Option<String> {
+    LIVE_CACHE.get().and_then(|i| i.chrome_path.clone())
 }
 
 /// Returns true if the system has a usable OpenGL library available.

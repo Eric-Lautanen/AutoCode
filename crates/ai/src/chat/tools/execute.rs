@@ -80,6 +80,10 @@ pub struct ToolExecCtx<'a> {
     pub ctx_max: usize,
     pub max_output: usize,
     pub session_named: bool,
+    /// Path to a detected Chrome/Chromium binary, if any.
+    pub chrome_path: Option<String>,
+    /// Whether `fetch_url` may fall back to headless-Chrome rendering.
+    pub use_headless_chrome: bool,
 }
 
 pub fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
@@ -92,6 +96,8 @@ pub fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
         ctx_max,
         max_output,
         session_named,
+        chrome_path,
+        use_headless_chrome,
     } = ctx;
     use autocode_core::helpers::{resolve_path_cached, resolve_path_write_cached};
     let args: serde_json::Value =
@@ -732,32 +738,51 @@ pub fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
 
                     // The GitHub API README endpoint returns rendered HTML; force
                     // it through the cleaner (it's a fragment without `<html`).
-                    let (content, quality) = if fetch_target.starts_with("https://api.github.com/")
-                    {
-                        if body.trim_start().starts_with('{') {
-                            return format!(
-                                "GitHub API error for {}: {}",
-                                url,
-                                body.chars().take(200).collect::<String>()
-                            );
-                        }
-                        let cleaned = autocode_core::utils::html::clean_html_to_text(&body);
-                        (cleaned, autocode_core::utils::extract::ExtractQuality::Full)
-                    } else {
-                        let is_html = body.trim_start().starts_with("<!")
-                            || body.trim_start().starts_with("<html")
-                            || body.contains("<html");
-                        if is_html {
-                            let ex =
-                                autocode_core::utils::extract::extract_html_content(&body, url);
-                            (ex.content, ex.quality)
+                    let (mut content, mut quality) =
+                        if fetch_target.starts_with("https://api.github.com/") {
+                            if body.trim_start().starts_with('{') {
+                                return format!(
+                                    "GitHub API error for {}: {}",
+                                    url,
+                                    body.chars().take(200).collect::<String>()
+                                );
+                            }
+                            let cleaned = autocode_core::utils::html::clean_html_to_text(&body);
+                            (cleaned, autocode_core::utils::extract::ExtractQuality::Full)
                         } else {
-                            (
-                                body.to_string(),
-                                autocode_core::utils::extract::ExtractQuality::Full,
-                            )
+                            let is_html = body.trim_start().starts_with("<!")
+                                || body.trim_start().starts_with("<html")
+                                || body.contains("<html");
+                            if is_html {
+                                let ex =
+                                    autocode_core::utils::extract::extract_html_content(&body, url);
+                                (ex.content, ex.quality)
+                            } else {
+                                (
+                                    body.to_string(),
+                                    autocode_core::utils::extract::ExtractQuality::Full,
+                                )
+                            }
+                        };
+
+                    // If a plain GET yielded nothing usable and this isn't an
+                    // already-handled GitHub page, fall back to headless Chrome
+                    // to render the JavaScript-heavy (SPA) page.
+                    let is_github = fetch_target.starts_with("https://api.github.com/");
+                    if content.trim().is_empty()
+                        && !is_github
+                        && use_headless_chrome
+                        && let Some(chrome) = chrome_path.as_deref()
+                        && let Some(rendered) =
+                            crate::provider::render_via_chrome(url, chrome, 30, max_bytes)
+                    {
+                        let rendered_text =
+                            autocode_core::utils::html::clean_html_to_text(&rendered);
+                        if !rendered_text.trim().is_empty() {
+                            content = rendered_text;
+                            quality = autocode_core::utils::extract::ExtractQuality::Full;
                         }
-                    };
+                    }
 
                     if content.trim().is_empty() {
                         // Nothing usable came back at all.

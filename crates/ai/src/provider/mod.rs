@@ -16,4 +16,4 @@ pub use rate_limit::{api_rate_limit_record, api_rate_limit_reset, api_rate_limit
 pub use thread_pool::ThreadPool;
 pub use tool_defs::tool_definitions;
 pub use types::{ApiMessage, CompletionRequest, ProviderEvent, ToolCall, ToolChoice};
-pub use web::{native_get, native_post, set_web_rate_limit_ms};
+pub use web::{native_get, native_post, render_via_chrome, set_web_rate_limit_ms};

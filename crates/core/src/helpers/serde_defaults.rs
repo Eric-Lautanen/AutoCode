@@ -27,6 +27,9 @@ pub fn default_handoff_trigger_prompt_string() -> String {
 pub fn default_handoff_enabled() -> bool {
     true
 }
+pub fn default_use_headless_chrome() -> bool {
+    true
+}
 pub fn default_handoff_continuation_prompt_string() -> String {
     crate::state::DEFAULT_HANDOFF_CONTINUATION_PROMPT.to_string()
 }

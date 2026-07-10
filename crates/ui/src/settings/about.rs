@@ -98,6 +98,29 @@ pub fn show_about(ui: &mut egui::Ui, state: &mut AppState) {
         .color(Palette::TEXT_MUTED),
     );
 
+    ui.add_space(8.0);
+    let chrome_available = state.sysinfo.chrome_path.is_some();
+    let mut enabled = state.use_headless_chrome;
+    ui.add_enabled(
+        chrome_available,
+        egui::Checkbox::new(
+            &mut enabled,
+            "Use headless Chrome to fetch JavaScript-rendered pages",
+        ),
+    );
+    if enabled != state.use_headless_chrome {
+        state.use_headless_chrome = enabled;
+    }
+    if !chrome_available {
+        ui.label(
+            RichText::new(
+                "No Chrome/Chromium detected — install one and Refresh System Info to enable.",
+            )
+            .size(10.0)
+            .color(Palette::TEXT_MUTED),
+        );
+    }
+
     ui.add_space(14.0);
     ui.separator();
     ui.add_space(8.0);

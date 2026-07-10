@@ -34,8 +34,8 @@ pub use serde_defaults::{
     default_max_retry_wait, default_reasoning_effort, default_request_timeout,
     default_shell_timeout, default_shell_timeout_max, default_stream_idle_timeout,
     default_supports_strict_tools, default_temperature, default_thinking_mode,
-    default_tool_timeout, default_top_p, default_ui_display_window, default_web_rate_limit_ms,
-    deserialize_secret, serialize_secret,
+    default_tool_timeout, default_top_p, default_ui_display_window, default_use_headless_chrome,
+    default_web_rate_limit_ms, deserialize_secret, serialize_secret,
 };
 
 pub use utils::{

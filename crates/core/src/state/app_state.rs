@@ -222,6 +222,12 @@ pub struct AppState {
     #[serde(default)]
     pub sysinfo: crate::utils::sysinfo::SysInfo,
 
+    /// When true (and a Chrome/Chromium binary was detected at startup), the
+    /// `fetch_url` tool falls back to headless-Chrome rendering for pages that
+    /// return no readable content from a plain HTTP GET (JavaScript SPAs).
+    #[serde(default = "crate::helpers::default_use_headless_chrome")]
+    pub use_headless_chrome: bool,
+
     // -- Configurable timeouts ---------------------------------------------------
     /// Seconds with no SSE delta before declaring the stream stalled.
     #[serde(default = "crate::helpers::default_stream_idle_timeout")]
@@ -323,6 +329,7 @@ impl Default for AppState {
             show_reasoning_inline: false,
             settings_open: false,
             sysinfo: crate::utils::sysinfo::SysInfo::default(),
+            use_headless_chrome: crate::helpers::default_use_headless_chrome(),
             stream_idle_timeout_secs: crate::helpers::default_stream_idle_timeout(),
             request_timeout_secs: crate::helpers::default_request_timeout(),
             tool_timeout_secs: crate::helpers::default_tool_timeout(),

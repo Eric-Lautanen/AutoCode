@@ -699,6 +699,11 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                     .find(|s| s.id == session_id)
                     .map(|s| s.session_named)
                     .unwrap_or(true);
+                // Clone the few sysinfo/setting values the tool needs before
+                // moving into the spawned thread (a borrowed `&AppState` cannot
+                // escape into a `'static` thread closure).
+                let chrome_path = state.sysinfo.chrome_path.clone();
+                let use_headless_chrome = state.use_headless_chrome;
                 std::thread::spawn(move || {
                     let mut results = Vec::with_capacity(calls_clone.len());
                     for tc in &calls_clone {
@@ -714,6 +719,8 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                                 ctx_max: ctx_info.1,
                                 max_output: ctx_info.3,
                                 session_named,
+                                chrome_path: chrome_path.clone(),
+                                use_headless_chrome,
                             })
                         }));
                         let result = match result {
