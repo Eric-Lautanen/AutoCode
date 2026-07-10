@@ -356,6 +356,28 @@ pub fn build_tool_meta(tc: &ToolCall, result: &str, duration_ms: u64) -> ToolMet
             duration_ms: Some(duration_ms),
             ..Default::default()
         },
+        "web_search" => {
+            let query = args["query"].as_str().unwrap_or("").to_string();
+            ToolMeta {
+                tool_name: "web_search".into(),
+                old_text: Some(query),
+                byte_count: Some(result.len()),
+                is_error,
+                duration_ms: Some(duration_ms),
+                ..Default::default()
+            }
+        }
+        "fetch_url" => {
+            let url = args["url"].as_str().unwrap_or("").to_string();
+            ToolMeta {
+                tool_name: "fetch_url".into(),
+                file_path: Some(url),
+                byte_count: Some(result.len()),
+                is_error,
+                duration_ms: Some(duration_ms),
+                ..Default::default()
+            }
+        }
         _ => ToolMeta {
             tool_name: tc.name.clone(),
             is_error,

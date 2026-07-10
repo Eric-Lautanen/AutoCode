@@ -358,8 +358,14 @@ pub(crate) fn render_structured_tool_result(
         }
         "web_search" | "fetch_url" => {
             if meta.tool_name == "web_search" {
+                let query = meta.old_text.as_deref().unwrap_or("").trim();
+                let header = if query.is_empty() {
+                    "[web] Web search".to_string()
+                } else {
+                    format!("[web] Web search: \"{}\"", query)
+                };
                 ui.label(
-                    RichText::new("[web] Web search")
+                    RichText::new(header)
                         .size(12.0)
                         .color(theme().accent)
                         .strong(),
