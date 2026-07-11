@@ -247,8 +247,10 @@ fn store_cookies(host: &str, buffer: &[u8]) {
 }
 
 /// Perform a native HTTP GET request, returning the response body with
-/// HTTP headers stripped. Supports both HTTP and HTTPS. Does not follow
-/// redirects. The max_bytes limit applies to the body only (headers excluded).
+/// HTTP headers stripped. Supports both HTTP and HTTPS and transparently
+/// follows up to 8 redirects (301/302/303/307/308), which many doc sites use
+/// for version aliases, http->https upgrades, and trailing-slash normalisation.
+/// The max_bytes limit applies to the body only (headers excluded).
 /// `extra_headers` (e.g. a custom `Accept`) is appended after the rotating
 /// browser-profile headers.
 pub fn native_get(
@@ -260,11 +262,33 @@ pub fn native_get(
     // Rate limit: enforce minimum delay between web requests.
     enforce_web_rate_limit();
 
-    let _t0 = std::time::Instant::now();
+    const MAX_REDIRECTS: usize = 8;
+    let mut current = url.to_string();
+    for _ in 0..MAX_REDIRECTS {
+        let buffer = http_get_buffer(&current, timeout_secs, max_bytes, extra_headers)?;
+        if let Some(code) = parse_status_code(&buffer)
+            && (300..=399).contains(&code)
+            && let Some(loc) = find_header_value(&buffer, "location")
+        {
+            current = resolve_redirect(&current, &loc);
+            continue;
+        }
+        return Ok(extract_body_capped(&buffer, max_bytes));
+    }
+    Err("too many redirects".to_string())
+}
+
+/// Perform a single HTTP(S) GET and return the raw response buffer (headers
+/// and body). Does not follow redirects on its own; `native_get` drives the
+/// redirect loop.
+fn http_get_buffer(
+    url: &str,
+    timeout_secs: u64,
+    max_bytes: usize,
+    extra_headers: Option<&[(&str, &str)]>,
+) -> Result<Vec<u8>, String> {
     let (host, path, port, use_tls) = parse_url(url).map_err(|e| e.to_string())?;
     let addr = format!("{}:{}", host, port);
-    // If we already have a cached TLS connection for this host, reuse it.
-    // Otherwise create a fresh TCP connection.
     let stream = TcpStream::connect(&addr).map_err(|e| format!("connect: {}", e))?;
     stream
         .set_read_timeout(Some(Duration::from_secs(timeout_secs)))
@@ -368,10 +392,15 @@ pub fn native_get(
     // Store any Set-Cookie from the response for subsequent requests
     store_cookies(&host, &buffer);
 
-    // Strip HTTP response headers: find the blank line separating headers from body.
-    // We look for \r\n\r\n (HTTP standard) with a fallback for servers that use \n\n.
+    Ok(buffer)
+}
+
+/// Strip HTTP response headers and return the body, capped at `max_bytes`.
+/// Handles both `\r\n\r\n` and `\n\n` header/body separators and chunked
+/// transfer encoding.
+fn extract_body_capped(buffer: &[u8], max_bytes: usize) -> Vec<u8> {
     let (body_start, is_chunked) = {
-        let header_str = String::from_utf8_lossy(&buffer);
+        let header_str = String::from_utf8_lossy(buffer);
         let is_chunked = header_str.contains("Transfer-Encoding: chunked")
             || header_str.contains("transfer-encoding: chunked");
         let start = buffer
@@ -394,9 +423,307 @@ pub fn native_get(
         buffer.to_vec()
     };
 
-    // Cap body to max_bytes
     let end = body.len().min(max_bytes);
-    Ok(body[..end].to_vec())
+    body[..end].to_vec()
+}
+
+/// Parse the HTTP status code from a response buffer (e.g. `HTTP/1.1 302`).
+fn parse_status_code(buffer: &[u8]) -> Option<u16> {
+    let text = String::from_utf8_lossy(buffer);
+    let first = text.lines().next()?;
+    let mut parts = first.split_whitespace();
+    parts.next(); // "HTTP/1.1"
+    parts.next().and_then(|c| c.parse::<u16>().ok())
+}
+
+/// Return the value of a response header (case-insensitive name), searching
+/// only within the header section (before the blank line).
+fn find_header_value(buffer: &[u8], name: &str) -> Option<String> {
+    let text = String::from_utf8_lossy(buffer);
+    let header_end = text.find("\r\n\r\n").unwrap_or_else(|| text.len());
+    let headers = &text[..header_end];
+    for line in headers.lines() {
+        if let Some((k, v)) = line.split_once(':')
+            && k.trim().eq_ignore_ascii_case(name)
+        {
+            return Some(v.trim().to_string());
+        }
+    }
+    None
+}
+
+/// Resolve a `Location` header against the request URL, supporting absolute
+/// (`https://...`), root-relative (`/path`), and path-relative (`page.html`)
+/// targets.
+fn resolve_redirect(base: &str, loc: &str) -> String {
+    if loc.starts_with("http://") || loc.starts_with("https://") {
+        return loc.to_string();
+    }
+    let (host, path, port, use_tls) = match parse_url(base) {
+        Ok(p) => p,
+        Err(_) => return loc.to_string(),
+    };
+    let scheme = if use_tls { "https" } else { "http" };
+    let authority = if (use_tls && port == 443) || (!use_tls && port == 80) {
+        host.to_string()
+    } else {
+        format!("{}:{}", host, port)
+    };
+    if loc.starts_with('/') {
+        format!("{}://{}{}", scheme, authority, loc)
+    } else {
+        let dir = match path.rfind('/') {
+            Some(i) if i > 0 => &path[..i],
+            _ => "",
+        };
+        format!("{}://{}{}/{}", scheme, authority, dir, loc)
+    }
+}
+
+/// Minimal RFC 6455 WebSocket client (client frames masked, server frames
+/// unmasked). Just enough to speak the Chrome DevTools Protocol over
+/// `ws://localhost` without pulling in a WebSocket dependency.
+struct WsConn {
+    stream: std::net::TcpStream,
+    buf: Vec<u8>,
+    frag: Vec<u8>,
+}
+
+fn ws_base64(input: &[u8]) -> String {
+    const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0];
+        let b1 = *chunk.get(1).unwrap_or(&0);
+        let b2 = *chunk.get(2).unwrap_or(&0);
+        let n = ((b0 as u32) << 16) | ((b1 as u32) << 8) | (b2 as u32);
+        out.push(A[((n >> 18) & 63) as usize] as char);
+        out.push(A[((n >> 12) & 63) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(A[((n >> 6) & 63) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(A[(n & 63) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
+fn ws_nonce() -> String {
+    let mut seed: u64 = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0x1234_5678_9abc_def0);
+    let mut bytes = [0u8; 16];
+    for b in &mut bytes {
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        *b = (seed >> 33) as u8;
+    }
+    ws_base64(&bytes)
+}
+
+fn ws_connect(url: &str) -> Option<WsConn> {
+    let u = url.strip_prefix("ws://")?;
+    let (hostport, path) = u.split_once('/')?;
+    let (host, port) = hostport.split_once(':').unwrap_or((hostport, "80"));
+    let port: u16 = port.parse().ok()?;
+    let mut stream = std::net::TcpStream::connect((host, port)).ok()?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .ok()?;
+    let key = ws_nonce();
+    let req = format!(
+        "GET /{path} HTTP/1.1\r\nHost: {host}:{port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
+    );
+    stream.write_all(req.as_bytes()).ok()?;
+    stream.flush().ok()?;
+    let mut head = Vec::new();
+    let mut b = [0u8; 1];
+    loop {
+        let n = stream.read(&mut b).ok()?;
+        if n == 0 {
+            return None;
+        }
+        head.push(b[0]);
+        if head.ends_with(b"\r\n\r\n") {
+            break;
+        }
+        if head.len() > 4096 {
+            return None;
+        }
+    }
+    let head_str = String::from_utf8_lossy(&head);
+    if !head_str.contains(" 101 ") {
+        return None;
+    }
+    Some(WsConn {
+        stream,
+        buf: Vec::new(),
+        frag: Vec::new(),
+    })
+}
+
+impl WsConn {
+    fn send_text(&mut self, text: &str) {
+        let bytes = text.as_bytes();
+        let len = bytes.len();
+        let mut frame = Vec::with_capacity(len + 10);
+        frame.push(0x81);
+        if len < 126 {
+            frame.push(0x80 | (len as u8));
+        } else if len < 65536 {
+            frame.push(0x80 | 126);
+            frame.extend_from_slice(&(len as u16).to_be_bytes());
+        } else {
+            frame.push(0x80 | 127);
+            frame.extend_from_slice(&(len as u64).to_be_bytes());
+        }
+        let mask = [0x12u8, 0x34, 0x56, 0x78];
+        frame.extend_from_slice(&mask);
+        let mut masked = bytes.to_vec();
+        for (i, b) in masked.iter_mut().enumerate() {
+            *b ^= mask[i % 4];
+        }
+        frame.extend_from_slice(&masked);
+        let _ = self.stream.write_all(&frame);
+        let _ = self.stream.flush();
+    }
+
+    fn send_pong(&mut self) {
+        let frame = [0x8A, 0x00];
+        let _ = self.stream.write_all(&frame);
+        let _ = self.stream.flush();
+    }
+
+    /// Read the next complete text message. `Ok(None)` on EOF, `Err(())` if the
+    /// socket would block (caller should retry after a short pause).
+    fn recv_text(&mut self) -> Result<Option<String>, ()> {
+        loop {
+            if let Some(msg) = self.try_parse() {
+                return Ok(Some(msg));
+            }
+            let mut tmp = [0u8; 8192];
+            match self.stream.read(&mut tmp) {
+                Ok(0) => return Ok(None),
+                Ok(n) => self.buf.extend_from_slice(&tmp[..n]),
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => return Err(()),
+                Err(_) => return Ok(None),
+            }
+        }
+    }
+
+    fn try_parse(&mut self) -> Option<String> {
+        if self.buf.len() < 2 {
+            return None;
+        }
+        let b0 = self.buf[0];
+        let b1 = self.buf[1];
+        let opcode = b0 & 0x0f;
+        let masked = (b1 & 0x80) != 0;
+        let mut len = (b1 & 0x7f) as usize;
+        let mut pos = 2;
+        if len == 126 {
+            if self.buf.len() < pos + 2 {
+                return None;
+            }
+            len = u16::from_be_bytes([self.buf[pos], self.buf[pos + 1]]) as usize;
+            pos += 2;
+        } else if len == 127 {
+            if self.buf.len() < pos + 8 {
+                return None;
+            }
+            let mut arr = [0u8; 8];
+            arr.copy_from_slice(&self.buf[pos..pos + 8]);
+            len = u64::from_be_bytes(arr) as usize;
+            pos += 8;
+        }
+        let mask_key = if masked {
+            if self.buf.len() < pos + 4 {
+                return None;
+            }
+            let k = [
+                self.buf[pos],
+                self.buf[pos + 1],
+                self.buf[pos + 2],
+                self.buf[pos + 3],
+            ];
+            pos += 4;
+            Some(k)
+        } else {
+            None
+        };
+        if self.buf.len() < pos + len {
+            return None;
+        }
+        let mut payload = self.buf[pos..pos + len].to_vec();
+        if let Some(k) = mask_key {
+            for (i, b) in payload.iter_mut().enumerate() {
+                *b ^= k[i % 4];
+            }
+        }
+        self.buf.drain(..pos + len);
+        match opcode {
+            0x8 => None,
+            0x9 => {
+                self.send_pong();
+                self.try_parse()
+            }
+            0x0..=0x2 => {
+                if (b0 & 0x80) != 0 {
+                    if opcode == 0x0 {
+                        self.frag.extend_from_slice(&payload);
+                        let m = String::from_utf8_lossy(&self.frag).into_owned();
+                        self.frag.clear();
+                        Some(m)
+                    } else {
+                        Some(String::from_utf8_lossy(&payload).into_owned())
+                    }
+                } else {
+                    self.frag.extend_from_slice(&payload);
+                    self.try_parse()
+                }
+            }
+            _ => self.try_parse(),
+        }
+    }
+}
+
+/// Send one CDP command over `ws` and wait (up to 15s) for its response.
+fn ws_cdp_once(
+    ws: &mut WsConn,
+    id: u64,
+    method: &str,
+    params: Option<serde_json::Value>,
+) -> Option<serde_json::Value> {
+    let msg = serde_json::json!({
+        "id": id,
+        "method": method,
+        "params": params.unwrap_or(serde_json::Value::Null)
+    });
+    ws.send_text(&msg.to_string());
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if Instant::now() >= deadline {
+            return None;
+        }
+        match ws.recv_text() {
+            Ok(Some(s)) => {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s)
+                    && v.get("id").and_then(|i| i.as_u64()) == Some(id)
+                {
+                    return Some(v);
+                }
+            }
+            Ok(None) => return None,
+            Err(_) => std::thread::sleep(Duration::from_millis(50)),
+        }
+    }
 }
 
 /// Render a URL with a headless Chrome/Chromium instance and return the
@@ -404,30 +731,36 @@ pub fn native_get(
 /// for JavaScript-rendered (SPA) pages that a plain HTTP GET cannot read.
 ///
 /// `chrome` is the full path to the executable (from sysinfo detection). The
-/// page is loaded with `--dump-dom`, which prints the post-hydration DOM to
-/// stdout. A virtual-time budget lets async JS settle before the dump. The
-/// child is killed if it exceeds `timeout_secs`.
+/// page is driven over Chrome's DevTools Protocol (CDP) via a WebSocket: we
+/// wait for the load event and network idle (so client-fetched content such as
+/// ReadMe docs has mounted), then retrieve the live outer HTML via
+/// `DOM.getDocument` + `DOM.getOuterHTML`. The child is killed if it exceeds
+/// `timeout_secs`.
 pub fn render_via_chrome(
     url: &str,
     chrome: &str,
     timeout_secs: u64,
     max_bytes: usize,
 ) -> Option<String> {
+    let ud = std::env::temp_dir().join(format!("autocode_chrome_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&ud);
+    let ud_arg = format!("--user-data-dir={}", ud.to_string_lossy());
+
     let mut cmd = Command::new(chrome);
-    cmd.arg("--headless=old")
-        .arg("--no-startup-window")
+    cmd.arg("--headless=new")
+        .arg("--disable-blink-features=AutomationControlled")
         .arg("--disable-gpu")
         .arg("--no-sandbox")
         .arg("--disable-dev-shm-usage")
         .arg("--disable-extensions")
         .arg("--no-first-run")
         .arg("--no-default-browser-check")
-        .arg("--disable-background-networking")
-        .arg("--virtual-time-budget=8000")
-        .arg("--dump-dom")
+        .arg(ud_arg)
+        .arg("--remote-debugging-port=0")
         .arg(url)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -436,40 +769,191 @@ pub fn render_via_chrome(
     }
 
     let mut child = cmd.spawn().ok()?;
-    let mut stdout = child.stdout.take()?;
+    let mut child_stderr = child.stderr.take();
 
-    let reader = thread::spawn(move || {
-        let mut buf = Vec::with_capacity(64 * 1024);
+    // Chrome prints "DevTools listening on ws://..." to stderr once the
+    // debugging endpoint is up; capture that WebSocket URL.
+    let (tx_ws, rx_ws) = std::sync::mpsc::channel::<String>();
+    let err_reader = thread::spawn(move || {
+        let mut buf = Vec::new();
         let mut tmp = [0u8; 8192];
-        loop {
-            match stdout.read(&mut tmp) {
-                Ok(0) => break,
-                Ok(n) => buf.extend_from_slice(&tmp[..n]),
-                Err(_) => break,
-            }
-        }
-        buf
-    });
-
-    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
+        if let Some(ref mut e) = child_stderr {
+            while let Ok(n) = e.read(&mut tmp) {
+                if n == 0 {
                     break;
                 }
-                thread::sleep(Duration::from_millis(150));
+                buf.extend_from_slice(&tmp[..n]);
+                if let Ok(s) = std::str::from_utf8(&buf)
+                    && let Some(pos) = s.find("DevTools listening on")
+                    && let Some(u) = s[pos..].split_whitespace().find(|w| w.starts_with("ws://"))
+                {
+                    let _ = tx_ws.send(u.to_string());
+                    break;
+                }
             }
-            Err(_) => break,
+        }
+    });
+
+    let ws_url = match rx_ws.recv_timeout(Duration::from_secs(20)) {
+        Ok(u) => u,
+        Err(_) => {
+            let _ = child.kill();
+            return None;
+        }
+    };
+
+    let mut ws = match ws_connect(&ws_url) {
+        Some(w) => w,
+        None => {
+            let _ = child.kill();
+            return None;
+        }
+    };
+
+    // Find the page target spawned for `url` and attach a session to it.
+    let targets = ws_cdp_once(&mut ws, 1, "Target.getTargets", None);
+    let target_id = targets
+        .as_ref()
+        .and_then(|v| v.get("result"))
+        .and_then(|r| r.get("targetInfos"))
+        .and_then(|t| t.as_array())
+        .and_then(|arr| {
+            arr.iter()
+                .find(|t| t.get("type").and_then(|x| x.as_str()) == Some("page"))
+                .or_else(|| arr.first())
+                .and_then(|t| t.get("targetId"))
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string())
+        });
+    let target_id = match target_id {
+        Some(t) => t,
+        None => {
+            let _ = child.kill();
+            return None;
+        }
+    };
+    let session = ws_cdp_once(
+        &mut ws,
+        2,
+        "Target.attachToTarget",
+        Some(serde_json::json!({ "targetId": target_id, "flatten": true })),
+    );
+    let session_id = session
+        .as_ref()
+        .and_then(|v| v.get("result"))
+        .and_then(|r| r.get("sessionId"))
+        .and_then(|x| x.as_str())
+        .map(|s| s.to_string());
+    let session_id = match session_id {
+        Some(s) => s,
+        None => {
+            let _ = child.kill();
+            return None;
+        }
+    };
+
+    let mut next_id: u64 = 1000;
+    let sid = session_id.clone();
+    let mut cdp = |ws: &mut WsConn, method: &str, params: Option<serde_json::Value>| -> u64 {
+        let id = next_id;
+        next_id += 1;
+        let msg = serde_json::json!({
+            "id": id,
+            "sessionId": sid,
+            "method": method,
+            "params": params.unwrap_or(serde_json::Value::Null)
+        });
+        ws.send_text(&msg.to_string());
+        id
+    };
+
+    let _ = cdp(&mut ws, "Page.enable", None);
+    let _ = cdp(&mut ws, "Network.enable", None);
+    let _ = cdp(&mut ws, "DOM.enable", None);
+
+    let overall = Instant::now() + Duration::from_secs(timeout_secs);
+    let mut st = RenderState {
+        loaded: false,
+        pending: 0,
+        saw_request: false,
+        dom_id: None,
+        outer_id: None,
+        outer: None,
+        dom_at: None,
+    };
+
+    // Drive the protocol until the page loads, the network goes idle, and the
+    // rendered DOM has been captured (or we run out of time).
+    while Instant::now() < overall {
+        if st.outer.is_some() {
+            break;
+        }
+        match ws.recv_text() {
+            Ok(Some(s)) => {
+                if handle_cdp(&s, &mut cdp, &mut ws, &mut st) {
+                    break;
+                }
+            }
+            Ok(None) => break,
+            Err(_) => {
+                if Instant::now() >= overall {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+        }
+        // Once loaded with network idle, wait a short grace for client-rendered
+        // content to mount, then ask for the document + outer HTML.
+        if st.loaded && st.saw_request && st.pending <= 0 && st.dom_id.is_none() {
+            match st.dom_at {
+                None => st.dom_at = Some(Instant::now() + Duration::from_millis(800)),
+                Some(t) if Instant::now() >= t => {
+                    st.dom_id = Some(cdp(
+                        &mut ws,
+                        "DOM.getDocument",
+                        Some(serde_json::json!({ "depth": -1, "pierce": true })),
+                    ));
+                }
+                _ => {}
+            }
         }
     }
-    // Ensure the process is reaped even on early exit.
-    let _ = child.kill();
 
-    let raw = reader.join().ok()?;
-    let dom = String::from_utf8_lossy(&raw);
+    // Best-effort: if the DOM was never captured, request it directly and wait.
+    if st.outer.is_none() && st.dom_id.is_none() {
+        st.dom_id = Some(cdp(
+            &mut ws,
+            "DOM.getDocument",
+            Some(serde_json::json!({ "depth": -1, "pierce": true })),
+        ));
+    }
+    if st.outer.is_none() {
+        let dl = Instant::now() + Duration::from_secs(20);
+        while Instant::now() < dl {
+            if st.outer.is_some() {
+                break;
+            }
+            match ws.recv_text() {
+                Ok(Some(s)) => {
+                    if handle_cdp(&s, &mut cdp, &mut ws, &mut st) {
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(_) => {
+                    if Instant::now() >= dl {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(50));
+                }
+            }
+        }
+    }
+
+    let _ = child.kill();
+    let _ = err_reader.join();
+
+    let dom = st.outer?;
     if dom.trim().is_empty() {
         return None;
     }
@@ -477,6 +961,68 @@ pub fn render_via_chrome(
     // and still leave a meaningful chunk after the final cap in fetch_url.
     let cap = max_bytes.saturating_mul(4).max(65_536);
     Some(dom.chars().take(cap).collect())
+}
+
+/// Internal state for the CDP render loop in [`render_via_chrome`].
+struct RenderState {
+    loaded: bool,
+    pending: i64,
+    saw_request: bool,
+    dom_id: Option<u64>,
+    outer_id: Option<u64>,
+    outer: Option<String>,
+    dom_at: Option<Instant>,
+}
+
+/// Process one CDP message: update load/network state and, on the relevant
+/// responses, chain `DOM.getDocument` → `DOM.getOuterHTML` to capture the
+/// post-hydration DOM. Returns `true` once the outer HTML is captured.
+fn handle_cdp<F: FnMut(&mut WsConn, &str, Option<serde_json::Value>) -> u64>(
+    s: &str,
+    send: &mut F,
+    ws: &mut WsConn,
+    st: &mut RenderState,
+) -> bool {
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(s) {
+        if let Some(m) = v.get("method").and_then(|m| m.as_str()) {
+            match m {
+                "Page.loadEventFired" => st.loaded = true,
+                "Network.requestWillBeSent" => {
+                    st.pending += 1;
+                    st.saw_request = true;
+                }
+                "Network.loadingFinished" | "Network.loadingFailed" if st.pending > 0 => {
+                    st.pending -= 1;
+                }
+                _ => {}
+            }
+        }
+        if let Some(id) = v.get("id").and_then(|i| i.as_u64()) {
+            if Some(id) == st.dom_id {
+                if let Some(root) = v
+                    .get("result")
+                    .and_then(|r| r.get("root"))
+                    .and_then(|r| r.get("nodeId"))
+                    .and_then(|n| n.as_u64())
+                {
+                    st.outer_id = Some(send(
+                        ws,
+                        "DOM.getOuterHTML",
+                        Some(serde_json::json!({ "nodeId": root })),
+                    ));
+                }
+            } else if Some(id) == st.outer_id
+                && let Some(oh) = v
+                    .get("result")
+                    .and_then(|r| r.get("outerHTML"))
+                    .and_then(|o| o.as_str())
+            {
+                st.outer = Some(oh.to_string());
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Perform a native HTTP POST request, returning the response body with
@@ -606,8 +1152,51 @@ pub fn native_post(
 
 #[cfg(test)]
 mod tests {
-    use super::native_get;
+    use super::{WsConn, native_get, ws_base64};
     use autocode_core::utils::extract::extract_ddg_results;
+
+    /// Offline check of the hand-written WebSocket frame codec: a masked
+    /// client frame written by one end must be decoded (unmasked) by the other.
+    #[test]
+    fn ws_frame_roundtrip() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = std::net::TcpStream::connect(addr).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let mut a = WsConn {
+            stream: client,
+            buf: Vec::new(),
+            frag: Vec::new(),
+        };
+        let mut b = WsConn {
+            stream: server,
+            buf: Vec::new(),
+            frag: Vec::new(),
+        };
+        // Exercise small, medium, and >126-byte (extended length) payloads.
+        for msg in [
+            "hi",
+            "{\"id\":1,\"method\":\"Page.enable\",\"params\":null}",
+            &"x".repeat(200),
+        ] {
+            a.send_text(msg);
+            let got = b.recv_text().ok().flatten();
+            assert_eq!(
+                got.as_deref(),
+                Some(msg),
+                "roundtrip failed for len {}",
+                msg.len()
+            );
+        }
+    }
+
+    #[test]
+    fn ws_base64_known_vectors() {
+        assert_eq!(ws_base64(b"Man"), "TWFu");
+        assert_eq!(ws_base64(b"Ma"), "TWE=");
+        assert_eq!(ws_base64(b"M"), "TQ==");
+        assert_eq!(ws_base64(b"foobar"), "Zm9vYmFy");
+    }
 
     /// Live end-to-end check against DuckDuckGo's HTML endpoint.
     ///
@@ -661,5 +1250,32 @@ mod tests {
             .find(|l| l.trim_start().starts_with(|c: char| c.is_ascii_digit()))
             .unwrap_or("(none)");
         println!("FIRST RESULT: {}", first);
+    }
+
+    /// Verify `native_get` follows the 302 redirect docs.rs uses for version
+    /// aliases (e.g. `/bindgen/0.71/` -> `/bindgen/0.71.1/`) and returns the
+    /// real page rather than an empty body.
+    #[test]
+    #[ignore]
+    fn live_native_get_follows_redirect() {
+        let url = "https://docs.rs/bindgen/0.71/bindgen/struct.Builder.html";
+        let body = match native_get(url, 20, 65_536, None) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("skipping (request failed: {}).", e);
+                return;
+            }
+        };
+        let text = String::from_utf8_lossy(&body);
+        println!("==== docs.rs redirect follow ====");
+        println!("body bytes: {}", body.len());
+        println!(
+            "redirect resolved (contains Builder struct): {}",
+            text.contains("struct.Builder")
+        );
+        println!("contains '0.71.1': {}", text.contains("0.71.1"));
+        println!("===============================");
+        assert!(body.len() > 1000, "expected the redirected page body");
+        assert!(text.contains("struct.Builder"));
     }
 }

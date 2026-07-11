@@ -758,8 +758,12 @@ pub fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                                     autocode_core::utils::extract::extract_html_content(&body, url);
                                 (ex.content, ex.quality)
                             } else {
+                                // Raw text/markdown (e.g. a GitHub blob URL
+                                // rewritten to raw.githubusercontent.com). Strip
+                                // auto-generated doctoc TOCs so navigation noise
+                                // doesn't crowd out the real content.
                                 (
-                                    body.to_string(),
+                                    autocode_core::utils::html::strip_doctoc_toc(&body),
                                     autocode_core::utils::extract::ExtractQuality::Full,
                                 )
                             }

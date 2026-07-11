@@ -24,6 +24,10 @@ pub struct ProviderEntry {
     pub models: Vec<ModelEntry>,
     #[serde(default = "default_strict_tools_entry")]
     pub supports_strict_tools: Option<bool>,
+    /// Allow file access outside the project root. Persisted so the
+    /// Settings UI "Outside Access" toggle survives app restarts.
+    #[serde(default)]
+    pub allow_project_escape: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -150,7 +154,7 @@ fn convert_to_providers(file: &ProviderFile) -> HashMap<String, ApiProvider> {
             enabled: entry.enabled,
             max_context_tokens: 0, // will be set by fill_from_manifest_or_config
             handoff_percent: 80,
-            allow_project_escape: false,
+            allow_project_escape: entry.allow_project_escape,
             thinking_mode: false,
             reasoning_effort: "high".into(),
             thinking_api: ThinkingApi::Off,
@@ -260,6 +264,7 @@ fn convert_from_providers(providers: &HashMap<String, ApiProvider>) -> ProviderF
             enabled: ap.enabled,
             models,
             supports_strict_tools: ap.supports_strict_tools_override,
+            allow_project_escape: ap.allow_project_escape,
         });
     }
     ProviderFile { providers: entries }

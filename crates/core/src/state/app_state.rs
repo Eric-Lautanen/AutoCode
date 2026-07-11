@@ -651,6 +651,22 @@ impl AppState {
         }
     }
 
+    /// Returns whether the active session (or the given session) has the
+    /// auto-handoff behaviour enabled. Used to gate the automatic prompt
+    /// injection paths (silent-done retry, incomplete-task nudge) so they only
+    /// fire when handoff is turned on.
+    pub fn handoff_enabled_for(&self, session_id: Option<&str>) -> bool {
+        match session_id {
+            Some(id) => self
+                .sessions
+                .iter()
+                .find(|s| s.id == id)
+                .map(|s| s.handoff_enabled)
+                .unwrap_or(self.handoff_enabled),
+            None => self.handoff_enabled,
+        }
+    }
+
     /// Maximum number of sessions kept in memory. Oldest sessions are pruned
     /// first when this limit is exceeded (e.g. repeated handoffs).
     const MAX_SESSIONS: usize = 50;

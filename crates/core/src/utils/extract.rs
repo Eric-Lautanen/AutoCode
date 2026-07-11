@@ -3,7 +3,7 @@
 // DOM parsing crate. This avoids the empty-result failures we saw with the
 // previous parser and lets us hand the model the full cleaned page.
 
-use crate::utils::html::clean_html_to_text;
+use crate::utils::html::{clean_html_to_text, extract_embedded_json_prose};
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 use std::time::Instant;
@@ -244,6 +244,19 @@ pub struct ExtractedPage {
 /// complete HTML rather than an interactive web app).
 pub fn extract_html_content(html: &str, _url: &str) -> ExtractedPage {
     let body = clean_html_to_text(html);
+
+    // Client-rendered SPAs often ship an empty `<body>` and embed the real
+    // content as JSON inside `<script>` tags. Recover that prose; if it beats
+    // the (empty) visible body it is the better source, and it works without a
+    // headless browser.
+    let embedded = extract_embedded_json_prose(html);
+    if embedded.trim().len() >= 200 && embedded.trim().len() > body.trim().len() {
+        return ExtractedPage {
+            content: embedded,
+            quality: ExtractQuality::Full,
+        };
+    }
+
     if !body.trim().is_empty() {
         return ExtractedPage {
             content: body,
@@ -417,6 +430,31 @@ mod tests {
         );
         assert!(!res.content.contains("<div id=\"root\""));
         assert!(!res.content.contains("app.js"));
+    }
+
+    #[test]
+    fn spa_with_embedded_json_recovers_content() {
+        // ReadMe-style SPA: empty body but the real docs live in inline JSON.
+        let page = r#"<!DOCTYPE html><html><head><title>z-ai / glm-5.2</title>
+            <meta name="description" content="GLM-5.2 is the latest flagship LLM from Z.ai.">
+            </head><body><div id="root"></div>
+            <script type="application/json">{"data":{
+                "summary":"GLM-5.2 is a long-context model with a 1M-token window. It is built for retrieval augmented generation and agentic workflows where the full document history must remain in view.",
+                "detail":"It is designed for long-horizon tasks and tool use. The model streams responses and supports structured outputs for production pipelines.",
+                "notes":"Use a lower temperature for deterministic results and reserve higher values for creative brainstorming."
+            }}</script>
+        </body></html>"#;
+        let res = extract_html_content(
+            page,
+            "https://docs.api.nvidia.com/nim/reference/z-ai-glm-5.2",
+        );
+        assert_eq!(res.quality, ExtractQuality::Full);
+        assert!(
+            res.content
+                .contains("long-context model with a 1M-token window")
+        );
+        assert!(res.content.contains("long-horizon tasks and tool use"));
+        assert!(res.content.contains("deterministic results"));
     }
 
     #[test]

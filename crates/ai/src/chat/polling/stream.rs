@@ -177,6 +177,7 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
             && runtime.pending_response.trim().is_empty()
             && runtime.reasoning_buf.trim().is_empty()
             && runtime.pending_tool_calls.is_empty()
+            && state.handoff_enabled_for(runtime.active_session_id.as_deref())
         {
             runtime.retry_count = 0;
             runtime.status =

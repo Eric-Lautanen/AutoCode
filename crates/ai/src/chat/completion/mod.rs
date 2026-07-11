@@ -529,6 +529,10 @@ fn auto_continue_impl(
     if runtime.handoff_in_progress {
         return;
     }
+    // Only auto-nudge about remaining tasks when handoff is enabled.
+    if !state.handoff_enabled_for(runtime.active_session_id.as_deref()) {
+        return;
+    }
     let has_todo_incomplete = state.todo_list().has_incomplete();
     let has_project_tasks_incomplete =
         state.project_task_list().has_incomplete() && !state.todo_list().has_incomplete();
