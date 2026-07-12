@@ -32,7 +32,13 @@ pub fn file_tool_meta(
     }
 }
 
-pub fn build_tool_meta(tc: &ToolCall, result: &str, duration_ms: u64) -> ToolMeta {
+pub fn build_tool_meta(
+    tc: &ToolCall,
+    result: &str,
+    duration_ms: u64,
+    current_todo: &autocode_core::state::TodoList,
+    current_project_tasks: &autocode_core::state::TodoList,
+) -> ToolMeta {
     let args: serde_json::Value =
         serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
     let is_error = result.starts_with("{\"error\":") || result.starts_with("Error:");
@@ -175,42 +181,56 @@ pub fn build_tool_meta(tc: &ToolCall, result: &str, duration_ms: u64) -> ToolMet
         "todo_list" => {
             let args: serde_json::Value =
                 serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
-            let total = args["task_items"].as_array().map(|a| a.len()).unwrap_or(0);
-            let done = args["task_items"]
-                .as_array()
-                .map(|a| {
-                    a.iter()
-                        .filter(|v| v["status"].as_str() == Some("completed"))
-                        .count()
-                })
-                .unwrap_or(0);
+            let (total, done) = if args["action"].as_str() == Some("read") {
+                let (done, total) = current_todo.progress();
+                (total, done)
+            } else {
+                let total = args["task_items"].as_array().map(|a| a.len()).unwrap_or(0);
+                let done = args["task_items"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter(|v| v["status"].as_str() == Some("completed"))
+                            .count()
+                    })
+                    .unwrap_or(0);
+                (total, done)
+            };
             ToolMeta {
                 tool_name: "todo_list".into(),
                 line_count: Some(total),
                 byte_count: Some(done),
                 is_error,
                 duration_ms: Some(duration_ms),
+                action: args["action"].as_str().map(|s| s.to_string()),
                 ..Default::default()
             }
         }
         "project_task_list" => {
             let args: serde_json::Value =
                 serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
-            let total = args["task_items"].as_array().map(|a| a.len()).unwrap_or(0);
-            let done = args["task_items"]
-                .as_array()
-                .map(|a| {
-                    a.iter()
-                        .filter(|v| v["status"].as_str() == Some("completed"))
-                        .count()
-                })
-                .unwrap_or(0);
+            let (total, done) = if args["action"].as_str() == Some("read") {
+                let (done, total) = current_project_tasks.progress();
+                (total, done)
+            } else {
+                let total = args["task_items"].as_array().map(|a| a.len()).unwrap_or(0);
+                let done = args["task_items"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter(|v| v["status"].as_str() == Some("completed"))
+                            .count()
+                    })
+                    .unwrap_or(0);
+                (total, done)
+            };
             ToolMeta {
                 tool_name: "project_task_list".into(),
                 line_count: Some(total),
                 byte_count: Some(done),
                 is_error,
                 duration_ms: Some(duration_ms),
+                action: args["action"].as_str().map(|s| s.to_string()),
                 ..Default::default()
             }
         }

@@ -386,15 +386,23 @@ pub(crate) fn render_structured_tool_result(
         "todo_list" => {
             let total = meta.line_count.unwrap_or(0);
             let done = meta.byte_count.unwrap_or(0);
+            let is_read = meta.action.as_deref() == Some("read");
             ui.label(
-                RichText::new(format!(
-                    "[session] Task list updated -- {}/{} complete",
-                    done, total
-                ))
+                RichText::new(if is_read {
+                    format!("[session] Task list read -- {}/{} complete", done, total)
+                } else {
+                    format!("[session] Task list updated -- {}/{} complete", done, total)
+                })
                 .size(12.0)
                 .color(theme().tool_badge)
                 .italics(),
             );
+            if is_read {
+                let body = helpers::get_tool_body(msg);
+                ui.push_id(format!("todo_read_{}_{}", msg.id, idx), |ui| {
+                    render_code_block(ui, "todo_list", &body, msg.id);
+                });
+            }
         }
         "handoff" => {
             let reason = meta.old_text.as_deref().unwrap_or("no reason given");
@@ -493,15 +501,23 @@ pub(crate) fn render_structured_tool_result(
         "project_task_list" => {
             let total = meta.line_count.unwrap_or(0);
             let done = meta.byte_count.unwrap_or(0);
+            let is_read = meta.action.as_deref() == Some("read");
             ui.label(
-                RichText::new(format!(
-                    "[project] Task list updated -- {}/{} complete",
-                    done, total
-                ))
+                RichText::new(if is_read {
+                    format!("[project] Task list read -- {}/{} complete", done, total)
+                } else {
+                    format!("[project] Task list updated -- {}/{} complete", done, total)
+                })
                 .size(12.0)
                 .color(Color32::from_rgb(196, 168, 106))
                 .italics(),
             );
+            if is_read {
+                let body = helpers::get_tool_body(msg);
+                ui.push_id(format!("ptl_read_{}_{}", msg.id, idx), |ui| {
+                    render_code_block(ui, "project_task_list", &body, msg.id);
+                });
+            }
         }
         "name_session" => {
             let name = meta.file_path.as_deref().unwrap_or("unnamed");

@@ -37,6 +37,11 @@ pub struct ToolMeta {
     pub duration_ms: Option<u64>,
     /// 1-based line number where the edit starts in the original file.
     pub edit_line: Option<usize>,
+    /// Optional action for task-list tools: "read" vs "update". Lets the UI
+    /// render a read result (showing the current list) differently from an
+    /// update (which just confirms progress).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -25,6 +25,31 @@ fn read_json(path: &std::path::Path) -> serde_json::Value {
         .unwrap_or(serde_json::Value::Null)
 }
 
+/// Render a task list as a readable string for the `read` action. The model
+/// can call this to inspect the current list without modifying it.
+fn format_todo_read(list: &autocode_core::state::TodoList, label: &str) -> String {
+    use autocode_core::state::TodoStatus;
+    let (done, total) = list.progress();
+    if list.items.is_empty() {
+        return format!("Tool `{}` read result:\n(list is empty)", label);
+    }
+    let mut out = format!("Tool `{}` read result:\n", label);
+    for item in &list.items {
+        let mark = match item.status {
+            TodoStatus::Completed => "[x]",
+            TodoStatus::InProgress => "[~]",
+            TodoStatus::Cancelled => "[-]",
+            TodoStatus::Pending => "[ ]",
+        };
+        out.push_str(&format!(
+            "{} {} ({}): {}\n",
+            mark, item.id, item.priority, item.content
+        ));
+    }
+    out.push_str(&format!("\n{} / {} complete", done, total));
+    out
+}
+
 /// GitHub serves an unrendered SPA shell to plain GET requests, so a repo or
 /// file URL yields no readable content without JavaScript. Rewrite GitHub
 /// *repo* URLs to the REST API README endpoint (which returns rendered HTML
@@ -84,6 +109,10 @@ pub struct ToolExecCtx<'a> {
     pub chrome_path: Option<String>,
     /// Whether `fetch_url` may fall back to headless-Chrome rendering.
     pub use_headless_chrome: bool,
+    /// Current session todo list, used by the `todo_list` read action.
+    pub current_todo: autocode_core::state::TodoList,
+    /// Current project task list, used by the `project_task_list` read action.
+    pub current_project_tasks: autocode_core::state::TodoList,
 }
 
 pub fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
@@ -98,6 +127,8 @@ pub fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
         session_named,
         chrome_path,
         use_headless_chrome,
+        current_todo,
+        current_project_tasks,
     } = ctx;
     use autocode_core::helpers::{resolve_path_cached, resolve_path_write_cached};
     let args: serde_json::Value =
@@ -826,6 +857,9 @@ pub fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
         }
 
         "todo_list" => {
+            if args["action"].as_str() == Some("read") {
+                return format_todo_read(&current_todo, "Session tasks");
+            }
             let items_val = match args["task_items"].as_array() {
                 Some(a) => a,
                 None => return "Error: missing 'task_items' array".to_string(),
@@ -871,6 +905,9 @@ pub fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
         }
 
         "project_task_list" => {
+            if args["action"].as_str() == Some("read") {
+                return format_todo_read(&current_project_tasks, "Project tasks");
+            }
             let items_val = match args["task_items"].as_array() {
                 Some(a) => a,
                 None => return "Error: missing 'task_items' array".to_string(),

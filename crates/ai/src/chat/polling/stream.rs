@@ -705,6 +705,10 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                 // escape into a `'static` thread closure).
                 let chrome_path = state.sysinfo.chrome_path.clone();
                 let use_headless_chrome = state.use_headless_chrome;
+                // Snapshot the current task lists so the `read` action can
+                // return them without the thread borrowing `&AppState`.
+                let current_todo = state.todo_list();
+                let current_project_tasks = state.project_task_list();
                 std::thread::spawn(move || {
                     let mut results = Vec::with_capacity(calls_clone.len());
                     for tc in &calls_clone {
@@ -722,6 +726,8 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                                 session_named,
                                 chrome_path: chrome_path.clone(),
                                 use_headless_chrome,
+                                current_todo: current_todo.clone(),
+                                current_project_tasks: current_project_tasks.clone(),
                             })
                         }));
                         let result = match result {
@@ -740,7 +746,13 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                         };
 
                         let duration_ms = start.elapsed().as_millis() as u64;
-                        let meta = build_tool_meta(tc, &result, duration_ms);
+                        let meta = build_tool_meta(
+                            tc,
+                            &result,
+                            duration_ms,
+                            &current_todo,
+                            &current_project_tasks,
+                        );
                         let args: serde_json::Value =
                             serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
                         let accessed_paths = match tc.name.as_str() {
@@ -772,12 +784,15 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                             }
                             _ => vec![],
                         };
-                        let todo_update = if tc.name == "todo_list" {
+                        // A "read" action must never overwrite the stored list.
+                        // Only capture an update when the action is not "read".
+                        let is_read = args["action"].as_str() == Some("read");
+                        let todo_update = if tc.name == "todo_list" && !is_read {
                             crate::helpers::parse_todo_from_tool_args(&args)
                         } else {
                             None
                         };
-                        let project_todo_update = if tc.name == "project_task_list" {
+                        let project_todo_update = if tc.name == "project_task_list" && !is_read {
                             crate::helpers::parse_project_task_from_tool_args(&args)
                         } else {
                             None
