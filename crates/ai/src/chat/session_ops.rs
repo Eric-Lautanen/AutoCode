@@ -206,6 +206,11 @@ pub fn replay_to_message(
         let sess = &mut state.sessions[session_idx];
         sess.messages.retain(|m| m.id < message_id);
         sess.next_message_id = message_id;
+        // Recompute turn_count from the retained messages (the max turn any
+        // retained message carries) so it stays consistent with next_message_id
+        // and matches what session load derives from disk. Without this, replay
+        // leaves turn_count at its pre-truncation high value.
+        sess.turn_count = sess.messages.iter().map(|m| m.turn).max().unwrap_or(0);
         sess.actual_tokens_used = 0;
     }
 

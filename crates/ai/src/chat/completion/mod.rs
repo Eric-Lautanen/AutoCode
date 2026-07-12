@@ -137,7 +137,6 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
             Some(std::time::Instant::now() + std::time::Duration::from_millis(rate_wait_ms));
         return;
     }
-    crate::provider::api_rate_limit_record(&provider, &prov_label);
 
     // Gate: advance the completion-delay timer now that we're committed
     // to sending a request.
@@ -264,6 +263,12 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
     {
         sess.estimated_full_at_request = sess.estimated_full_tokens;
     }
+    // Record the rate-limit timestamp only now that we're actually dispatching
+    // the request. Recording earlier (e.g. before preflight checks or before
+    // the request is sent) would advance the clock for requests that never
+    // reach the provider, causing the next retry to be needlessly deferred for
+    // a full interval — the "timer reset itself without sending" symptom.
+    crate::provider::api_rate_limit_record(&provider_clone, &prov_label);
     let event_rx = ProviderClient::complete(provider_clone, req);
     runtime.stream_rx = Some(event_rx);
     runtime.net_status.reset();

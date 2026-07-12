@@ -412,23 +412,19 @@ impl AppState {
         }
 
         // If the saved global per-session state is orphaned (no active
-        // session or the active session doesn't exist), clear it.
+        // session or the active session doesn't exist), clear the active id
+        // and re-point the provider. The per-session UI flags (show_explorer,
+        // settings_open, handoff_enabled, ...) are genuine global UI state and
+        // must survive an empty app (no project/session) so the UI doesn't
+        // reset itself on the next auto-save/prune. Session load
+        // (restore_active_session / load_new_session) and new_session_for_project
+        // re-sync these flags from the session's own disk/default values, so
+        // leaving them intact here cannot leak stale values into a session.
         let active_ok = state
             .active_session_id
             .as_ref()
             .is_some_and(|sid| state.sessions.iter().any(|s| s.id == *sid));
         if !active_ok {
-            // Clear ALL per-session UI flags so stale app.ron values from the
-            // last active session don't leak into the UI or into the next
-            // session's session.json. The active session will re-populate
-            // these from disk via restore_active_session / load_new_session.
-            state.show_todo = false;
-            state.todo_user_dismissed = false;
-            state.settings_open = false;
-            state.handoff_enabled = false;
-            state.show_explorer = false;
-            state.show_reasoning_inline = false;
-            state.show_project_tasks = false;
             // Reset active_provider to the first available provider so a stale
             // app.ron label (which may belong to a session the user won't
             // reopen) doesn't point at an unrelated provider. The next session
@@ -512,8 +508,12 @@ impl AppState {
 
         // 4. Clean up orphaned session-level state. When there are no
         // sessions, or the active session id no longer refers to a real
-        // session, drop the id and reset all per-session UI flags so stale
-        // app.ron values don't leak into the next session.
+        // session, drop the id. The per-session UI flags (show_explorer,
+        // settings_open, handoff_enabled, ...) are left intact: they are
+        // genuine global UI state that must survive an empty app, and the
+        // session load / new_session_for_project paths always re-sync them
+        // from the session's own disk/default values — so no stale value can
+        // leak into a session's session.json.
         let active_orphaned = self.active_session_id.is_some()
             && !self
                 .sessions
@@ -521,13 +521,6 @@ impl AppState {
                 .any(|s| Some(&s.id) == self.active_session_id.as_ref());
         if self.sessions.is_empty() || active_orphaned {
             self.active_session_id = None;
-            self.show_todo = false;
-            self.todo_user_dismissed = false;
-            self.handoff_enabled = false;
-            self.show_explorer = false;
-            self.show_reasoning_inline = false;
-            self.show_project_tasks = false;
-            self.settings_open = false;
         }
 
         // 6. Ensure project directories still exist.
