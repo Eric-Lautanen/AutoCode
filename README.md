@@ -20,7 +20,7 @@ It's not trying to be clever. It's trying to be durable. Transient errors retry 
 | **Streaming** | Real-time SSE with auto-recovery, exponential backoff, auto-continue on drop |
 | **Sessions** | Named sessions per project (up to 50), JSONL history, lazy-load display buffer, per-project tab colors |
 | **Token Management** | 2-tier counting (API → heuristic), auto-handoff at configurable threshold |
-| **LRU Looping Window** | Toggleable pruning of old message pairs when context fills. Scoring-based selection (working set, recency floor, unverified-edit exemption), 3 aggressiveness levels. Disables auto-handoff when active. |
+| **LRU Looping Window** | Toggleable pruning of old message groups when context fills. Scoring-based selection (working set, recency floor, unverified-edit exemption), 3 aggressiveness levels. Disables auto-handoff when active. |
 | **File Explorer** | gitignore-aware tree with git status colors, text/image preview, inline rename/delete, code editor |
 | **Task Tracking** | Session-level floating todo list + project-level task list (disk-persisted) |
 | **Session Handoff** | Auto-continuation when context limits hit — trigger prompt, RESUME.md generation |
@@ -31,7 +31,7 @@ It's not trying to be clever. It's trying to be durable. Transient errors retry 
 
 ## Skills
 
-Skill files live in the `skills/` directory at project root and ship with the binary. Each file uses YAML frontmatter with a `description` field (fallback to first `# Heading`). The agent discovers skills via `get_skill` — filename, description, and heading are matched by exact, fuzzy, and substring search. Call `get_skill` with an empty keyword to list everything available.
+Skill files live in the `skills/` directory at project root and ship with the binary. Each file uses YAML frontmatter with a `description` field (fallback to first `# Heading`). The agent discovers skills via `get_skill` — the skill filename and description (YAML `description` frontmatter, or the first `#` heading as a fallback) are matched by exact, fuzzy, and substring search; substring matching requires a ≥3-character keyword. Call `get_skill` with an empty keyword to list everything available.
 
 Built-in skills (77 so far) cover task decomposition, codebase orientation, debugging, refactoring, testing, API design, data modeling, error handling, Git workflows, environment/config, security, logging, performance, documentation, language conventions, code review, dependency management, shell usage, web research, file editing strategy, Yang–Mills mass gap, and more.
 
@@ -69,7 +69,7 @@ Built in **Rust 2024** with **egui 0.34** / **eframe 0.34**. Zero async — all 
 - **2-tier token estimation** — API counting endpoint → heuristic fallback
 - **7-strategy fuzzy patching** — exact → CRLF-normalized → whitespace-normalized → tabs-normalized → anchored line → Myers DP alignment → single-line fuzzy
 - **Transient/permanent error classification** — rate limits/timeouts/5xx retry forever (5s→180s cap); auth/quota/filter surface immediately
-- **LRU looping window** — scoring-based pruning when crossing configurable context thresholds. One group removed per trigger for conservative decisions. `FileAccessLog` tracks working set. Breadcrumb markers replace removed content. 3 aggressiveness levels (Conservative / Balanced / Aggressive).
+- **LRU looping window** — scoring-based pruning when crossing configurable context thresholds. One group removed per trigger (constant across all levels); the three levels differ only in the context-usage trigger threshold (65/75/85%) and the recency-floor size (20/30/40% of recent groups protected). `FileAccessLog` tracks the working set. Breadcrumb markers replace removed content. 3 aggressiveness levels (Conservative / Balanced / Aggressive).
 
 ### Data Flow
 
@@ -78,7 +78,7 @@ Built in **Rust 2024** with **egui 0.34** / **eframe 0.34**. Zero async — all 
 3. **Chat orchestration** — loads history from disk, builds API POST with tool definitions, parses SSE stream, dispatches tool calls
 4. **Tool execution** — 24 handlers run autonomously (filesystem, shell, search, web, skills, tasks, session mgmt); `accessed_paths` recorded into `FileAccessLog`
 5. **LRU pruning** — on every frame + before each completion, `apply_looping_window()` scores message groups by working set membership, error count, superseded references, and recency floor; removes the lowest-scored group, writes breadcrumb marker
-6. **Session persistence** — atomic JSON/JSONL writes, rate-limited, temp file + rename
+6. **Session persistence** — atomic JSON metadata writes (temp + rename), append-mode JSONL history, rate-limited
 7. **Auto-continuation** — near context limit → generates RESUME.md → handoff to new session (suppressed when LRU is active)
 
 ## Configuration
@@ -105,10 +105,12 @@ Settings are persisted across restarts. Most settings in `app.ron`; **provider c
     └── projects/
         └── <data_dir>/
             ├── meta.json
-            └── sessions/
-                ├── <id>_<label>.json    # session metadata
-                ├── <id>_<label>.jsonl   # append-only message history
-                └── ...
+            ├── sessions/
+            │   └── <id>_<label>/         # one directory per session
+            │       ├── session.json       # session metadata
+            │       └── messages.jsonl     # append-only message history
+            └── shell_tasks/
+                └── <id>.json             # shell task records
 ```
 
 ## Security
@@ -124,7 +126,7 @@ Settings are persisted across restarts. Most settings in `app.ron`; **provider c
 
 | Tool | Description |
 |------|-------------|
-| `run_shell` | Execute shell commands with live streaming output |
+| `run_shell` | Execute shell commands with live streaming output (scoped to builds, tests, git, and other CLI tooling — never for file I/O or code search) |
 | `read_file` | Read a file with numbered lines and byte counts |
 | `read_files` | Batch read multiple files at once |
 | `read_entire_file` | Read an entire file without truncation |
@@ -139,14 +141,14 @@ Settings are persisted across restarts. Most settings in `app.ron`; **provider c
 | `grep` | Fast code search with custom regex and glob support |
 | `glob` | Find files matching a glob pattern |
 | `web_search` | Search the web (DuckDuckGo, cached) |
-| `fetch_url` | Fetch a URL's text content with HTML extraction |
-| `get_skill` | Look up guidance by topic — matches filenames, YAML descriptions, and headings (exact, fuzzy, substring). Empty keyword lists all skills. |
-| `todo_list` | Create/update session-level task list with priorities |
-| `project_task_list` | Create/update project-level task list (persists across sessions) |
+| `fetch_url` | Fetch a URL's text content with HTML extraction (falls back to a headless-Chrome render for JavaScript SPAs) |
+| `get_skill` | Look up guidance by topic — matches filenames and descriptions (YAML `description` frontmatter, or first `#` heading fallback) by exact, fuzzy, and substring search. Empty keyword lists all skills. |
+| `todo_list` | Create/update session-level task list with priorities (also `action:'read'` to return the current list without modifying it) |
+| `project_task_list` | Create/update project-level task list (persists across sessions; also `action:'read'` to return the current list without modifying it) |
 | `handoff` | Signal context limit and continue in new session |
 | `name_session` | Auto-label the current session |
 | `verify_proof` | Submit proofs to external verifiers (Lean, Coq, Z3) — auto-detect, subprocess exec, output parsing, Yang-Mills structural checks, JSONL attempt log at `proofs/attempts.jsonl` |
-| `search_literature` | Search academic literature (arXiv API) by keyword |
+| `search_literature` | Search academic literature (arXiv API) by keyword — the `source` selector (`arxiv`/`web`/`auto`) always uses the arXiv API |
 | `explore_theorem` | Decompose theorems into sub-goals and track proof state |
 
 ## Adding Providers

@@ -18,7 +18,7 @@ jobs:
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: 1.95
+          toolchain: 1.96
           components: clippy, rustfmt
       - name: Install system deps
         run: |
@@ -36,7 +36,7 @@ jobs:
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: 1.95
+          toolchain: 1.96
       - name: Install system deps
         run: |
           sudo apt-get update
@@ -53,7 +53,7 @@ jobs:
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: 1.95
+          toolchain: 1.96
           target: x86_64-pc-windows-msvc
       - name: Build
         run: cargo build --workspace --target x86_64-pc-windows-msvc
@@ -67,7 +67,7 @@ jobs:
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: 1.95
+          toolchain: 1.96
           target: aarch64-apple-darwin
       - name: Build
         run: cargo build --workspace --target aarch64-apple-darwin

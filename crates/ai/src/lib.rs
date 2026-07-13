@@ -1,7 +1,7 @@
 //! AI provider client and chat orchestration for AutoCode.
 //!
 //! This crate implements the chat loop: sending messages to AI providers,
-//! streaming SSE responses, dispatching tool calls (18 tools), handling
+//! streaming SSE responses, dispatching tool calls (24 tools), handling
 //! retry/backoff logic, auto-continuation, and session management. The
 //! HTTP client uses raw `TcpStream` + `rustls` with manual SSE parsing
 //! (no async runtime). Supports OpenRouter, NVIDIA NIM, and any

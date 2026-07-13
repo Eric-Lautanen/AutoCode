@@ -78,7 +78,7 @@ crates/ai/src/provider/rate_limit.rs           |  68
 crates/ai/src/provider/thread_pool.rs          |  80
 crates/ai/src/provider/tool_defs.rs            |  44
 crates/ai/src/provider/types.rs                | 104
-crates/ai/src/provider/web.rs                  |1281  web_search + fetch_url (incl. headless-Chrome SPA fallback, GitHub API/raw)
+crates/ai/src/provider/web.rs                  |1281  HTTP/network layer: native_get/post, headless-Chrome (CDP) SPA renderer (used by the fetch_url/web_search handlers in chat/tools/execute.rs)
 ```
 
 ## `crates/autocode/` — Binary Entry Point (4 files, 27 code lines)
@@ -90,23 +90,21 @@ crates/autocode/resources/app.rc               |   1   Windows resource (icon) m
 crates/autocode/src/main.rs                    |   9
 ```
 
-## `crates/core/` — Shared Types, State, Storage, Utils (34 files, 7,983 lines)
+## `crates/core/` — Shared Types, State, Storage, Utils (36 files, 7,983 lines)
 
 ```
 crates/core/Cargo.toml                          |   8
 crates/core/src/lib.rs                          |  15
-crates/core/src/debug.rs                        |  14
-crates/core/src/helpers/mod.rs                  |  46
-crates/core/src/helpers/id.rs                   |  40
-crates/core/src/helpers/levenshtein.rs          |  35
-crates/core/src/helpers/paths.rs                | 282
+crates/core/src/helpers/mod.rs                   |  46
+crates/core/src/helpers/id.rs                    |  40
+crates/core/src/helpers/paths.rs                 | 282
 crates/core/src/helpers/regex.rs                | 382
 crates/core/src/helpers/sanitize.rs             |  56
 crates/core/src/helpers/serde_defaults.rs       |  92
 crates/core/src/helpers/tokens.rs               | 284
 crates/core/src/helpers/utils.rs                | 404
 crates/core/src/state/mod.rs                    |  23
-crates/core/src/state/access_log.rs             |  73  FileAccessLog — LRU file access tracking
+crates/core/src/state/access_log.rs             |  73  FileAccessLog — turn-window working-set tracker (no eviction)
 crates/core/src/state/app_state.rs             | 816
 crates/core/src/state/chat.rs                   | 115
 crates/core/src/state/manifest.rs               |  55
@@ -156,7 +154,7 @@ crates/fs/src/helpers/glob_match.rs              |  74
 crates/fs/src/helpers/levenshtein.rs             |  25
 ```
 
-## `crates/ui/` — Desktop UI (egui/eframe) (48 files, 8,125 lines)
+## `crates/ui/` — Desktop UI (egui/eframe) (46 files, 8,125 lines)
 
 ```
 crates/ui/Cargo.toml                            |  15
@@ -297,9 +295,9 @@ skills/yang_mills_mass_gap.md                    |  46
 |------|-------|-------|------|
 | `crates/ai/` | 35 | 11,371 | AI provider clients, chat orchestration, tool execution, HTTP/SSE, web scraping, LRU looping |
 | `crates/autocode/` | 4 | 27 | Windows binary entry point, icon embedding |
-| `crates/core/` | 34 | 7,983 | State types, persistence, helpers, tokenizer, sysinfo, HTML extraction, FileAccessLog |
+| `crates/core/` | 36 | 7,983 | State types, persistence, helpers, tokenizer, sysinfo, HTML extraction, FileAccessLog |
 | `crates/fs/` | 18 | 2,680 | File explorer, shell executor, git status, skill loader |
-| `crates/ui/` | 48 | 8,125 | egui panels — chat, settings, explorer, toolbar, todo windows |
+| `crates/ui/` | 46 | 8,125 | egui panels — chat, settings, explorer, toolbar, todo windows |
 | **Crate subtotal** | **139** | **30,186** | |
 | `skills/` | 77 | 20,157 | Skill markdown files bundled with the binary |
 | `assets/` | 11 | — | Icons, screenshot, bundled providers.json |
