@@ -76,7 +76,7 @@ Built in **Rust 2024** with **egui 0.34** / **eframe 0.34**. Zero async — all 
 1. **Startup** — seeds `providers.json` from baked-in defaults on first launch, loads state from `app.ron` + provider configs (including API keys) from `providers.json`
 2. **User input** — typed in chat panel; toolbar selects project/session/provider
 3. **Chat orchestration** — loads history from disk, builds API POST with tool definitions, parses SSE stream, dispatches tool calls
-4. **Tool execution** — 21 handlers run autonomously (filesystem, shell, search, web, skills, tasks, session mgmt); `accessed_paths` recorded into `FileAccessLog`
+4. **Tool execution** — 24 handlers run autonomously (filesystem, shell, search, web, skills, tasks, session mgmt); `accessed_paths` recorded into `FileAccessLog`
 5. **LRU pruning** — on every frame + before each completion, `apply_looping_window()` scores message groups by working set membership, error count, superseded references, and recency floor; removes the lowest-scored group, writes breadcrumb marker
 6. **Session persistence** — atomic JSON/JSONL writes, rate-limited, temp file + rename
 7. **Auto-continuation** — near context limit → generates RESUME.md → handoff to new session (suppressed when LRU is active)
@@ -157,15 +157,15 @@ AutoCode ships with built-in configs for popular providers. You can also add any
 
 ## Project Structure
 
-**~23,650 lines across 134 source files (5 crates).** See [`structure.md`](structure.md) for the full file-by-file breakdown.
+**~30,186 lines across 139 source files (5 crates).** See [`structure.md`](structure.md) for the full file-by-file breakdown.
 
 | Crate | Files | Lines | Role |
 |-------|-------|-------|------|
-| `autocode` (bin) | 4 | 12 | Entry point, icon embedding |
-| `autocode-core` (lib) | 34 | 6,172 | State types, storage, helpers, token estimator, sysinfo, HTML extraction, `FileAccessLog` |
-| `autocode-ai` (lib) | 33 | 7,698 | Chat loop, HTTP/SSE client, tool dispatch, retry/backoff, web scraping, LRU looping window |
-| `autocode-fs` (lib) | 18 | 2,398 | Shell executor, file explorer, git status, skill loader |
-| `autocode-ui` (lib) | 45 | 7,366 | egui panels — chat, settings, explorer, toolbar, todo windows, LRU toggle |
+| `autocode` (bin) | 4 | 27 | Entry point, icon embedding |
+| `autocode-core` (lib) | 34 | 7,983 | State types, storage, helpers, token estimator, sysinfo, HTML extraction, `FileAccessLog` |
+| `autocode-ai` (lib) | 35 | 11,371 | Chat loop, HTTP/SSE client, tool dispatch, retry/backoff, web scraping, LRU looping window |
+| `autocode-fs` (lib) | 18 | 2,680 | Shell executor, file explorer, git status, skill loader |
+| `autocode-ui` (lib) | 48 | 8,125 | egui panels — chat, settings, explorer, toolbar, todo windows, LRU toggle |
 
 ---
 
