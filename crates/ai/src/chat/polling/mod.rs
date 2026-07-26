@@ -47,6 +47,13 @@ pub(super) fn append_to_reasoning(reasoning_buf: &mut String, text: &str) {
 pub fn update_runtime(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
     let mut repaint = false;
 
+    // Auto-handoff check runs BEFORE stream polling so it sees the same
+    // state that was just rendered on screen. If it ran after poll_stream,
+    // a sudden actual_tokens_used jump from the API response would trigger
+    // handoff on the same frame — before the display can update — making
+    // it appear to fire at a lower count than what the user sees.
+    check_auto_handoff(state, runtime);
+
     repaint |= stream::poll_stream(state, runtime);
     repaint |= shell::poll_shell_tasks(state, runtime);
     repaint |= tools::poll_tool_results(state, runtime);
@@ -57,10 +64,6 @@ pub fn update_runtime(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
     if let Some(sid) = runtime.active_session_id.as_deref() {
         super::looping::apply_looping_window(state, sid);
     }
-
-    // Auto-handoff: if token usage exceeds the configured threshold and the
-    // model hasn't initiated a handoff, trigger one automatically.
-    check_auto_handoff(state, runtime);
 
     // Deferred start: fire completion the frame after send_message so the
     // user message bubble renders before the disk read + API call begins.
