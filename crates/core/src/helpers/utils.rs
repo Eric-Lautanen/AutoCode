@@ -337,17 +337,24 @@ fn session_provider_config(state: &AppState) -> (usize, usize) {
     (max, handoff_pct)
 }
 
-/// Get the token count for user-facing display: always uses `estimated_full_tokens`
-/// which is kept up-to-date by `push_to_session` on every message push.
-/// `actual_tokens_used` is from the last API response and can be stale by 1 turn,
-/// so it is returned separately for comparison, not as the primary count.
+/// Get the token count for user-facing display.
+/// Returns `(displayed_estimate, actual_from_api)`.
+///
+/// The displayed estimate uses the corrected value (heuristic × learned
+/// correction ratio from API responses), floored to `actual_tokens_used`
+/// so it never under-reports. The correction ratio is an EMA updated on
+/// every API response, so the estimate smoothly converges toward actual
+/// usage over time.
+/// `actual_tokens_used` is from the last API response (1 turn behind)
+/// and shown separately for comparison.
 fn session_messages_usage(state: &AppState) -> (usize, Option<usize>) {
     state
         .active_session()
         .map(|s| {
-            // The unified pipeline keeps estimated_full_tokens up-to-date on every
-            // push, load, and pre-flight. Zero on empty sessions.
-            let estimated = s.corrected_full_tokens();
+            // corrected_full_tokens converges toward the API's actual count
+            // via the learned ratio. Floor at actual_tokens_used so the
+            // display never under-reports vs what the API already told us.
+            let estimated = s.corrected_full_tokens().max(s.actual_tokens_used);
             let actual = if s.actual_tokens_used > 0 {
                 Some(s.actual_tokens_used)
             } else {
@@ -360,8 +367,7 @@ fn session_messages_usage(state: &AppState) -> (usize, Option<usize>) {
 
 /// Percentage of context window used (0.0 - 1.0),
 /// based on the session's actual provider, not the UI-selected one.
-/// Uses estimated_full_tokens (messages + tool definitions) to match
-/// the pre-flight check in start_completion.
+/// Uses MAX(raw, corrected, actual) so the meter never under-reports.
 pub fn budget_fraction(state: &AppState) -> f32 {
     let (max, _) = session_provider_config(state);
     let (used, _actual) = session_messages_usage(state);
@@ -369,8 +375,9 @@ pub fn budget_fraction(state: &AppState) -> f32 {
 }
 
 /// Human-readable token usage string.
-/// Shows estimated count (always up-to-date) and actual count from the
-/// last API response (when available) for comparison.
+/// Shows MAX(raw, corrected, actual) as "est" so the number never
+/// under-reports versus the API, and the API's actual from the last
+/// response is shown alongside for comparison.
 pub fn usage_display(state: &AppState) -> String {
     let (max, handoff_pct) = session_provider_config(state);
     let threshold = (max * handoff_pct) / 100;

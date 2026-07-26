@@ -44,7 +44,7 @@ pub fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: 
 pub fn recompute_estimate_from_disk(state: &mut AppState, session_id: &str) {
     state.flush_pending_writes(true);
     let tool_tokens = refresh_tool_tokens_cache(state, session_id);
-    let messages = {
+    let mut messages = {
         let sess = state.sessions.iter().find(|s| s.id == session_id);
         sess.and_then(|s| {
             s.project_id.as_ref().and_then(|pid| {
@@ -65,6 +65,12 @@ pub fn recompute_estimate_from_disk(state: &mut AppState, session_id: &str) {
                 .unwrap_or_default()
         })
     };
+    // Deduplicate by message ID, matching prepare_request_messages_for_session
+    // so the display estimate is consistent with the request-time estimate.
+    {
+        let mut seen = std::collections::HashSet::new();
+        messages.retain(|m| seen.insert(m.id));
+    }
     if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == session_id) {
         let (msg_tokens, full_tokens) = compute_request_estimate(&messages, tool_tokens);
         sess.estimated_messages_tokens = msg_tokens;
@@ -401,9 +407,10 @@ pub fn context_usage_info_for_session(
         .iter()
         .find(|s| s.id == session_id)
         .map(|s| {
-            // corrected_full_tokens is kept up-to-date by the unified estimation
-            // pipeline on every push, load, and pre-flight. Zero on empty sessions.
-            s.corrected_full_tokens()
+            // Same formula as the toolbar display: corrected estimate
+            // floored to actual API count so the model's context info
+            // is consistent with what the user sees.
+            s.corrected_full_tokens().max(s.actual_tokens_used)
         })
         .unwrap_or(0);
     let pct = (used * 100).checked_div(max).unwrap_or(0);

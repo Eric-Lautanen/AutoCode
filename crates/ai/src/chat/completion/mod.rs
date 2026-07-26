@@ -492,7 +492,10 @@ pub fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     };
     let max = p.max_context_tokens as usize;
     let handoff_pct = p.handoff_percent.min(100) as usize;
-    let used = sess.corrected_full_tokens();
+    // Same formula as session_messages_usage so the handoff decision
+    // matches what the user sees: corrected estimate floored to the
+    // actual API count so it never under-reports.
+    let used = sess.corrected_full_tokens().max(sess.actual_tokens_used);
     if max == 0 {
         return;
     }
