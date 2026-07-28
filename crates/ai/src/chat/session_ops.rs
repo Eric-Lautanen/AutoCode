@@ -242,6 +242,9 @@ pub fn replay_to_message(
     // Kill any active stream/tools for this session.
     if let Some(runtime) = runtimes.get_mut(session_id) {
         runtime.drain();
+        // Replay is equivalent to Stop: suppress auto-handoff re-trigger
+        // until the user sends new input.
+        runtime.handoff_trigger_sent = true;
     }
 
     Some(text)
