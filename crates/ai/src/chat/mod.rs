@@ -2,7 +2,7 @@
 pub use completion::{
     auto_continue, auto_execute, check_auto_handoff, handle_handoff, send_message, start_completion,
 };
-pub use errors::{fix_provider_params, is_transient_error, shorten_err};
+pub use errors::{fix_provider_params, shorten_err};
 pub use looping::apply_looping_window;
 pub use polling::{update_all, update_runtime};
 pub use runtime::{BlinkKind, ChatRuntime, NetworkStatus, ToolResult};

@@ -2,7 +2,7 @@ use crate::provider::{ProviderEvent, ToolCall, api_rate_limit_wait_ms};
 use autocode_core::state::{AppState, ChatMessage, Role, ToolMeta};
 
 use super::super::completion::{auto_continue, auto_execute, start_completion};
-use super::super::errors::{fix_provider_params, is_transient_error, shorten_err};
+use super::super::errors::{fix_provider_params, shorten_err};
 use super::super::runtime::{ChatRuntime, ToolResult};
 use super::super::session_ops::{
     context_usage_info_for_session, project_root_for_session, push_error, push_runtime,
@@ -195,19 +195,15 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
         }
 
         if let Some(err_msg) = runtime.provider_error.take() {
-            // Stream drops are transient errors -- clear state and let the
-            // retry logic below re-send the full context without a continue
-            // message. The task/todo list state is already in the conversation
-            // from prior create/update tool calls.
+            // Clear state and let the retry logic below re-send the full context
+            // without a continue message. The task/todo list state is already
+            // in the conversation from prior create/update tool calls.
             runtime.pending_response.clear();
             runtime.pending_tool_calls.clear();
             runtime.assistant_tool_calls_json = None;
 
-            // Only retry transient errors (network issues, rate limits, etc).
-            // Permanent errors (auth, content filter, invalid model) are not
-            // retryable -- show them and let the user take action.
-            // Transient errors retry forever with capped exponential backoff,
-            // only stopped by user interaction (stop button -> drain()).
+            // Retry forever with capped exponential backoff, only stopped by
+            // user interaction (stop button -> drain()). No exceptions.
             if fix_provider_params(state, &err_msg) {
                 runtime.retry_count = 0;
                 runtime.retry_after = Some(std::time::Instant::now());
@@ -219,21 +215,7 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                 || err_msg.contains("tool_calls")
                     && err_msg.contains("must be followed by tool messages");
             if is_orphaned {
-                runtime.orphaned_retry_count = runtime.orphaned_retry_count.saturating_add(1);
-                if runtime.orphaned_retry_count > 3 {
-                    runtime.status = format!("Provider error: {}", shorten_err(&err_msg));
-                    push_error(
-                        state,
-                        runtime,
-                        format!(
-                            "Orphaned tool calls persist after {} retries -- giving up.\n\nError: {}",
-                            runtime.orphaned_retry_count - 1,
-                            err_msg,
-                        ),
-                    );
-                    runtime.orphaned_retry_count = 0;
-                    return true;
-                }
+                runtime.orphaned_retry_count = 0;
                 let mut removed = false;
                 let mut orphaned_ids: std::collections::HashSet<u64> =
                     std::collections::HashSet::new();
@@ -305,35 +287,14 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                     return true;
                 }
                 start_completion(state, runtime);
-            } else if is_transient_error(&err_msg) {
-                // Cap retries for JSON parse errors -- the data was already
-                // sanitized on the first retry; further retries won't help.
-                if err_msg.contains("unterminated string") && runtime.retry_count >= 1 {
-                    runtime.retry_count = 0;
-                    push_error(
-                        state,
-                        runtime,
-                        format!(
-                            "Provider error: {} -- data was sanitized but provider still rejects it",
-                            err_msg,
-                        ),
-                    );
-                    return true;
-                }
-                // Forever retry: exponential backoff 5s -> 180s cap, never gives up.
+            } else {
+                // Retry forever: exponential backoff 5s -> 180s cap.
+                // All errors retry until the user hits stop -- no exceptions.
                 let backoff_secs = (5u64 << runtime.retry_count.min(6)).min(180);
                 runtime.retry_count = runtime.retry_count.saturating_add(1);
 
                 // Combine the retry backoff with the API rate-limit cooldown so
                 // the user sees ONE countdown reflecting the true remaining wait.
-                // Without this, a transient error schedules a short backoff
-                // (e.g. 5s); when it expires `start_completion` re-derives the
-                // full rate-limit remaining (~115s for a 30 RPH provider just
-                // after a request) and re-sets `retry_after`, making the
-                // counter visibly jump back up -- the "counter immediately
-                // restarts" symptom. The previous request already counted
-                // against the rate-limit budget, so collapsing the two waits
-                // here just surfaces the wait that was already going to happen.
                 let mut wait_secs = backoff_secs;
                 let mut rate_limited = false;
                 if let Some(sid) = runtime.active_session_id.as_deref()
@@ -359,10 +320,6 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                 runtime.retry_after =
                     Some(std::time::Instant::now() + std::time::Duration::from_secs(wait_secs));
                 runtime.status = if rate_limited {
-                    // Prefix with "Rate limit" so `update_runtime`'s live
-                    // countdown keeps refreshing the seconds as the timer
-                    // ticks down (it only updates statuses that start with
-                    // "Rate limit").
                     format!(
                         "Rate limit: retry {} -- {} -- waiting ~{}s...",
                         runtime.retry_count,
@@ -377,10 +334,6 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                         wait_secs,
                     )
                 };
-            } else {
-                // Permanent error -- show and stop. User can fix and retry manually.
-                runtime.retry_count = 0;
-                push_error(state, runtime, format!("Provider error: {}", err_msg));
             }
             return true;
         }
