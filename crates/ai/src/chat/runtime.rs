@@ -247,7 +247,10 @@ impl ChatRuntime {
         self.net_status.reset();
         self.continuation_chain = 0;
         self.handoff_in_progress = false;
-        self.handoff_trigger_sent = false;
+        // When the user explicitly stops, suppress auto-handoff re-triggering
+        // so it doesn't immediately fire again (token usage is still high).
+        // send_message clears this flag when the user sends new input.
+        self.handoff_trigger_sent = self.stopped_by_user;
         self.handoff_next_prompt = None;
         self.retry_after = None;
         self.next_completion_allowed = None;

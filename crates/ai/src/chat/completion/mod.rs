@@ -51,6 +51,8 @@ pub fn send_message(
     runtime.retry_after = None;
     runtime.next_completion_allowed = None;
     runtime.live_write_progress = None;
+    // Re-enable auto-handoff so a fresh message resets the cycle.
+    runtime.handoff_trigger_sent = false;
     // A fresh user message breaks any in-progress tool-call loop — clear the
     // detection counters and any pending warning so it isn't carried into the
     // new conversation flow.
