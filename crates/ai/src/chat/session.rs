@@ -141,6 +141,10 @@ pub fn prepare_request_messages_for_session(
     if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == session_id) {
         sess.estimated_messages_tokens = msg_tokens;
         sess.estimated_full_tokens = full_tokens;
+        // The estimate now covers the full on-disk context; reset the
+        // correction ratio so the old window-vs-full multiplier doesn't
+        // inflate corrected_full_tokens() for the pre-flight check.
+        sess.token_correction_ratio = 1.0;
     }
 
     full_messages

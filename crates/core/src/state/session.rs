@@ -224,12 +224,16 @@ impl Session {
 
     /// Return the estimated full tokens with the learned correction ratio applied.
     /// Falls back to the raw estimate if the ratio hasn't been learned yet (≈1.0).
+    /// Capped at 10× the raw estimate as a safety net against stale ratios.
     pub fn corrected_full_tokens(&self) -> usize {
-        if self.token_correction_ratio > 0.0 && self.token_correction_ratio.is_finite() {
-            (self.estimated_full_tokens as f32 * self.token_correction_ratio).round() as usize
-        } else {
-            self.estimated_full_tokens
-        }
+        let raw = self.estimated_full_tokens;
+        let corrected =
+            if self.token_correction_ratio > 0.0 && self.token_correction_ratio.is_finite() {
+                (raw as f32 * self.token_correction_ratio).round() as usize
+            } else {
+                raw
+            };
+        corrected.min(raw.saturating_mul(10))
     }
 
     fn safe_label(&self) -> String {

@@ -225,7 +225,7 @@ pub fn discover_sessions_from_disk(project: &Project) -> Vec<Session> {
                     show_reasoning_inline: meta.show_reasoning_inline,
                     show_project_tasks: meta.show_project_tasks,
                     draft_input: meta.draft_input,
-                    token_correction_ratio: meta.token_correction_ratio,
+                    token_correction_ratio: 1.0,
                     estimated_full_at_request: 0,
                     cached_tool_tokens: 0,
                     cached_tool_key: None,

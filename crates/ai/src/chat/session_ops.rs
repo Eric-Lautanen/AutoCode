@@ -231,6 +231,11 @@ pub fn replay_to_message(
 
     // Recompute token estimates from disk (source of truth).
     recompute_estimate_from_disk(state, session_id);
+    // Reset the correction ratio — the estimate now reflects the full
+    // on-disk context, so any prior window-vs-full ratio is stale.
+    if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == session_id) {
+        sess.token_correction_ratio = 1.0;
+    }
 
     // Discard any pending disk writes for this session (anything queued
     // after the flush is already in RAM and will be re-flushed later).
