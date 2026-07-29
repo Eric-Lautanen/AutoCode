@@ -159,34 +159,11 @@ impl AutocodeApp {
             }
         });
         if let Some((label, model)) = restore_provider
-            && state.providers.contains_key(&label)
+            && let Some(prov) = state.providers.get_mut(&label)
         {
-            state.active_provider = label.clone();
-            let sess_params = state.active_session().map(|s| {
-                (
-                    s.temperature,
-                    s.top_p,
-                    s.frequency_penalty,
-                    s.presence_penalty,
-                    s.requests_per_hour,
-                    s.handoff_percent,
-                )
-            });
-            if let (Some(prov), Some((temp, top_p, freq, pres, rph, handoff))) =
-                (state.providers.get_mut(&label), sess_params)
-            {
-                prov.model = model.clone();
-                prov.fill_from_config();
-                prov.temperature = temp;
-                prov.top_p = top_p;
-                prov.frequency_penalty = freq;
-                prov.presence_penalty = pres;
-                // `requests_per_hour` is Option<u32>; None means "no per-session
-                // override". Keep the manifest value fill_from_config just set
-                // in that case so the API rate limiter stays active.
-                prov.requests_per_hour = rph.or(prov.requests_per_hour);
-                prov.handoff_percent = handoff;
-            }
+            state.active_provider = label;
+            prov.model = model;
+            prov.fill_from_config();
         }
     }
 
@@ -465,16 +442,6 @@ impl eframe::App for AutocodeApp {
             let settings_open = self.state.settings_open;
             let show_reasoning_inline = self.state.show_reasoning_inline;
             let show_project_tasks = self.state.show_project_tasks;
-            let provider_params = self.state.active_provider().map(|p| {
-                (
-                    p.temperature,
-                    p.top_p,
-                    p.frequency_penalty,
-                    p.presence_penalty,
-                    p.requests_per_hour,
-                    p.handoff_percent,
-                )
-            });
             if let Some(sess) = self.state.active_session_mut() {
                 sess.provider_label = prov_label;
                 sess.model = model;
@@ -486,14 +453,6 @@ impl eframe::App for AutocodeApp {
                 sess.show_reasoning_inline = show_reasoning_inline;
                 sess.show_project_tasks = show_project_tasks;
                 sess.draft_input = self.chat_panel.input.clone();
-                if let Some((temp, top_p, freq, pres, rph, handoff)) = provider_params {
-                    sess.temperature = temp;
-                    sess.top_p = top_p;
-                    sess.frequency_penalty = freq;
-                    sess.presence_penalty = pres;
-                    sess.requests_per_hour = rph;
-                    sess.handoff_percent = handoff;
-                }
             }
         }
         self.save_sessions();
@@ -525,16 +484,6 @@ impl eframe::App for AutocodeApp {
             let settings_open = self.state.settings_open;
             let show_reasoning_inline = self.state.show_reasoning_inline;
             let show_project_tasks = self.state.show_project_tasks;
-            let provider_params = self.state.active_provider().map(|p| {
-                (
-                    p.temperature,
-                    p.top_p,
-                    p.frequency_penalty,
-                    p.presence_penalty,
-                    p.requests_per_hour,
-                    p.handoff_percent,
-                )
-            });
             if let Some(sess) = self.state.active_session_mut() {
                 sess.provider_label = prov_label;
                 sess.model = model;
@@ -546,14 +495,6 @@ impl eframe::App for AutocodeApp {
                 sess.show_reasoning_inline = show_reasoning_inline;
                 sess.show_project_tasks = show_project_tasks;
                 sess.draft_input = self.chat_panel.input.clone();
-                if let Some((temp, top_p, freq, pres, rph, handoff)) = provider_params {
-                    sess.temperature = temp;
-                    sess.top_p = top_p;
-                    sess.frequency_penalty = freq;
-                    sess.presence_penalty = pres;
-                    sess.requests_per_hour = rph;
-                    sess.handoff_percent = handoff;
-                }
             }
         }
         self.save_sessions();

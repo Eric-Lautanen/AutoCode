@@ -169,40 +169,16 @@ pub fn show_window(ctx: &egui::Context, state: &mut AppState, settings: &mut Set
         state.settings_open = false;
         helpers::set_temp_bool(ctx, helpers::data::SETTINGS_CLOSED_THIS_FRAME, true);
         let _ = provider_file::save_providers_file(&state.providers);
-        // Copy the provider's current sampling params to the session before
-        // saving session meta, so parameter changes survive a restart even
-        // when the app is closed before the next auto-save cycle writes them.
-        // Always save session meta on close — it's cheap (small JSON) and
-        // prevents stale session values from overwriting provider values on
-        // session restore.
-        let provider_params = state.active_provider().map(|p| {
-            (
-                p.temperature,
-                p.top_p,
-                p.frequency_penalty,
-                p.presence_penalty,
-                p.requests_per_hour,
-                p.handoff_percent,
-            )
-        });
-        if let Some(sess) = state.active_session_mut()
-            && let Some((temp, top_p, freq, pres, rph, handoff)) = provider_params
-        {
-            sess.temperature = temp;
-            sess.top_p = top_p;
-            sess.frequency_penalty = freq;
-            sess.presence_penalty = pres;
-            sess.requests_per_hour = rph;
-            sess.handoff_percent = handoff;
+        if state.session_meta_dirty {
+            state.session_meta_dirty = false;
+            if let Some(sess) = state.active_session()
+                && let Some(proj) = state.active_project()
+                && session_exists(proj, sess)
+                && let Err(e) = save_session_meta(proj, sess)
+            {
+                eprintln!("[settings] Failed to save session meta: {}", e);
+            }
         }
-        if let Some(sess) = state.active_session()
-            && let Some(proj) = state.active_project()
-            && session_exists(proj, sess)
-            && let Err(e) = save_session_meta(proj, sess)
-        {
-            eprintln!("[settings] Failed to save session meta: {}", e);
-        }
-        state.session_meta_dirty = false;
     }
     if !state.settings_open {
         // Notify the chat input that a popup just closed so it can reclaim focus.

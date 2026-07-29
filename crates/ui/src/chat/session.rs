@@ -140,34 +140,9 @@ pub(crate) fn load_new_session(
                 && state.providers.contains_key(&new_sess.provider_label)
             {
                 state.active_provider = new_sess.provider_label.clone();
-                // Snapshot the session's saved sampling params before mutating
-                // the provider — `fill_from_config` reloads from providers.json,
-                // then we re-impose the session snapshot so the session's
-                // params win in RAM (symmetric with restore_active_session at
-                // startup). Without this, switching sessions leaves the
-                // provider holding the *previous* session's params, and the
-                // next auto-save would overwrite this session's disk values.
-                let (temp, top_p, freq, pres, rph, handoff) = (
-                    new_sess.temperature,
-                    new_sess.top_p,
-                    new_sess.frequency_penalty,
-                    new_sess.presence_penalty,
-                    new_sess.requests_per_hour,
-                    new_sess.handoff_percent,
-                );
                 if let Some(prov) = state.providers.get_mut(&state.active_provider) {
                     prov.model = new_sess.model.clone();
                     prov.fill_from_config();
-                    prov.temperature = temp;
-                    prov.top_p = top_p;
-                    prov.frequency_penalty = freq;
-                    prov.presence_penalty = pres;
-                    // `requests_per_hour` is Option<u32>; None means "no
-                    // per-session override" (e.g. a fresh session). Don't let
-                    // None wipe the manifest value `fill_from_config` just set,
-                    // or the API rate limiter would be silently disabled.
-                    prov.requests_per_hour = rph.or(prov.requests_per_hour);
-                    prov.handoff_percent = handoff;
                 }
             }
             // Load per-session flags from the session meta on disk — never

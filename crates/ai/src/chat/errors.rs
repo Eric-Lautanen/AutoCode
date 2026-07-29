@@ -55,9 +55,6 @@ pub fn fix_provider_params(state: &mut autocode_core::state::AppState, err_msg: 
             let v = 0.01;
             if let Some(prov) = state.providers.get_mut(&prov_label) {
                 prov.top_p = v;
-                if let Some(sess) = state.active_session_mut() {
-                    sess.top_p = v;
-                }
                 true
             } else {
                 false
@@ -67,9 +64,6 @@ pub fn fix_provider_params(state: &mut autocode_core::state::AppState, err_msg: 
             let v = 0.7;
             if let Some(prov) = state.providers.get_mut(&prov_label) {
                 prov.temperature = v;
-                if let Some(sess) = state.active_session_mut() {
-                    sess.temperature = v;
-                }
                 true
             } else {
                 false
@@ -80,10 +74,6 @@ pub fn fix_provider_params(state: &mut autocode_core::state::AppState, err_msg: 
             if let Some(prov) = state.providers.get_mut(&prov_label) {
                 prov.frequency_penalty = v;
                 prov.presence_penalty = v;
-                if let Some(sess) = state.active_session_mut() {
-                    sess.frequency_penalty = v;
-                    sess.presence_penalty = v;
-                }
                 true
             } else {
                 false

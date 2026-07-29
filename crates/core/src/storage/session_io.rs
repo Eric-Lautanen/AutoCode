@@ -281,12 +281,6 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
                 session.show_explorer = meta.show_explorer;
                 session.settings_open = meta.settings_open;
                 session.actual_tokens_used = meta.actual_tokens_used;
-                session.temperature = meta.temperature;
-                session.top_p = meta.top_p;
-                session.frequency_penalty = meta.frequency_penalty;
-                session.presence_penalty = meta.presence_penalty;
-                session.requests_per_hour = meta.requests_per_hour;
-                session.handoff_percent = meta.handoff_percent;
                 session.thinking_mode = meta.thinking_mode;
                 session.reasoning_effort = meta.reasoning_effort;
                 session.show_reasoning_inline = meta.show_reasoning_inline;

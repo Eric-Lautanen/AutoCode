@@ -1,15 +1,5 @@
 use crate::state::TodoList;
 
-fn default_sess_temperature() -> f32 {
-    0.2
-}
-fn default_sess_top_p() -> f32 {
-    1.0
-}
-fn default_handoff_pct_session() -> u8 {
-    80
-}
-
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct SessionMeta {
     pub id: String,
@@ -38,19 +28,6 @@ pub struct SessionMeta {
     pub settings_open: bool,
     #[serde(default)]
     pub actual_tokens_used: usize,
-    /// Per-model sampling parameters snapshot (restored on session resume).
-    #[serde(default = "default_sess_temperature")]
-    pub temperature: f32,
-    #[serde(default = "default_sess_top_p")]
-    pub top_p: f32,
-    #[serde(default)]
-    pub frequency_penalty: f32,
-    #[serde(default)]
-    pub presence_penalty: f32,
-    #[serde(default)]
-    pub requests_per_hour: Option<u32>,
-    #[serde(default = "default_handoff_pct_session")]
-    pub handoff_percent: u8,
 
     /// Per-session thinking mode and reasoning effort.
     #[serde(default)]
@@ -96,12 +73,6 @@ impl SessionMeta {
             show_explorer: session.show_explorer,
             settings_open: session.settings_open,
             actual_tokens_used: session.actual_tokens_used,
-            temperature: session.temperature,
-            top_p: session.top_p,
-            frequency_penalty: session.frequency_penalty,
-            presence_penalty: session.presence_penalty,
-            requests_per_hour: session.requests_per_hour,
-            handoff_percent: session.handoff_percent,
             thinking_mode: session.thinking_mode,
             reasoning_effort: session.reasoning_effort.clone(),
             show_reasoning_inline: session.show_reasoning_inline,

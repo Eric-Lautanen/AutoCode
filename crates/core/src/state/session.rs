@@ -46,21 +46,6 @@ pub struct Session {
     #[serde(default)]
     pub estimated_messages_tokens: usize,
 
-    /// Snapshot of per-model sampling params at session save time.
-    /// Restored when the session is resumed so settings aren't lost.
-    #[serde(default)]
-    pub temperature: f32,
-    #[serde(default)]
-    pub top_p: f32,
-    #[serde(default)]
-    pub frequency_penalty: f32,
-    #[serde(default)]
-    pub presence_penalty: f32,
-    #[serde(default)]
-    pub requests_per_hour: Option<u32>,
-    #[serde(default = "crate::helpers::default_handoff_percent")]
-    pub handoff_percent: u8,
-
     /// Per-session thinking mode — persists across sessions
     /// so each session remembers whether thinking was on/off.
     #[serde(default)]
@@ -145,12 +130,6 @@ impl Session {
             closed: false,
             estimated_full_tokens: 0,
             estimated_messages_tokens: 0,
-            temperature: 0.2,
-            top_p: 1.0,
-            frequency_penalty: 0.0,
-            presence_penalty: 0.0,
-            requests_per_hour: None,
-            handoff_percent: 80,
             thinking_mode: false,
             reasoning_effort: "medium".into(),
             show_reasoning_inline: false,
