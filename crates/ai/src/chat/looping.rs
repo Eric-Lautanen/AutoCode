@@ -77,7 +77,7 @@ pub fn apply_looping_window(state: &mut AppState, session_id: &str) -> Option<()
 
     let agg = active_model_aggressiveness(state, session_id);
     let ctx_window = active_model_context_window(state, session_id);
-    let used_tokens = state.sessions[idx].corrected_full_tokens();
+    let used_tokens = state.sessions[idx].usage_tokens();
     let trigger_pct = agg.trigger_pct();
     if ctx_window == 0 || (used_tokens as f32 / ctx_window as f32) < trigger_pct {
         return None;

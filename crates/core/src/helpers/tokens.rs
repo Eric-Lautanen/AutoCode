@@ -262,7 +262,10 @@ pub fn estimate_tokens_json(text: &str) -> usize {
     }
 
     let total_chars = text.chars().count();
-    let char_floor = (total_chars as f32 / 4.5).ceil() as usize;
+    // JSON structural overhead (quotes, braces, colons, commas) inflates the
+    // raw char count well past what a real tokenizer charges, so use a higher
+    // chars/token ratio than prose (5.0) to avoid systematic overestimates.
+    let char_floor = (total_chars as f32 / 5.0).ceil() as usize;
     let word_tokens = (word_count as f32 * 1.3) as usize;
     let cjk_tokens = (cjk_count as f32 * 1.3) as usize;
 

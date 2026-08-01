@@ -5,7 +5,7 @@ pub fn tool_definitions(strict: bool, handoff_enabled: bool) -> serde_json::Valu
 
     let shell_note = autocode_core::utils::sysinfo::shell_tools_note();
     let shell_desc = format!(
-        "Run shell command. Use ONLY for: builds, tests, git, cargo/npm, listing dirs. NEVER for file I/O or code search. {}",
+        "Run shell command. Use ONLY for: builds, tests, git, cargo/npm, listing dirs. NEVER for file I/O or code search (grep/rg/findstr/Select-String are BLOCKED — use the `grep` tool instead). {}",
         shell_note
     );
 

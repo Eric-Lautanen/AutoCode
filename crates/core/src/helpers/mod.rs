@@ -28,7 +28,8 @@ pub use regex::{has_regex_meta, matches_pattern};
 
 pub use serde_defaults::{
     default_context_tokens, default_disk_read_delay_ms, default_disk_write_rate_ms,
-    default_handoff_continuation_prompt_string, default_handoff_enabled, default_handoff_percent,
+    default_handoff_continuation_prompt_string, default_handoff_enabled,
+    default_handoff_fallback_prompt_string, default_handoff_percent,
     default_handoff_trigger_prompt_string, default_loop_warning_prompt_string,
     default_max_output_tokens, default_max_output_tokens_thinking, default_max_retries,
     default_max_retry_wait, default_reasoning_effort, default_request_timeout,

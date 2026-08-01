@@ -43,8 +43,9 @@ pub fn show_prompt(ui: &mut egui::Ui, state: &mut AppState) {
     ui.label(
         RichText::new(
             "Sent as a user message when the context threshold is reached and the \
-             model hasn't called handoff. Instructs the model to stop work, save \
-             progress, and handoff immediately.",
+             model hasn't called handoff. Instructs the model to stop work, record \
+             tasks, and hand off with a generic next_prompt for the new session \
+             (read the README and project docs, then continue).",
         )
         .size(11.0)
         .color(Palette::TEXT_MUTED),
@@ -99,6 +100,41 @@ pub fn show_prompt(ui: &mut egui::Ui, state: &mut AppState) {
     if ui.button("Reset to Default").clicked() {
         state.handoff_continuation_prompt =
             autocode_core::state::DEFAULT_HANDOFF_CONTINUATION_PROMPT.to_string();
+    }
+
+    ui.add_space(16.0);
+
+    // -- Handoff fallback prompt -----------------------------------------
+    ui.label(
+        RichText::new("Handoff Fallback Prompt")
+            .size(14.0)
+            .strong()
+            .color(Palette::TEXT_PRIMARY),
+    );
+    ui.add_space(4.0);
+    ui.label(
+        RichText::new(
+            "First message in a fresh session when a handoff happens without a \
+             model-generated next_prompt — for example a forced handoff because \
+             the context window would be exceeded.",
+        )
+        .size(11.0)
+        .color(Palette::TEXT_MUTED),
+    );
+    ui.add_space(8.0);
+
+    ui.add(
+        TextEdit::multiline(&mut state.handoff_fallback_prompt)
+            .desired_rows(4)
+            .desired_width(ui.available_width())
+            .font(egui::TextStyle::Monospace)
+            .text_color(Palette::TEXT_PRIMARY),
+    );
+
+    ui.add_space(8.0);
+    if ui.button("Reset to Default").clicked() {
+        state.handoff_fallback_prompt =
+            autocode_core::state::DEFAULT_HANDOFF_FALLBACK_PROMPT.to_string();
     }
 
     ui.add_space(16.0);

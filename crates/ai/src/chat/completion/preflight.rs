@@ -35,6 +35,13 @@ pub(crate) fn preflight_context_check(
         })
         .unwrap_or((0, false, 1.0));
 
+    // A model change means a different tokenizer, so any previously learned
+    // correction ratio is stale. Reset it so the next response re-learns
+    // against the new model's actual counts.
+    if model_changed && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == session_id) {
+        sess.token_correction_ratio = 1.0;
+    }
+
     let estimated = if cached > 0 && !model_changed {
         if correction > 0.0 && correction.is_finite() {
             (cached as f32 * correction).round() as usize

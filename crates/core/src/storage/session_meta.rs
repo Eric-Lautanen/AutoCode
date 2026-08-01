@@ -29,6 +29,18 @@ pub struct SessionMeta {
     #[serde(default)]
     pub actual_tokens_used: usize,
 
+    /// Heuristic token estimate at the time of the last API request.
+    /// Persisted as a pair with `actual_tokens_used` (both describe the
+    /// same last request) so the hybrid usage estimate survives restarts.
+    #[serde(default)]
+    pub estimated_full_at_request: usize,
+
+    /// Learned correction ratio (actual API prompt_tokens / heuristic estimate).
+    /// Persisted so the preflight estimate and hybrid usage delta stay accurate
+    /// across restarts. Defaults to 1.0 (no correction) for old sessions.
+    #[serde(default = "crate::state::default_token_correction_ratio")]
+    pub token_correction_ratio: f32,
+
     /// Per-session thinking mode and reasoning effort.
     #[serde(default)]
     pub thinking_mode: bool,
@@ -46,10 +58,6 @@ pub struct SessionMeta {
     /// Saved draft input text, restored on session switch.
     #[serde(default)]
     pub draft_input: String,
-
-    /// Learned correction ratio for token estimation drift.
-    #[serde(default)]
-    pub token_correction_ratio: f32,
 
     /// Whether the looping window (LRU pruning) is enabled for this session.
     #[serde(default)]
@@ -73,12 +81,13 @@ impl SessionMeta {
             show_explorer: session.show_explorer,
             settings_open: session.settings_open,
             actual_tokens_used: session.actual_tokens_used,
+            estimated_full_at_request: session.estimated_full_at_request,
+            token_correction_ratio: session.token_correction_ratio,
             thinking_mode: session.thinking_mode,
             reasoning_effort: session.reasoning_effort.clone(),
             show_reasoning_inline: session.show_reasoning_inline,
             show_project_tasks: session.show_project_tasks,
             draft_input: session.draft_input.clone(),
-            token_correction_ratio: session.token_correction_ratio,
             looping_window: session.looping_window,
         }
     }

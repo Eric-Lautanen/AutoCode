@@ -102,6 +102,9 @@ fn build_sysinfo() -> SysInfo {
 fn build_report() -> String {
     let mut lines = Vec::new();
 
+    // Current date/time so the model knows the temporal context.
+    lines.push(format!("Date/Time: {} UTC", format_now_utc()));
+
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
     if let Ok(ver) = std::env::var("OS") {
@@ -875,4 +878,30 @@ pub fn has_opengl() -> bool {
     {
         false
     }
+}
+
+/// Format the current UTC time as `YYYY-MM-DD HH:MM:SS` using only stdlib.
+fn format_now_utc() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let days = secs / 86400;
+    // Civil date from days since 1970-01-01 using Howard Hinnant's algorithm.
+    // Shift epoch from 1970-01-01 to 0000-03-01 (719468 days).
+    let z = days as i64 + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = z - era * 146097; // day of era [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // day of year [0, 365]
+    let mp = (5 * doy + 2) / 153; // month phase [0, 11]
+    let m = mp + if mp < 10 { 3 } else { -9 }; // month [1, 12]
+    let day = doy - (153 * mp + 2) / 5 + 1; // day of month [1, 31]
+    let y = y + if m <= 2 { 1 } else { 0 };
+    let s = secs % 86400;
+    let h = s / 3600;
+    let mi = s % 3600 / 60;
+    let sec = s % 60;
+    format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", y, m, day, h, mi, sec)
 }

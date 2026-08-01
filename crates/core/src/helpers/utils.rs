@@ -340,21 +340,20 @@ fn session_provider_config(state: &AppState) -> (usize, usize) {
 /// Get the token count for user-facing display.
 /// Returns `(displayed_estimate, actual_from_api)`.
 ///
-/// The displayed estimate uses the corrected value (heuristic × learned
-/// correction ratio from API responses), floored to `actual_tokens_used`
-/// so it never under-reports. The correction ratio is an EMA updated on
-/// every API response, so the estimate smoothly converges toward actual
-/// usage over time.
+/// The displayed estimate uses the provider's actual `prompt_tokens` count
+/// when available (exact for everything the API has seen) plus the heuristic
+/// estimate of only the messages added since that response, so it tracks the
+/// real count closely instead of the over-conservative full heuristic. It is
+/// capped at the provider's context window so the meter never shows a value
+/// larger than what the model can hold.
 /// `actual_tokens_used` is from the last API response (1 turn behind)
 /// and shown separately for comparison.
 fn session_messages_usage(state: &AppState) -> (usize, Option<usize>) {
+    let (max, _) = session_provider_config(state);
     state
         .active_session()
         .map(|s| {
-            // corrected_full_tokens converges toward the API's actual count
-            // via the learned ratio. Floor at actual_tokens_used so the
-            // display never under-reports vs what the API already told us.
-            let estimated = s.corrected_full_tokens().max(s.actual_tokens_used);
+            let estimated = s.usage_tokens().min(max);
             let actual = if s.actual_tokens_used > 0 {
                 Some(s.actual_tokens_used)
             } else {

@@ -3,6 +3,12 @@ use serde::{Deserialize, Serialize};
 use super::access_log::FileAccessLog;
 use super::chat::{ChatMessage, Role};
 
+/// Default correction ratio used when a session has no learned value yet.
+/// 1.0 = no correction.
+pub fn default_token_correction_ratio() -> f32 {
+    1.0
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
     pub id: String,
@@ -87,7 +93,7 @@ pub struct Session {
     /// Learned from each API response and applied to future estimates so
     /// the heuristic drift is compensated. Starts at 1.0 (no correction).
     /// Uses exponential moving average so it adapts to model changes.
-    #[serde(default)]
+    #[serde(default = "default_token_correction_ratio")]
     pub token_correction_ratio: f32,
 
     /// Snapshot of estimated_full_tokens at the time the last API request
@@ -198,6 +204,37 @@ impl Session {
                 self.token_correction_ratio =
                     alpha * observed + (1.0 - alpha) * self.token_correction_ratio;
             }
+        }
+    }
+
+    /// Best available token usage estimate for decision-making and display.
+    ///
+    /// When the provider has reported an actual `prompt_tokens` count (which is
+    /// exact for everything it has seen), returns that actual count plus the
+    /// heuristic estimate of only the messages added since that request. This
+    /// confines heuristic error to the small delta of new content instead of
+    /// the whole context, so the estimate tracks the API's real count closely.
+    /// Falls back to the raw heuristic when no actual is known yet (fresh
+    /// session with no API response).
+    pub fn usage_tokens(&self) -> usize {
+        if self.actual_tokens_used > 0 && self.estimated_full_at_request > 0 {
+            let raw_delta = self
+                .estimated_full_tokens
+                .saturating_sub(self.estimated_full_at_request);
+            // The delta is a heuristic estimate of only the messages added since
+            // the last request. Scale it by the learned correction ratio so the
+            // hybrid estimate tracks the provider's actual tokenizer instead of
+            // the heuristic's systematic overestimate (which would otherwise
+            // inflate the display and trigger premature handoffs).
+            let delta =
+                if self.token_correction_ratio > 0.0 && self.token_correction_ratio.is_finite() {
+                    (raw_delta as f32 * self.token_correction_ratio).round() as usize
+                } else {
+                    raw_delta
+                };
+            self.actual_tokens_used.saturating_add(delta)
+        } else {
+            self.estimated_full_tokens
         }
     }
 

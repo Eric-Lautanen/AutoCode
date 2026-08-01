@@ -141,7 +141,7 @@ pub const DEFAULT_HANDOFF_TRIGGER_PROMPT: &str = "\
 This conversation must end now. Immediately:
 1. STOP all ongoing work.
 2. Use the `project_task_list` tool to record any new tasks.
-3. Call the `handoff` tool with a complete next_prompt.
+3. Call the `handoff` tool. The `next_prompt` for the next session should be generic: read the README.md and project docs, then continue with the project.
 
 Do NOT continue working or write any more code. Use the handoff tool now.";
 
@@ -150,6 +150,12 @@ Do NOT continue working or write any more code. Use the handoff tool now.";
 /// project tasks exist and triggers the tool to load them. Users can customize
 /// this in settings.
 pub const DEFAULT_HANDOFF_CONTINUATION_PROMPT: &str = "Read the project task list.";
+
+/// Fallback first user message for a fresh session when a handoff happens
+/// without a model-generated next_prompt (e.g. a forced handoff because the
+/// context window would be exceeded). Customizable in settings.
+pub const DEFAULT_HANDOFF_FALLBACK_PROMPT: &str =
+    "Read the README.md and project docs, then continue with the project.";
 
 /// Default message injected as a user message when the model makes the exact
 /// same tool call (same name + arguments) three turns in a row, signalling it
@@ -180,6 +186,9 @@ pub struct AppState {
 
     #[serde(default = "crate::helpers::default_handoff_continuation_prompt_string")]
     pub handoff_continuation_prompt: String,
+
+    #[serde(default = "crate::helpers::default_handoff_fallback_prompt_string")]
+    pub handoff_fallback_prompt: String,
 
     /// Message injected as a USER message when the model repeats the exact same
     /// tool call (name + arguments) three turns in a row. Defaults to on with
@@ -317,6 +326,7 @@ impl Default for AppState {
             system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
             handoff_trigger_prompt: DEFAULT_HANDOFF_TRIGGER_PROMPT.to_string(),
             handoff_continuation_prompt: DEFAULT_HANDOFF_CONTINUATION_PROMPT.to_string(),
+            handoff_fallback_prompt: DEFAULT_HANDOFF_FALLBACK_PROMPT.to_string(),
             loop_warning_prompt: DEFAULT_LOOP_WARNING_PROMPT.to_string(),
             handoff_enabled: true,
             shell_tasks: Vec::new(),

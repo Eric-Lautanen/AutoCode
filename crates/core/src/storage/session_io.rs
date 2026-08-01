@@ -281,12 +281,13 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
                 session.show_explorer = meta.show_explorer;
                 session.settings_open = meta.settings_open;
                 session.actual_tokens_used = meta.actual_tokens_used;
+                session.estimated_full_at_request = meta.estimated_full_at_request;
+                session.token_correction_ratio = meta.token_correction_ratio;
                 session.thinking_mode = meta.thinking_mode;
                 session.reasoning_effort = meta.reasoning_effort;
                 session.show_reasoning_inline = meta.show_reasoning_inline;
                 session.show_project_tasks = meta.show_project_tasks;
                 session.draft_input = meta.draft_input;
-                session.token_correction_ratio = meta.token_correction_ratio;
                 session.looping_window = meta.looping_window;
                 // Rebuild access log from ToolMeta in loaded messages.
                 session.access_log = crate::state::FileAccessLog::new();

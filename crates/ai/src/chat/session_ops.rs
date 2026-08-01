@@ -415,10 +415,10 @@ pub fn context_usage_info_for_session(
         .iter()
         .find(|s| s.id == session_id)
         .map(|s| {
-            // Same formula as the toolbar display: corrected estimate
-            // floored to actual API count so the model's context info
-            // is consistent with what the user sees.
-            s.corrected_full_tokens().max(s.actual_tokens_used)
+            // Provider actual count plus the estimate of messages added since
+            // the last API response, capped at the provider's context window
+            // so the model never sees a usage count larger than it can hold.
+            s.usage_tokens().min(max)
         })
         .unwrap_or(0);
     let pct = (used * 100).checked_div(max).unwrap_or(0);

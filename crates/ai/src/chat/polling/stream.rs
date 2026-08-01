@@ -477,6 +477,8 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                 assistant_msg.reasoning_content = Some(reasoning);
             }
             push_runtime(state, runtime, assistant_msg);
+            // Real tool-call work breaks any silent-drop continue loop.
+            runtime.continue_streak = 0;
             runtime.pending_response.clear();
             let session_id = runtime.active_session_id.as_deref().unwrap_or("");
             let root = project_root_for_session(state, session_id);

@@ -38,6 +38,40 @@ pub(super) fn start_next_live_shell(
                 continue;
             }
         };
+        // Block grep-like commands so the agent uses the dedicated `grep` tool
+        // instead of consuming context window with shell-based search output.
+        let trimmed = command.trim_start();
+        let first_word = trimmed
+            .split_once(|c: char| c.is_whitespace())
+            .map(|(w, _)| w)
+            .unwrap_or(trimmed);
+        let first_word_lower = first_word.to_lowercase();
+        // `find` on Windows is a text-search command (grep-like); on Unix it
+        // lists files (legit shell op), so only block it on Windows.
+        let mut blocked: Vec<&str> = vec!["grep", "rg", "findstr", "select-string", "sls"];
+        if cfg!(windows) {
+            blocked.push("find");
+        }
+        if blocked.contains(&first_word_lower.as_str()) {
+            runtime.pending_tool_results.push(ToolResult {
+                tool_call: tc,
+                content: format!(
+                    "Error: `{}` is blocked in the shell. Use the `grep` tool instead for code search.",
+                    first_word
+                ),
+                meta: ToolMeta {
+                    tool_name: "run_shell".into(),
+                    is_error: true,
+                    ..Default::default()
+                },
+                accessed_paths: vec![],
+                todo_update: None,
+                project_todo_update: None,
+            });
+            runtime.pending_tool_remaining.remove(0);
+            continue;
+        }
+
         let cwd = args["cwd"].as_str().unwrap_or(project_root).to_string();
         let timeout_secs = args["timeout_secs"].as_u64().unwrap_or(0);
         runtime.live_shell_timeout_secs = timeout_secs;

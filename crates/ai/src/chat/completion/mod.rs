@@ -47,6 +47,7 @@ pub fn send_message(
     push_to_session(state, Some(&sid), ChatMessage::new(Role::User, text));
     // Clear any stale partial response backup from a previous failed attempt.
     runtime.continuation_chain = 0;
+    runtime.continue_streak = 0;
     runtime.orphaned_retry_count = 0;
     runtime.retry_after = None;
     runtime.next_completion_allowed = None;
@@ -421,8 +422,12 @@ pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     }
 
     // Use the AI-generated next_prompt as the first user message in the fresh session.
+    // When none was produced (e.g. a forced handoff because the context window was
+    // exceeded), fall back to the user-configurable generic continuation prompt.
     let handoff_msg = runtime.handoff_next_prompt.take().unwrap_or_else(|| {
-        if state.project_task_list().has_incomplete() {
+        if !state.handoff_fallback_prompt.trim().is_empty() {
+            state.handoff_fallback_prompt.clone()
+        } else if state.project_task_list().has_incomplete() {
             "Project tasks remain. Continue working and create a todo list to track progress."
                 .to_string()
         } else {
@@ -442,6 +447,7 @@ pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     runtime.provider_error = None;
     runtime.retry_count = 0;
     runtime.continuation_chain = 0;
+    runtime.continue_streak = 0;
     runtime.status = "Session handed off — starting fresh.".into();
     runtime.request_start = None;
     runtime.last_delta_time = None;
@@ -495,9 +501,9 @@ pub fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     let max = p.max_context_tokens as usize;
     let handoff_pct = p.handoff_percent.min(100) as usize;
     // Same formula as session_messages_usage so the handoff decision
-    // matches what the user sees: corrected estimate floored to the
-    // actual API count so it never under-reports.
-    let used = sess.corrected_full_tokens().max(sess.actual_tokens_used);
+    // matches what the user sees: provider actual count plus the estimate
+    // of only the messages added since the last API response.
+    let used = sess.usage_tokens();
     if max == 0 {
         return;
     }
@@ -551,11 +557,14 @@ fn auto_continue_impl(
         && !truncated
         && !helpers::is_incomplete_task_response(response)
     {
+        // The model produced a complete response — break any silent-drop loop.
+        runtime.continue_streak = 0;
         return;
     }
     // When mid-stream reasoning was salvaged and re-injected as a user message,
     // skip the automated task reminder this turn — the model should resume the
-    // interrupted reasoning instead of being nudged about task progress.
+    // interrupted reasoning instead of being nudged about task progress. This
+    // is not a silent-drop continue, so it doesn't count toward the streak.
     if runtime.reasoning_dropped {
         return;
     }
@@ -564,6 +573,16 @@ fn auto_continue_impl(
         return;
     }
     runtime.continuation_chain += 1;
+
+    // Count consecutive continue injections. If the provider keeps silently
+    // dropping (three "continue" nudges in a row with no real progress), force
+    // a handoff to a fresh session instead of injecting yet another continue.
+    runtime.continue_streak += 1;
+    if runtime.continue_streak >= 3 {
+        runtime.status = "Repeated silent drops -- forcing a fresh session.".into();
+        handle_handoff(state, runtime);
+        return;
+    }
 
     let msg = if has_todo_incomplete {
         let (done, total) = state.todo_list().progress();

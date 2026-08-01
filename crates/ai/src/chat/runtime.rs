@@ -99,6 +99,10 @@ pub struct ChatRuntime {
     pub net_status: NetworkStatus,
     /// Guard to prevent the model from chain-continuing indefinitely.
     pub continuation_chain: u8,
+    /// Consecutive auto-injected "continue" messages (silent drops / provider
+    /// errors that keep yielding nothing useful). When this reaches 3 the
+    /// runtime forces a handoff instead of injecting yet another continue.
+    pub continue_streak: u8,
     /// Retry phase: non-blocking backoff before the first retry.
     /// None = not waiting for a retry.
     pub retry_after: Option<std::time::Instant>,
@@ -184,6 +188,7 @@ impl Default for ChatRuntime {
             pending_tool_remaining: Vec::new(),
             net_status: NetworkStatus::default(),
             continuation_chain: 0,
+            continue_streak: 0,
             retry_after: None,
             next_completion_allowed: None,
             handoff_in_progress: false,
@@ -246,6 +251,7 @@ impl ChatRuntime {
         self.pending_tool_remaining.clear();
         self.net_status.reset();
         self.continuation_chain = 0;
+        self.continue_streak = 0;
         self.handoff_in_progress = false;
         // When the user explicitly stops, suppress auto-handoff re-triggering
         // so it doesn't immediately fire again (token usage is still high).
