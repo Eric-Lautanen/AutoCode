@@ -13,6 +13,9 @@ pub(super) fn poll_tool_results(state: &mut AppState, runtime: &mut ChatRuntime)
     match rx.try_recv() {
         Ok(results) => {
             runtime.tool_rx = None;
+            runtime.live_tool_call = None;
+            runtime.tool_batch_start = None;
+            runtime.live_write_progress = None;
 
             if still_owns_session(runtime, state) {
                 let has_handoff = results.iter().any(|r| r.content.starts_with("HANDOFF:"));
@@ -113,6 +116,9 @@ pub(super) fn commit_tool_results(state: &mut AppState, runtime: &mut ChatRuntim
         let count = runtime.pending_tool_results.len();
         push_tool_results_to_state(state, runtime, &runtime.pending_tool_results);
         runtime.pending_tool_results.clear();
+        runtime.live_tool_call = None;
+        runtime.tool_batch_start = None;
+        runtime.live_write_progress = None;
         runtime.status = format!("{} tool(s) complete.", count);
         // Token estimate refreshed from disk by push_tool_results_to_state
         // -> push_to_session -> recompute_estimate_from_disk.

@@ -610,6 +610,18 @@ pub(crate) fn parse_sse_stream_from_reader<R: BufRead>(
                 if let Some(args) = tc["function"]["arguments"].as_str() {
                     entry.2.push_str(args);
                 }
+                // Live display-only preview: the full `ToolCall` is still sent
+                // at finish_reason=="tool_calls" and drives execution.
+                if tx
+                    .send(ProviderEvent::ToolCallDelta {
+                        index: idx,
+                        name: entry.1.clone(),
+                        arguments: entry.2.clone(),
+                    })
+                    .is_err()
+                {
+                    return Err("channel closed".into());
+                }
             }
         }
         if let Some(tc_arr) = v["choices"][0]["message"]["tool_calls"].as_array() {
@@ -621,7 +633,19 @@ pub(crate) fn parse_sse_stream_from_reader<R: BufRead>(
                     .unwrap_or("")
                     .to_string();
                 if !name.is_empty() {
-                    tool_acc.insert(idx, (id, name, args));
+                    tool_acc.insert(idx, (id, name.clone(), args.clone()));
+                    // Live display-only preview for providers that deliver the
+                    // whole tool call in the message (not streamed via delta).
+                    if tx
+                        .send(ProviderEvent::ToolCallDelta {
+                            index: idx,
+                            name,
+                            arguments: args,
+                        })
+                        .is_err()
+                    {
+                        return Err("channel closed".into());
+                    }
                 }
             }
         }

@@ -5,6 +5,7 @@
 mod code_block;
 mod diff_view;
 mod input;
+mod live;
 mod markdown;
 mod messages;
 mod panel;

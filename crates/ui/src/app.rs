@@ -302,7 +302,16 @@ impl eframe::App for AutocodeApp {
             false
         };
         let needs_repaint = chat::update_all(&mut self.state, &mut self.runtimes);
-        let any_busy = self.runtimes.values().any(|r| r.is_busy());
+        // A live turn exists when there is streamed-but-uncommitted content or
+        // an in-flight tool/shell; while one is active we repaint at 60 fps so
+        // the paced reveal / spinners stay even even between network chunks.
+        let any_live = self.runtimes.values().any(|r| {
+            r.is_busy()
+                || !r.pending_response.is_empty()
+                || !r.reasoning_buf.is_empty()
+                || !r.live_shell_buf.is_empty()
+                || r.live_tool_call.is_some()
+        });
         let visible = ctx.input(|i| i.viewport().visible()).unwrap_or(true);
 
         if waiting_sysinfo && !needs_repaint {
@@ -318,16 +327,16 @@ impl eframe::App for AutocodeApp {
             self.repaint_scheduled = false;
             let delay = if !visible {
                 std::time::Duration::from_millis(2000)
-            } else if any_busy {
+            } else if any_live {
                 std::time::Duration::from_millis(16)
             } else {
                 std::time::Duration::from_millis(100)
             };
             ctx.request_repaint_after(delay);
-        } else if any_busy && !self.repaint_scheduled {
+        } else if any_live && !self.repaint_scheduled {
             self.repaint_scheduled = true;
             ctx.request_repaint_after(if visible {
-                std::time::Duration::from_millis(100)
+                std::time::Duration::from_millis(16)
             } else {
                 std::time::Duration::from_millis(2000)
             });

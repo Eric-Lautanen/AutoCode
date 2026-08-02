@@ -25,7 +25,6 @@ pub(crate) fn render_code_block_impl(
     } else {
         &lines[..]
     };
-    let display_text = display_lines.join("\n");
 
     // Use a unique auto-incremented id_salt so that multiple code blocks
     // within the same message (or across messages in the same push_id scope)
@@ -73,6 +72,7 @@ pub(crate) fn render_code_block_impl(
                     .show(ui, |ui| {
                         ui.set_max_width(ui.available_width());
                         let inner_w = ui.available_width();
+                        let is_diff = lang == "diff" || lang == "patch";
                         let mut code_job = egui::text::LayoutJob {
                             wrap: egui::text::TextWrapping {
                                 max_rows: usize::MAX,
@@ -82,15 +82,26 @@ pub(crate) fn render_code_block_impl(
                             },
                             ..Default::default()
                         };
-                        code_job.append(
-                            &display_text,
-                            0.0,
-                            TextFormat {
+                        for (i, line) in display_lines.iter().enumerate() {
+                            let color = if is_diff && line.starts_with('+') {
+                                theme().diff_add_text
+                            } else if is_diff && line.starts_with('-') {
+                                theme().diff_del_text
+                            } else if is_diff && line.starts_with("@@") {
+                                theme().diff_num
+                            } else {
+                                theme().text_code
+                            };
+                            let fmt = TextFormat {
                                 font_id: FontId::monospace(12.0),
-                                color: theme().text_code,
+                                color,
                                 ..Default::default()
-                            },
-                        );
+                            };
+                            code_job.append(line, 0.0, fmt.clone());
+                            if i + 1 < display_lines.len() {
+                                code_job.append("\n", 0.0, fmt);
+                            }
+                        }
                         ui.label(code_job);
                     });
                 if truncated_count > 0 {

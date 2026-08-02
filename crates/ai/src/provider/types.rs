@@ -92,6 +92,14 @@ pub enum ProviderEvent {
     /// the main response text or consume context budget on subsequent turns.
     Reasoning(String),
     ToolCall(ToolCall),
+    /// Live preview of a tool call while its arguments are still streaming.
+    /// Display-only: the final `ToolCall` (emitted at finish) still drives
+    /// execution. The UI uses this to type out the call as it arrives.
+    ToolCallDelta {
+        index: usize,
+        name: String,
+        arguments: String,
+    },
     Done {
         prompt_tokens: usize,
         completion_tokens: usize,

@@ -9,10 +9,7 @@ use crate::{helpers, provider::ProviderClient};
 use autocode_core::state::{AppState, ChatMessage, Role, TodoStatus, ToolMeta};
 
 use super::runtime::ChatRuntime;
-use super::session_ops::{
-    context_usage_info_for_session, format_context_usage, project_root_for_session, push_error,
-    push_runtime, push_to_session,
-};
+use super::session_ops::{project_root_for_session, push_error, push_runtime, push_to_session};
 use super::tools::kill_process;
 
 // Internal helpers — pub(crate) so they can be used within the crate but not re-exported.
@@ -240,6 +237,8 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
     runtime.pending_tool_calls.clear();
     runtime.assistant_tool_calls_json = None;
     runtime.provider_error = None;
+    runtime.live_tool_call = None;
+    runtime.tool_batch_start = None;
     // A fresh request starts a new reasoning turn: clear the loop-guard streak
     // and any salvaged reasoning from a prior dropped stream, and clear the
     // user-stop flag so a later unexpected drop can still be salvaged.
@@ -400,16 +399,7 @@ pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
             .filter(|i| i.status == TodoStatus::Completed)
             .count();
         let total = ptl.items.len();
-        let (ctx_used, ctx_max, _, max_output) = context_usage_info_for_session(
-            state,
-            runtime.active_session_id.as_deref().unwrap_or(""),
-        );
-        let tool_result_content = format!(
-            "Project tasks updated -- {}/{} complete | {}",
-            done,
-            total,
-            format_context_usage(ctx_used, ctx_max, max_output),
-        );
+        let tool_result_content = format!("Project tasks updated -- {}/{} complete", done, total,);
         let mut tool_msg = ChatMessage::new(Role::Tool, tool_result_content);
         tool_msg.tool_call_id = Some(tool_call_id);
         tool_msg.tool_meta = Some(ToolMeta {
@@ -445,6 +435,8 @@ pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     runtime.pending_tool_results.clear();
     runtime.assistant_tool_calls_json = None;
     runtime.provider_error = None;
+    runtime.live_tool_call = None;
+    runtime.tool_batch_start = None;
     runtime.retry_count = 0;
     runtime.continuation_chain = 0;
     runtime.continue_streak = 0;

@@ -101,9 +101,6 @@ pub struct ToolExecCtx<'a> {
     pub project_root: &'a str,
     pub path_cache: &'a mut autocode_core::helpers::LruPathCache,
     pub allow_escape: bool,
-    pub ctx_used: usize,
-    pub ctx_max: usize,
-    pub max_output: usize,
     pub session_named: bool,
     /// Path to a detected Chrome/Chromium binary, if any.
     pub chrome_path: Option<String>,
@@ -121,9 +118,6 @@ pub fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
         project_root,
         path_cache,
         allow_escape,
-        ctx_used,
-        ctx_max,
-        max_output,
         session_named,
         chrome_path,
         use_headless_chrome,
@@ -896,11 +890,8 @@ pub fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                 ""
             };
             format!(
-                "Task list updated -- {}/{} complete | {}{}",
-                done,
-                total,
-                super::super::session_ops::format_context_usage(ctx_used, ctx_max, max_output),
-                name_hint,
+                "Task list updated -- {}/{} complete{}",
+                done, total, name_hint,
             )
         }
 
@@ -938,12 +929,7 @@ pub fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                 .filter(|i| i.status == TodoStatus::Completed)
                 .count();
             let total = items.len();
-            format!(
-                "Project tasks updated -- {}/{} complete | {}",
-                done,
-                total,
-                super::super::session_ops::format_context_usage(ctx_used, ctx_max, max_output),
-            )
+            format!("Project tasks updated -- {}/{} complete", done, total,)
         }
 
         "glob" => {

@@ -18,6 +18,45 @@ pub fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: 
     let Some(sid) = session_id.map(|s| s.to_string()) else {
         return;
     };
+    // Inject the current wall-clock time and live context-window usage into
+    // every user message, assistant text response, and tool result so the model
+    // sees both throughout the conversation. Pure tool-call assistant messages
+    // (empty content) are left untouched so callers can still detect "the model
+    // produced no visible text" (e.g. the already_responded check). Error
+    // messages are display-only and skipped.
+    match msg.role {
+        Role::User => {
+            if !msg.content.is_empty() {
+                let (ctx_used, ctx_max, _, max_output) =
+                    context_usage_info_for_session(state, &sid);
+                msg.content.push_str(&format!(
+                    "\nTime: {} UTC | {}",
+                    crate::helpers::format_now_utc(),
+                    format_context_usage(ctx_used, ctx_max, max_output),
+                ));
+            }
+        }
+        Role::Assistant => {
+            if !msg.content.trim().is_empty() {
+                let (ctx_used, ctx_max, _, max_output) =
+                    context_usage_info_for_session(state, &sid);
+                msg.content.push_str(&format!(
+                    "\nTime: {} UTC | {}",
+                    crate::helpers::format_now_utc(),
+                    format_context_usage(ctx_used, ctx_max, max_output),
+                ));
+            }
+        }
+        Role::Tool => {
+            let (ctx_used, ctx_max, _, max_output) = context_usage_info_for_session(state, &sid);
+            msg.content.push_str(&format!(
+                "\nTime: {} UTC | {}",
+                crate::helpers::format_now_utc(),
+                format_context_usage(ctx_used, ctx_max, max_output),
+            ));
+        }
+        _ => {}
+    }
     // Push to in-memory display window first.
     if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
         msg.id = sess.next_message_id;

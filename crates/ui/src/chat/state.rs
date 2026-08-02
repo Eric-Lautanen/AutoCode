@@ -25,6 +25,22 @@ pub struct ChatPanelState {
     /// 0 = no history on disk, or not yet checked.
     pub(crate) oldest_disk_id: u64,
 
+    /// Paced-reveal pointer into the current live response (chars shown).
+    pub(crate) live_reveal: usize,
+    /// Length of the live response last frame (used to detect a fresh response).
+    pub(crate) live_prev_len: usize,
+    /// Per-frame reveal budget (chars) for smooth streaming.
+    pub(crate) live_reveal_budget: usize,
+
+    /// Paced-reveal pointer into the currently streaming tool-call JSON.
+    pub(crate) live_tool_reveal: usize,
+    /// (tool name, args length) of the last revealed call, used to detect a
+    /// fresh tool call so the reveal restarts instead of continuing.
+    pub(crate) live_tool_prev: Option<(String, usize)>,
+    /// Slower per-frame budget for tool-call JSON so a call that arrives in
+    /// one chunk still visibly "types out" instead of popping in.
+    pub(crate) live_tool_reveal_budget: usize,
+
     /// Set to true to request keyboard focus on the input TextEdit next frame.
     pub(crate) wants_input_focus: bool,
     /// The actual egui::Id of the input TextEdit widget (set each frame from
@@ -63,6 +79,12 @@ impl Default for ChatPanelState {
             prev_message_count: 0,
             user_scrolled_up: false,
             oldest_disk_id: 0,
+            live_reveal: 0,
+            live_prev_len: 0,
+            live_reveal_budget: 120,
+            live_tool_reveal: 0,
+            live_tool_prev: None,
+            live_tool_reveal_budget: 40,
             wants_input_focus: false,
             actual_input_id: None,
             input_id: next_id(),

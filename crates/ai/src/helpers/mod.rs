@@ -9,7 +9,7 @@ pub use fuzzy::{
     find_nearby_lines, fuzzy_find_replace, levenshtein_distance, normalize_whitespace,
     similarity_score,
 };
-pub use misc::{gen_tool_call_id, project_context_string};
+pub use misc::{format_now_utc, gen_tool_call_id, project_context_string};
 pub use strip_lines::strip_line_numbers;
 pub use task_detect::is_incomplete_task_response;
 pub use todo_parse::{

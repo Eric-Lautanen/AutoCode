@@ -5,8 +5,7 @@ use super::super::completion::{auto_continue, auto_execute, start_completion};
 use super::super::errors::{fix_provider_params, shorten_err};
 use super::super::runtime::{ChatRuntime, ToolResult};
 use super::super::session_ops::{
-    context_usage_info_for_session, project_root_for_session, push_error, push_runtime,
-    push_to_session, sanitize_session_name,
+    project_root_for_session, push_error, push_runtime, push_to_session, sanitize_session_name,
 };
 use super::super::tools::{ToolExecCtx, build_tool_meta, execute_tool_with_cache};
 
@@ -43,6 +42,14 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
             Ok(ProviderEvent::Reasoning(text)) => {
                 runtime.net_status.bytes += text.len() as u64;
                 append_to_reasoning(&mut runtime.reasoning_buf, &text);
+                runtime.last_delta_time = Some(std::time::Instant::now());
+                runtime.got_response_this_turn = true;
+                got_something = true;
+            }
+            Ok(ProviderEvent::ToolCallDelta {
+                name, arguments, ..
+            }) => {
+                runtime.live_tool_call = Some((name, arguments));
                 runtime.last_delta_time = Some(std::time::Instant::now());
                 runtime.got_response_this_turn = true;
                 got_something = true;
@@ -577,6 +584,8 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
             // If there are no remaining tool calls after name_session,
             // only continue if the model hadn't already produced text.
             if normal_calls.is_empty() {
+                runtime.live_tool_call = None;
+                runtime.tool_batch_start = None;
                 let already_responded = state
                     .sessions
                     .iter()
@@ -587,6 +596,13 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                     start_completion(state, runtime);
                 }
                 return true;
+            }
+
+            // Record the batch start and prime the live tool card for display
+            // while the batch executes (cleared when results commit / drain).
+            runtime.tool_batch_start = Some(std::time::Instant::now());
+            if let Some(tc) = normal_calls.first() {
+                runtime.live_tool_call = Some((tc.name.clone(), tc.arguments.clone()));
             }
 
             // Step 6: existing shell / other split for normal_calls.
@@ -648,7 +664,6 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                 } else {
                     std::time::Duration::from_secs(state.request_timeout_secs)
                 };
-                let ctx_info = context_usage_info_for_session(state, session_id);
                 let session_named = state
                     .sessions
                     .iter()
@@ -675,9 +690,6 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                                 project_root: &pr_clone,
                                 path_cache: &mut path_cache,
                                 allow_escape,
-                                ctx_used: ctx_info.0,
-                                ctx_max: ctx_info.1,
-                                max_output: ctx_info.3,
                                 session_named,
                                 chrome_path: chrome_path.clone(),
                                 use_headless_chrome,

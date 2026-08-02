@@ -140,6 +140,14 @@ pub struct ChatRuntime {
     /// Live file write progress — (filepath, content) shown immediately
     /// when a write_file tool call is received, before disk write completes.
     pub live_write_progress: Option<(String, String)>,
+    /// Live preview of the tool call currently being streamed / executed —
+    /// (name, arguments-so-far). Display-only; the committed `ToolCall` batch
+    /// drives execution. Populated by `ToolCallDelta` events and cleared when
+    /// the batch is dispatched, results commit, or the runtime drains.
+    pub live_tool_call: Option<(String, String)>,
+    /// When the current tool-call batch started executing, for the UI's live
+    /// elapsed timer. Cleared alongside `live_tool_call`.
+    pub tool_batch_start: Option<std::time::Instant>,
     /// Loop-detection: signature of the previous turn's committed tool-call
     /// batch (sorted `name|arguments` joined). Used to detect when the model
     /// emits the identical tool call(s) turn after turn.
@@ -201,6 +209,8 @@ impl Default for ChatRuntime {
             orphaned_retry_count: 0,
             pending_start: 0,
             live_write_progress: None,
+            live_tool_call: None,
+            tool_batch_start: None,
             last_tool_batch_signature: None,
             repeat_batch_count: 0,
             pending_loop_warning: false,
@@ -261,6 +271,8 @@ impl ChatRuntime {
         self.retry_after = None;
         self.next_completion_allowed = None;
         self.live_write_progress = None;
+        self.live_tool_call = None;
+        self.tool_batch_start = None;
         // Loop-detection state is transient — clear on drain/stop so a fresh
         // user action or session reset doesn't carry a stale warning forward.
         self.last_tool_batch_signature = None;

@@ -2,15 +2,14 @@
 
 use std::collections::HashMap;
 
-use egui::{Color32, Frame, Key, Margin, RichText, ScrollArea};
+use egui::{Frame, Key, Margin, RichText, ScrollArea};
 
 use autocode_ai::chat::ChatRuntime;
 use autocode_core::state::{AppState, Role};
 
-use super::code_block::{render_code_block, render_shell_terminal};
 use super::input::show_input_row;
-use super::markdown::render_markdown;
-use super::messages::{empty_state, show_assistant_content, show_live_reasoning, show_user_bubble};
+use super::live::show_live_turn;
+use super::messages::{empty_state, show_assistant_content, show_user_bubble};
 use super::session::{
     handle_purge_on_missing, load_new_session, restore_scroll_offset, save_old_session,
 };
@@ -103,7 +102,7 @@ pub fn show(
         let active_sid_str = state.active_session_id.clone().unwrap_or_default();
         {
             let active_sid = state.active_session_id.clone();
-            let mut runtime = active_sid.as_ref().and_then(|sid| runtimes.get_mut(sid));
+            let runtime = active_sid.as_ref().and_then(|sid| runtimes.get_mut(sid));
             let is_live_session = active_sid.is_some() && runtime.is_some();
             let streaming = is_live_session
                 && runtime.as_ref().is_some_and(|r| {
@@ -112,6 +111,7 @@ pub fn show(
                         || !r.reasoning_buf.is_empty()
                         || !r.live_shell_buf.is_empty()
                         || r.live_write_progress.is_some()
+                        || r.live_tool_call.is_some()
                 });
             if streaming {
                 panel_state.scroll_to_bottom = true;
@@ -195,16 +195,11 @@ pub fn show(
                         }
 
                         if is_live_session {
-                            let r = match runtime.as_mut() {
+                            let r = match runtime.as_ref() {
                                 Some(r) => r,
                                 None => return,
                             };
-                            let has_streaming = !r.pending_response.is_empty()
-                                || !r.live_shell_buf.is_empty()
-                                || !r.reasoning_buf.is_empty()
-                                || r.live_write_progress.is_some();
-
-                            if (r.is_busy() && !has_streaming) || r.retry_after.is_some() {
+                            if r.retry_after.is_some() {
                                 ui.add_space(8.0);
                                 ui.label(
                                     RichText::new(&r.status)
@@ -213,41 +208,18 @@ pub fn show(
                                 );
                                 ui.add_space(8.0);
                             } else {
-                                let has_reasoning = !r.reasoning_buf.is_empty();
-                                if state.show_reasoning_inline && has_reasoning {
-                                    show_live_reasoning(ui, &r.reasoning_buf);
-                                    ui.add_space(6.0);
-                                }
-                                if !r.pending_response.is_empty() {
-                                    ui.add_space(8.0);
-                                    ui.separator();
-                                    ui.add_space(4.0);
-                                    render_markdown(ui, &r.pending_response, true, true);
-                                    ui.label(RichText::new("|").color(theme().accent).size(13.0));
-                                } else if !r.live_shell_buf.is_empty() {
-                                    render_shell_terminal(
-                                        ui,
-                                        &r.live_shell_buf,
-                                        active_sid.as_deref().unwrap_or(""),
-                                    );
-                                } else if let Some((ref path, ref content)) = r.live_write_progress
-                                {
+                                let rendered =
+                                    show_live_turn(ui, r, panel_state, state.show_reasoning_inline);
+                                if !rendered && r.is_busy() {
+                                    // Busy with nothing to stream yet (e.g. waiting
+                                    // for the first delta) -- show the status line.
                                     ui.add_space(8.0);
                                     ui.label(
-                                        RichText::new(format!("[File] Writing {}...", path))
-                                            .size(12.0)
-                                            .color(Color32::from_rgb(74, 156, 133))
-                                            .strong(),
-                                    );
-                                    render_code_block(ui, path, content, 0);
-                                } else if has_reasoning {
-                                    ui.add_space(8.0);
-                                    ui.label(
-                                        RichText::new("Thinking...")
+                                        RichText::new(&r.status)
                                             .size(12.0)
                                             .color(theme().text_muted),
                                     );
-                                    ui.add_space(4.0);
+                                    ui.add_space(8.0);
                                 }
                             }
                         }
@@ -258,7 +230,9 @@ pub fn show(
 
             // Use scroll_resp.state directly instead of manual persistence round-trips.
             let max_y = (scroll_resp.content_size.y - scroll_resp.inner_rect.height()).max(0.0);
-            panel_state.user_scrolled_up = scroll_resp.state.offset.y < max_y - 20.0;
+            // Follow behavior: only treat the user as scrolled up once they move
+            // away from the bottom (~1px epsilon). Any upward input breaks follow.
+            panel_state.user_scrolled_up = scroll_resp.state.offset.y < max_y - 1.0;
             // Force scroll to bottom when within 20px threshold so new content
             // (user, assistant, or tool) appears right away.
             if !panel_state.user_scrolled_up && scroll_resp.state.offset.y < max_y {

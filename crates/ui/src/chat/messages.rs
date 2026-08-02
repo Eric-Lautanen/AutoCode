@@ -100,7 +100,16 @@ pub(crate) fn show_assistant_content(
                 });
             ui.add_space(6.0);
         }
-        render_markdown(ui, &sanitize_display_text(&msg.content), true, false);
+        if !msg.content.trim().is_empty() {
+            Frame::NONE
+                .fill(theme().assistant_bubble_fill)
+                .corner_radius(ROUND_MD)
+                .stroke(Stroke::new(1.0, theme().assistant_bubble_stroke))
+                .inner_margin(Margin::symmetric(12, 8))
+                .show(ui, |ui| {
+                    render_markdown(ui, &sanitize_display_text(&msg.content), true, false);
+                });
+        }
     });
 }
 
