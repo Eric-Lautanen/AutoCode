@@ -84,6 +84,12 @@ pub struct ProjectMeta {
     /// supports thinking and lists this effort as valid.
     #[serde(default)]
     pub project_reasoning_effort: String,
+    /// Project-level default: should new sessions in this project show AI
+    /// reasoning inline by default? Applied at session-creation time only;
+    /// the session's own `show_reasoning_inline` (session.json) is the
+    /// runtime source of truth.
+    #[serde(default)]
+    pub project_show_reasoning_inline: bool,
 }
 
 impl Default for ProjectMeta {
@@ -97,6 +103,7 @@ impl Default for ProjectMeta {
             project_task_list: TodoList::default(),
             project_thinking_mode: false,
             project_reasoning_effort: String::new(),
+            project_show_reasoning_inline: false,
         }
     }
 }

@@ -77,6 +77,15 @@ pub fn sync_project_thinking_defaults(project: &Project, thinking: bool, effort:
     let _ = save_project_meta(project, &meta);
 }
 
+/// Mirror the user's inline-reasoning visibility choice into the project-level
+/// defaults (meta.json) so newly created sessions inherit it, matching how
+/// thinking_mode is propagated via sync_project_thinking_defaults.
+pub fn sync_project_show_reasoning_defaults(project: &Project, show: bool) {
+    let mut meta = load_project_meta(project).unwrap_or_default();
+    meta.project_show_reasoning_inline = show;
+    let _ = save_project_meta(project, &meta);
+}
+
 fn project_dir(data_dir_name: &str) -> PathBuf {
     fsutil::exe_dir()
         .join("AutoCode_data")

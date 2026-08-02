@@ -698,26 +698,28 @@ impl AppState {
         if let Some(ref pid) = sess.project_id
             && let Some(proj) = self.projects.iter().find(|p| &p.id == pid)
             && let Some(meta) = crate::storage::load_project_meta(proj)
-            && meta.project_thinking_mode
         {
-            let kind = self.active_provider().map(|p| p.kind.clone());
-            let model = self
-                .active_provider()
-                .map(|p| p.model.clone())
-                .unwrap_or_default();
-            let can_think = self.active_provider().is_some_and(|p| {
-                p.thinking_api.supports_thinking()
-                    || p.thinking_overrides.iter().any(|(k, _)| k != "off")
-            });
-            if can_think && let Some(ref kind) = kind {
-                sess.thinking_mode = true;
-                let available = crate::helpers::reasoning_efforts_for_provider(kind, &model);
-                if !meta.project_reasoning_effort.is_empty()
-                    && available.contains(&meta.project_reasoning_effort)
-                {
-                    sess.reasoning_effort = meta.project_reasoning_effort;
-                } else if let Some(first) = available.first() {
-                    sess.reasoning_effort = first.clone();
+            sess.show_reasoning_inline = meta.project_show_reasoning_inline;
+            if meta.project_thinking_mode {
+                let kind = self.active_provider().map(|p| p.kind.clone());
+                let model = self
+                    .active_provider()
+                    .map(|p| p.model.clone())
+                    .unwrap_or_default();
+                let can_think = self.active_provider().is_some_and(|p| {
+                    p.thinking_api.supports_thinking()
+                        || p.thinking_overrides.iter().any(|(k, _)| k != "off")
+                });
+                if can_think && let Some(ref kind) = kind {
+                    sess.thinking_mode = true;
+                    let available = crate::helpers::reasoning_efforts_for_provider(kind, &model);
+                    if !meta.project_reasoning_effort.is_empty()
+                        && available.contains(&meta.project_reasoning_effort)
+                    {
+                        sess.reasoning_effort = meta.project_reasoning_effort;
+                    } else if let Some(first) = available.first() {
+                        sess.reasoning_effort = first.clone();
+                    }
                 }
             }
         }

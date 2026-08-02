@@ -78,6 +78,16 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                         .clicked()
                     {
                         state.show_reasoning_inline = !state.show_reasoning_inline;
+                        // Mirror the choice into project-level defaults so new
+                        // sessions in this project inherit it, matching how the
+                        // thinking toggle persists between sessions.
+                        if let Some(pid) = state.active_project_id.clone()
+                            && let Some(proj) = state.projects.iter().find(|p| p.id == pid)
+                        {
+                            autocode_core::storage::sync_project_show_reasoning_defaults(
+                                proj, state.show_reasoning_inline,
+                            );
+                        }
                     }
 
                     // LRU looping window toggle.
