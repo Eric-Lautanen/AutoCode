@@ -482,24 +482,15 @@ pub fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     let Some(sess) = state.sessions.iter().find(|s| s.id == *sid) else {
         return;
     };
-    let label = if !sess.provider_label.is_empty() {
-        &sess.provider_label
-    } else {
-        &state.active_provider
-    };
-    let Some(p) = state.providers.get(label) else {
+    let used = sess.usage_tokens();
+    let Some((max, _handoff_pct, threshold)) =
+        super::session_ops::handoff_usage_for_session(state, sid)
+    else {
         return;
     };
-    let max = p.max_context_tokens as usize;
-    let handoff_pct = p.handoff_percent.min(100) as usize;
-    // Same formula as session_messages_usage so the handoff decision
-    // matches what the user sees: provider actual count plus the estimate
-    // of only the messages added since the last API response.
-    let used = sess.usage_tokens();
     if max == 0 {
         return;
     }
-    let threshold = (max * handoff_pct) / 100;
     if used < threshold {
         runtime.handoff_trigger_sent = false;
         return;

@@ -143,7 +143,7 @@ pub fn prepare_request_messages_for_session(
         sess.estimated_full_tokens = full_tokens;
     }
 
-    full_messages
+    let mut messages: Vec<ApiMessage> = full_messages
         .iter()
         .filter(|m| m.role != Role::Error)
         .enumerate()
@@ -154,7 +154,35 @@ pub fn prepare_request_messages_for_session(
             }
             msg
         })
-        .collect()
+        .collect();
+
+    // Append a live snapshot of the current session state so the model always
+    // has the freshest figure. Per-message stamps are historical snapshots
+    // captured at push time and quickly go stale once a new API response
+    // updates actual_tokens_used. The usage figure and handoff threshold are
+    // the exact values the auto-handoff decision uses.
+    let (ctx_used, ctx_max, _, max_output, handoff_threshold, handoff_pct) =
+        super::session_ops::context_usage_info_for_session(state, session_id);
+    messages.push(ApiMessage {
+        role: "system".into(),
+        content: format!(
+            "Current session state: Time: {} UTC | {}",
+            helpers::format_now_utc(),
+            super::session_ops::format_context_usage(
+                ctx_used,
+                ctx_max,
+                max_output,
+                handoff_threshold,
+                handoff_pct,
+            ),
+        ),
+        tool_call_id: None,
+        tool_calls: None,
+        cache_control: false,
+        reasoning_content: None,
+    });
+
+    messages
 }
 
 /// Delete a session by id.

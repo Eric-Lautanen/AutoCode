@@ -18,42 +18,32 @@ pub fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: 
     let Some(sid) = session_id.map(|s| s.to_string()) else {
         return;
     };
-    // Inject the current wall-clock time and live context-window usage into
-    // every user message, assistant text response, and tool result so the model
-    // sees both throughout the conversation. Pure tool-call assistant messages
-    // (empty content) are left untouched so callers can still detect "the model
-    // produced no visible text" (e.g. the already_responded check). Error
-    // messages are display-only and skipped.
+    // Stamp the current wall-clock time into every user message, assistant text
+    // response, and tool result so the model can reason about ordering
+    // throughout the conversation. Context-window usage is intentionally NOT
+    // baked in here: a push-time snapshot is stale by the time the model reads
+    // it. The live usage figure is appended once per request by
+    // prepare_request_messages_for_session, which shares the same usage_tokens()
+    // source the toolbar uses, so both always derive from the same truth. Pure
+    // tool-call assistant messages (empty content) are left untouched so
+    // callers can still detect "the model produced no visible text" (e.g. the
+    // already_responded check). Error messages are display-only and skipped.
     match msg.role {
         Role::User => {
             if !msg.content.is_empty() {
-                let (ctx_used, ctx_max, _, max_output) =
-                    context_usage_info_for_session(state, &sid);
-                msg.content.push_str(&format!(
-                    "\nTime: {} UTC | {}",
-                    crate::helpers::format_now_utc(),
-                    format_context_usage(ctx_used, ctx_max, max_output),
-                ));
+                msg.content
+                    .push_str(&format!("\nTime: {} UTC", crate::helpers::format_now_utc(),));
             }
         }
         Role::Assistant => {
             if !msg.content.trim().is_empty() {
-                let (ctx_used, ctx_max, _, max_output) =
-                    context_usage_info_for_session(state, &sid);
-                msg.content.push_str(&format!(
-                    "\nTime: {} UTC | {}",
-                    crate::helpers::format_now_utc(),
-                    format_context_usage(ctx_used, ctx_max, max_output),
-                ));
+                msg.content
+                    .push_str(&format!("\nTime: {} UTC", crate::helpers::format_now_utc(),));
             }
         }
         Role::Tool => {
-            let (ctx_used, ctx_max, _, max_output) = context_usage_info_for_session(state, &sid);
-            msg.content.push_str(&format!(
-                "\nTime: {} UTC | {}",
-                crate::helpers::format_now_utc(),
-                format_context_usage(ctx_used, ctx_max, max_output),
-            ));
+            msg.content
+                .push_str(&format!("\nTime: {} UTC", crate::helpers::format_now_utc(),));
         }
         _ => {}
     }
@@ -431,24 +421,32 @@ pub fn project_root_for_session(state: &AppState, session_id: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Max context window, handoff percentage, and handoff threshold for a
+/// session's provider. Single source of truth for the auto-handoff decision
+/// (check_auto_handoff) and the model-facing usage line, so the two can never
+/// disagree even when handoff_percent is overridden per-model in settings.
+pub fn handoff_usage_for_session(
+    state: &AppState,
+    session_id: &str,
+) -> Option<(usize, usize, usize)> {
+    let sess = state.sessions.iter().find(|s| s.id == session_id)?;
+    let label = if !sess.provider_label.is_empty() {
+        &sess.provider_label
+    } else {
+        &state.active_provider
+    };
+    let p = state.providers.get(label)?;
+    let max = p.max_context_tokens as usize;
+    let pct = p.handoff_percent.min(100) as usize;
+    Some((max, pct, (max * pct) / 100))
+}
+
 pub fn context_usage_info_for_session(
     state: &AppState,
     session_id: &str,
-) -> (usize, usize, usize, usize) {
-    let max = state
-        .sessions
-        .iter()
-        .find(|s| s.id == session_id)
-        .and_then(|s| {
-            let label = if !s.provider_label.is_empty() {
-                &s.provider_label
-            } else {
-                &state.active_provider
-            };
-            state.providers.get(label)
-        })
-        .map(|p| p.max_context_tokens as usize)
-        .unwrap_or(128_000);
+) -> (usize, usize, usize, usize, usize, usize) {
+    let (max, handoff_pct, handoff_threshold) =
+        handoff_usage_for_session(state, session_id).unwrap_or((128_000, 80, 102_400));
     let used = state
         .sessions
         .iter()
@@ -478,16 +476,24 @@ pub fn context_usage_info_for_session(
             defs.max_output_tokens as usize
         })
         .unwrap_or(4096);
-    (used, max, pct.min(100), max_output)
+    (used, max, pct, max_output, handoff_threshold, handoff_pct)
 }
 
-/// Format context usage info for model-facing tool results.
-/// Single source of truth for the "Context: X/Y tokens (Z%) | Max output: N" string.
-pub fn format_context_usage(ctx_used: usize, ctx_max: usize, max_output: usize) -> String {
+/// Format context usage info for the model-facing per-request line.
+/// Reports the same usage figure the auto-handoff decision uses plus the
+/// settings-dependent handoff threshold, so the model knows exactly when a
+/// handoff triggers.
+pub fn format_context_usage(
+    ctx_used: usize,
+    ctx_max: usize,
+    max_output: usize,
+    handoff_threshold: usize,
+    handoff_pct: usize,
+) -> String {
     let pct = (ctx_used * 100 / ctx_max.max(1)).min(100);
     format!(
-        "Context: {}/{} tokens ({}%) | Max output: {}",
-        ctx_used, ctx_max, pct, max_output
+        "Context: {}/{} tokens ({}%) | Handoff @ {} tokens ({}%) | Max output: {}",
+        ctx_used, ctx_max, pct, handoff_threshold, handoff_pct, max_output
     )
 }
 
