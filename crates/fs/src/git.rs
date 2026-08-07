@@ -1,7 +1,7 @@
 // git.rs -- Git status awareness for the file explorer.
 // Uses std::process::Command to shell out to git; no git2 dependency.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 use std::time::Instant;
@@ -29,6 +29,11 @@ type CacheEntry = (Instant, Option<StatusTuple>);
 
 static GIT_STATUS_CACHE: LazyLock<Mutex<HashMap<PathBuf, CacheEntry>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Repo roots currently being refreshed by a background thread, so the UI
+/// thread never blocks on `git status` and we don't spawn a thread per frame.
+static GIT_REFRESH_IN_FLIGHT: LazyLock<Mutex<HashSet<PathBuf>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
 
 const CACHE_TTL_SECS: u64 = 5;
 
@@ -151,30 +156,60 @@ pub fn aggregate_dir_status(
     dir_statuses
 }
 
-/// Get cached git status for a repo root, refreshing if stale.
-/// Caches both successful results and "not a repo" outcomes.
+/// Get cached git status for a repo root.
+/// Never blocks the caller: when the cache is stale or empty, the last-known
+/// status (if any) is returned immediately and a background thread refreshes
+/// the cache. Caches both successful results and "not a repo" outcomes.
 pub fn get_cached_git_status(repo_root: &Path) -> Option<StatusTuple> {
+    let key = normalize_cache_key(repo_root);
+
     // Fast path: valid cached entry.
     if let Ok(cache) = GIT_STATUS_CACHE.lock()
-        && let Some((expiry, cached)) = cache.get(repo_root)
+        && let Some((expiry, cached)) = cache.get(&key)
         && Instant::now() < *expiry
     {
         return cached.clone();
     }
 
-    // Cache miss or expired — run git.
-    let result = get_git_status(repo_root).map(|file_statuses| {
-        let dir_statuses = aggregate_dir_status(&file_statuses);
-        (file_statuses, dir_statuses)
+    // Grab the last-known value (possibly stale) to serve immediately.
+    let last_known = match GIT_STATUS_CACHE.lock() {
+        Ok(cache) => cache.get(&key).and_then(|(_, cached)| cached.clone()),
+        Err(poisoned) => {
+            GIT_STATUS_CACHE.clear_poison();
+            poisoned
+                .into_inner()
+                .get(&key)
+                .and_then(|(_, cached)| cached.clone())
+        }
+    };
+
+    // Kick off a background refresh unless one is already running for this repo.
+    let mut in_flight = GIT_REFRESH_IN_FLIGHT.lock().unwrap_or_else(|p| {
+        GIT_REFRESH_IN_FLIGHT.clear_poison();
+        p.into_inner()
     });
-
-    // Store in cache (including None for non-repos / no git).
-    if let Ok(mut cache) = GIT_STATUS_CACHE.lock() {
-        let expiry = Instant::now() + std::time::Duration::from_secs(CACHE_TTL_SECS);
-        cache.insert(repo_root.to_path_buf(), (expiry, result.clone()));
+    if in_flight.insert(key.clone()) {
+        let repo = repo_root.to_path_buf();
+        std::thread::Builder::new()
+            .name("git-status".into())
+            .spawn(move || {
+                let result = get_git_status(&repo).map(|file_statuses| {
+                    let dir_statuses = aggregate_dir_status(&file_statuses);
+                    (file_statuses, dir_statuses)
+                });
+                if let Ok(mut cache) = GIT_STATUS_CACHE.lock() {
+                    let expiry = Instant::now() + std::time::Duration::from_secs(CACHE_TTL_SECS);
+                    cache.insert(normalize_cache_key(&repo), (expiry, result));
+                }
+                if let Ok(mut in_flight) = GIT_REFRESH_IN_FLIGHT.lock() {
+                    in_flight.remove(&normalize_cache_key(&repo));
+                }
+            })
+            .ok();
     }
+    drop(in_flight);
 
-    result
+    last_known
 }
 
 /// Strip the Windows `\\?\` extended-path prefix for cache-key consistency.
