@@ -689,6 +689,12 @@ impl AppState {
         let mut sess = Session::new(project_id, prov_label, model);
         sess.id = id.clone();
         sess.label = format!("S{}", id);
+        // Carry forward the todo/project-task panel visibility from the
+        // previously active session (or the global working copy) so a new
+        // session in the same project opens with the same panels open or
+        // closed as before. Loading of the actual list contents is unchanged.
+        sess.show_todo = self.show_todo;
+        sess.show_project_tasks = self.show_project_tasks;
 
         // Apply project-level thinking defaults if configured. The project
         // default only seeds new sessions; the session's own thinking_mode /

@@ -328,7 +328,6 @@ pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     if let Some(sess) = state.active_session_mut() {
         sess.handoff_enabled = handoff_was_enabled;
     }
-    state.show_todo = false;
 
     // Point the runtime at the new session before pushing messages.
     runtime.active_session_id = state.active_session_id.clone();
