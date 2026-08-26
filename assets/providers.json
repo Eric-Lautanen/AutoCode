@@ -75,6 +75,17 @@
             "off":  { "chat_template_kwargs": { "enable_thinking": false } }
           }
         },
+        "moonshotai/kimi-k3": {
+          "context_window": 262144, "max_output_tokens": 16384, "max_output_tokens_thinking": 32768,
+          "thinking_api": "off", "reasoning_efforts": ["low", "high", "max"],
+          "supports_cache_control": false, "requests_per_hour": 30,
+          "thinking_overrides": {
+            "low":  { "reasoning_effort": "low" },
+            "high": { "reasoning_effort": "high" },
+            "max":  { "reasoning_effort": "max" },
+            "off":  { "chat_template_kwargs": { "enable_thinking": false } }
+          }
+        },
         "deepseek-ai/deepseek-v4-flash": {
           "context_window": 1048576, "max_output_tokens": 65536, "max_output_tokens_thinking": 16384,
           "thinking_api": "off", "reasoning_efforts": ["high", "max"],
