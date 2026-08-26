@@ -113,6 +113,20 @@ impl LruPathCache {
         self.map.clear();
         self.order.clear();
     }
+
+    /// Iterate entries in least-recently-used order.
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &std::path::PathBuf)> {
+        self.order.iter().filter_map(|k| self.map.get_key_value(k))
+    }
+
+    /// Absorb every entry of `other` into this cache (LRU order preserved,
+    /// capacity respected). Used to fold per-worker batch caches back into
+    /// the runtime-owned cache after a parallel tool batch joins.
+    pub fn merge_from(&mut self, other: LruPathCache) {
+        for (k, v) in other.iter() {
+            self.insert(k.clone(), v.clone());
+        }
+    }
 }
 
 impl Default for LruPathCache {

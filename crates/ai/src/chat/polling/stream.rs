@@ -8,7 +8,6 @@ use super::super::session_ops::{
     persist_session_meta, project_root_for_session, push_error, push_runtime, push_to_session,
     sanitize_session_name,
 };
-use super::super::tools::{ToolExecCtx, build_tool_meta, execute_tool_with_cache};
 
 use super::shell::start_next_live_shell;
 use super::{append_to_pending, append_to_reasoning};
@@ -450,7 +449,6 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                     } else if args.get("keyword").and_then(|v| v.as_str()).is_some() {
                         tc.name = "get_skill".into();
                     }
-                    if !tc.name.is_empty() {}
                 }
             }
 
@@ -687,48 +685,28 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                 }
             }
 
-            // Execute non-shell tools on background thread.
+            // Execute non-shell tools on scoped parallel workers. The
+            // runtime's path cache is handed over; per-worker caches come
+            // back through the channel and are merged by poll_tool_results.
             if !other_calls.is_empty() {
-                let (tx, rx) = std::sync::mpsc::channel::<Vec<ToolResult>>();
+                let (tx, rx) = std::sync::mpsc::channel::<(
+                    Vec<ToolResult>,
+                    Vec<autocode_core::helpers::LruPathCache>,
+                )>();
                 runtime.tool_rx = Some(rx);
 
                 let mut path_cache = autocode_core::helpers::LruPathCache::new();
                 std::mem::swap(&mut path_cache, &mut runtime.path_cache);
 
-                let pr_clone = root.clone();
                 let calls_clone = other_calls.clone();
-                let fast_tools = [
-                    "read_file",
-                    "read_entire_file",
-                    "read_files",
-                    "write_file",
-                    "patch_file",
-                    "patch_lines",
-                    "delete_file",
-                    "rename_file",
-                    "create_dir",
-                    "list_dir",
-                    "glob",
-                    "todo_list",
-                    "get_skill",
-                ];
-                // Non-shell tools run in this batch; use a shorter timeout for
-                // pure file operations vs web/network tools that may take longer.
-                let _per_tool_timeout = if calls_clone
-                    .iter()
-                    .all(|tc| fast_tools.contains(&tc.name.as_str()))
-                {
-                    std::time::Duration::from_secs(state.tool_timeout_secs)
-                } else {
-                    std::time::Duration::from_secs(state.request_timeout_secs)
-                };
+                let pr_clone = root.clone();
                 let session_named = state
                     .sessions
                     .iter()
                     .find(|s| s.id == session_id)
                     .map(|s| s.session_named)
                     .unwrap_or(true);
-                // Clone the few sysinfo/setting values the tool needs before
+                // Clone the few sysinfo/setting values the tools need before
                 // moving into the spawned thread (a borrowed `&AppState` cannot
                 // escape into a `'static` thread closure).
                 let chrome_path = state.sysinfo.chrome_path.clone();
@@ -738,114 +716,22 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                 let current_todo = state.todo_list();
                 let current_project_tasks = state.project_task_list();
                 std::thread::spawn(move || {
-                    let mut results = Vec::with_capacity(calls_clone.len());
-                    for tc in &calls_clone {
-                        let start = std::time::Instant::now();
-
-                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            execute_tool_with_cache(ToolExecCtx {
-                                tc,
-                                project_root: &pr_clone,
-                                path_cache: &mut path_cache,
-                                allow_escape,
-                                session_named,
-                                chrome_path: chrome_path.clone(),
-                                use_headless_chrome,
-                                current_todo: current_todo.clone(),
-                                current_project_tasks: current_project_tasks.clone(),
-                            })
-                        }));
-                        let result = match result {
-                            Ok(r) => r,
-                            Err(e) => {
-                                let msg = format!(
-                                    "Tool '{}' panicked: {}",
-                                    tc.name,
-                                    autocode_core::helpers::panic_msg(&e)
-                                );
-                                crate::helpers::tool_error(
-                                    &msg,
-                                    "Re-read the file and try a smaller edit",
-                                )
-                            }
-                        };
-
-                        let duration_ms = start.elapsed().as_millis() as u64;
-                        crate::helpers::log_timing(|| {
-                            format!(
-                                "tool {} {} -> {}",
-                                tc.name,
-                                crate::helpers::format_duration(start.elapsed()),
-                                if result.starts_with("Error") {
-                                    "error"
-                                } else {
-                                    "ok"
-                                }
-                            )
-                        });
-                        let meta = build_tool_meta(
-                            tc,
-                            &result,
-                            duration_ms,
-                            &current_todo,
-                            &current_project_tasks,
-                        );
-                        let args: serde_json::Value =
-                            serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
-                        let accessed_paths = match tc.name.as_str() {
-                            "read_file" | "read_entire_file" | "write_file" | "patch_file"
-                            | "patch_lines" | "delete_file" | "list_dir" | "grep" | "glob"
-                            | "project_tree" | "create_dir" => args
-                                .get("path")
-                                .and_then(|v| v.as_str())
-                                .map(|p| vec![p.to_string()])
-                                .unwrap_or_default(),
-                            "read_files" => args
-                                .get("paths")
-                                .and_then(|v| v.as_array())
-                                .map(|a| {
-                                    a.iter()
-                                        .filter_map(|v| v.as_str().map(String::from))
-                                        .collect()
-                                })
-                                .unwrap_or_default(),
-                            "rename_file" => {
-                                let mut paths = Vec::new();
-                                if let Some(p) = args.get("from").and_then(|v| v.as_str()) {
-                                    paths.push(p.to_string());
-                                }
-                                if let Some(p) = args.get("to").and_then(|v| v.as_str()) {
-                                    paths.push(p.to_string());
-                                }
-                                paths
-                            }
-                            _ => vec![],
-                        };
-                        // A "read" action must never overwrite the stored list.
-                        // Only capture an update when the action is not "read".
-                        let is_read = args["action"].as_str() == Some("read");
-                        let todo_update = if tc.name == "todo_list" && !is_read {
-                            crate::helpers::parse_todo_from_tool_args(&args)
-                        } else {
-                            None
-                        };
-                        let project_todo_update = if tc.name == "project_task_list" && !is_read {
-                            crate::helpers::parse_project_task_from_tool_args(&args)
-                        } else {
-                            None
-                        };
-                        results.push(ToolResult {
-                            tool_call: tc.clone(),
-                            content: result.to_string(),
-                            meta,
-                            accessed_paths,
-                            todo_update,
-                            project_todo_update,
-                        });
-
-                        std::thread::yield_now();
-                    }
-                    if tx.send(results).is_err() {}
+                    let ctx = super::super::tools::BatchCtx {
+                        project_root: pr_clone,
+                        allow_escape,
+                        session_named,
+                        chrome_path,
+                        use_headless_chrome,
+                        current_todo,
+                        current_project_tasks,
+                    };
+                    let (results, caches) = super::super::tools::execute_batch(&calls_clone, &ctx);
+                    // Fold the pre-batch cache into the merge set so its
+                    // entries survive the swap above.
+                    let mut all = Vec::with_capacity(caches.len() + 1);
+                    all.push(path_cache);
+                    all.extend(caches);
+                    if tx.send((results, all)).is_err() {}
                 });
             }
 

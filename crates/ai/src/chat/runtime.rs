@@ -81,7 +81,7 @@ pub struct ChatRuntime {
     pub running_tasks: Vec<(String, Receiver<autocode_fs::shell::ShellEvent>, u32)>,
     pub status: String,
     pub active_session_id: Option<String>,
-    pub tool_rx: Option<Receiver<Vec<ToolResult>>>,
+    pub tool_rx: Option<Receiver<(Vec<ToolResult>, Vec<autocode_core::helpers::LruPathCache>)>>,
     pub path_cache: autocode_core::helpers::LruPathCache,
     pub pending_tool_calls: Vec<ToolCall>,
     pub assistant_tool_calls_json: Option<serde_json::Value>,

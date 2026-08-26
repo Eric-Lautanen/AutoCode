@@ -11,7 +11,7 @@ pub(super) fn poll_tool_results(state: &mut AppState, runtime: &mut ChatRuntime)
     };
 
     match rx.try_recv() {
-        Ok(results) => {
+        Ok((results, path_caches)) => {
             if let Some(start) = runtime.tool_batch_start {
                 crate::helpers::log_timing(|| {
                     format!(
@@ -22,6 +22,11 @@ pub(super) fn poll_tool_results(state: &mut AppState, runtime: &mut ChatRuntime)
                 });
             }
             runtime.tool_rx = None;
+            // Fold the pre-batch and per-worker caches back into the
+            // runtime-owned cache so cross-batch resolution reuse survives.
+            for cache in path_caches {
+                runtime.path_cache.merge_from(cache);
+            }
             runtime.live_tool_call = None;
             runtime.tool_batch_start = None;
             runtime.live_write_progress = None;
