@@ -189,7 +189,9 @@ pub fn prepare_request_messages_for_session(
     messages
 }
 
-/// Delete a session by id.
+/// Delete a session by id. Deleting a parent removes its whole folder tree
+/// recursively — including any agents/ subtree — and drops its agent
+/// sessions from RAM; their runtimes are reaped by update_all's zombie sweep.
 pub fn delete_session(state: &mut AppState, id: &str) {
     // Remove the on-disk file first.
     if let Some(sess) = state.sessions.iter().find(|s| s.id == id)
@@ -199,7 +201,9 @@ pub fn delete_session(state: &mut AppState, id: &str) {
         autocode_core::storage::delete_session_file(proj, sess);
     }
 
-    state.sessions.retain(|s| s.id != id);
+    state.sessions.retain(|s| {
+        s.id != id && s.agent.as_ref().map(|a| a.parent_session_id.as_str()) != Some(id)
+    });
     if state.active_session_id.as_deref() == Some(id) {
         state.active_session_id = None;
     }

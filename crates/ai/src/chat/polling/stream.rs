@@ -561,14 +561,15 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                 .map(|p| p.allow_project_escape)
                 .unwrap_or(false);
 
-            // Step 5: split name_session from everything else.
+            // Step 5: split name_session / spawn_agent from everything else.
             let mut name_session_calls: Vec<ToolCall> = Vec::new();
+            let mut spawn_agent_calls: Vec<ToolCall> = Vec::new();
             let mut normal_calls: Vec<ToolCall> = Vec::new();
             for tc in tool_calls {
-                if tc.name == "name_session" {
-                    name_session_calls.push(tc);
-                } else {
-                    normal_calls.push(tc);
+                match tc.name.as_str() {
+                    "name_session" => name_session_calls.push(tc),
+                    "spawn_agent" => spawn_agent_calls.push(tc),
+                    _ => normal_calls.push(tc),
                 }
             }
 
@@ -639,7 +640,7 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
 
             // If there are no remaining tool calls after name_session,
             // only continue if the model hadn't already produced text.
-            if normal_calls.is_empty() {
+            if normal_calls.is_empty() && spawn_agent_calls.is_empty() {
                 runtime.live_tool_call = None;
                 runtime.tool_batch_start = None;
                 let already_responded = state
@@ -651,6 +652,61 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                 if !already_responded {
                     start_completion(state, runtime);
                 }
+                return true;
+            }
+
+            // Spawn sub-agents (D3/D10). Accepted calls park an AgentHandle;
+            // the parent stays busy until every handle settles. Rejections
+            // get their error ToolResult immediately so the call is answered.
+            let mut rejected_spawns: Vec<(ToolCall, String)> = Vec::new();
+            for tc in spawn_agent_calls {
+                if runtime.pending_agents.len() >= super::super::agents::MAX_CONCURRENT_AGENTS {
+                    let args: serde_json::Value =
+                        serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
+                    let goal = args["goal"].as_str().unwrap_or("").to_string();
+                    rejected_spawns.push((
+                        tc,
+                        format!(
+                            "agent limit ({}) reached. Wait for a running agent to finish, then retry{}.",
+                            super::super::agents::MAX_CONCURRENT_AGENTS,
+                            if goal.is_empty() {
+                                ".".to_string()
+                            } else {
+                                format!(" with goal: {}", goal)
+                            }
+                        ),
+                    ));
+                    continue;
+                }
+                match super::super::agents::prepare_spawn(state, runtime, &tc) {
+                    Ok(agent_sid) => {
+                        runtime
+                            .pending_agents
+                            .push(super::super::runtime::AgentHandle {
+                                tool_call_id: tc.id.clone(),
+                                agent_session_id: agent_sid,
+                                started: std::time::Instant::now(),
+                                result: None,
+                            });
+                    }
+                    Err(reason) => rejected_spawns.push((tc, reason)),
+                }
+            }
+            for (tc, reason) in rejected_spawns {
+                let mut msg =
+                    ChatMessage::new(Role::Tool, format!("spawn_agent rejected: {}", reason));
+                msg.tool_call_id = Some(tc.id.clone());
+                msg.tool_meta = Some(ToolMeta {
+                    tool_name: "spawn_agent".into(),
+                    is_error: true,
+                    ..Default::default()
+                });
+                push_to_session(state, runtime.active_session_id.as_deref(), msg);
+            }
+
+            // Agents-only batch: nothing else to execute; the settlement pass
+            // commits results and resumes the parent when children finish.
+            if normal_calls.is_empty() {
                 return true;
             }
 

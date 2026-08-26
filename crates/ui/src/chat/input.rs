@@ -150,12 +150,16 @@ pub(crate) fn show_input_row(
                             .min_size(Vec2::new(72.0, 36.0));
 
                             if ui.add(stop_btn).clicked()
-                                && let Some(r) =
-                                    active_sid.as_ref().and_then(|sid| runtimes.get_mut(sid))
+                                && let Some(sid) = active_sid.clone()
                             {
-                                r.stopped_by_user = true;
-                                r.drain();
-                                r.status = "Stopped.".into();
+                                // Cancel any running sub-agents first so their
+                                // results land before the runtime drains.
+                                chat::settle_agents_on_stop(state, runtimes, &sid);
+                                if let Some(r) = runtimes.get_mut(&sid) {
+                                    r.stopped_by_user = true;
+                                    r.drain();
+                                    r.status = "Stopped.".into();
+                                }
                             }
                         } else {
                             let send_btn = egui::Button::new(

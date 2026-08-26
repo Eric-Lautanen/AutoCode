@@ -469,7 +469,8 @@ pub fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     {
         return;
     }
-    if runtime.live_shell_rx.is_some() {
+    // D9.2: never fire mid-wait for spawned agents.
+    if runtime.live_shell_rx.is_some() || !runtime.pending_agents.is_empty() {
         return;
     }
     let Some(sid) = runtime.active_session_id.as_ref() else {

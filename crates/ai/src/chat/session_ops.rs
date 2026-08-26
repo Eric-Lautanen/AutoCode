@@ -133,6 +133,8 @@ pub fn replay_to_message(
         .retain(|(sid, _)| sid != session_id);
 
     // Kill any active stream/tools for this session.
+    // Cancel spawned agents first so their tool results land before the drain.
+    super::agents::settle_agents_on_stop(state, runtimes, session_id);
     if let Some(runtime) = runtimes.get_mut(session_id) {
         runtime.drain();
         // Replay is equivalent to Stop: suppress auto-handoff re-trigger

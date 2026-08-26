@@ -32,6 +32,12 @@ pub(super) fn poll_tool_results(state: &mut AppState, runtime: &mut ChatRuntime)
             runtime.live_write_progress = None;
 
             if still_owns_session(runtime, state) {
+                // Sub-agents of this batch are still running: stash the
+                // results; the settlement pass commits everything together.
+                if runtime.agents_pending() {
+                    runtime.pending_tool_results.extend(results);
+                    return true;
+                }
                 let has_handoff = results.iter().any(|r| r.content.starts_with("HANDOFF:"));
                 let session_handoff =
                     state.handoff_enabled_for(runtime.active_session_id.as_deref());
@@ -145,8 +151,9 @@ pub(super) fn commit_tool_results(state: &mut AppState, runtime: &mut ChatRuntim
         runtime.live_write_progress = None;
         runtime.status = format!("{} tool(s) complete.", count);
 
-        // Only continue if non-shell tools are also done.
-        if runtime.tool_rx.is_none() {
+        // Only continue if non-shell tools are also done and every spawned
+        // agent has settled (the settlement pass resumes otherwise).
+        if runtime.tool_rx.is_none() && !runtime.agents_pending() {
             start_completion(state, runtime);
         }
     } else if !still_owns_session(runtime, state) {

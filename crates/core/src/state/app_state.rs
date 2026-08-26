@@ -298,6 +298,11 @@ pub struct AppState {
     #[serde(skip)]
     pub runtime_sessions: std::collections::HashSet<String>,
 
+    /// Agent session ids awaiting ChatRuntime creation (the map itself is
+    /// owned by the UI pump, which drains this each frame).
+    #[serde(skip)]
+    pub pending_agent_runtimes: Vec<String>,
+
     /// Set to true when the session's provider_label or model changes
     /// in the UI so the main loop can persist the session meta to disk.
     #[serde(skip)]
@@ -358,6 +363,7 @@ impl Default for AppState {
             disk_write_rate_ms: crate::helpers::default_disk_write_rate_ms(),
             pending_writes: PendingWrites::new(),
             runtime_sessions: std::collections::HashSet::new(),
+            pending_agent_runtimes: Vec::new(),
             session_meta_dirty: false,
         }
     }

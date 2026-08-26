@@ -72,6 +72,28 @@ pub struct ToolResult {
     pub project_todo_update: Option<(String, Vec<TodoItem>)>,
 }
 
+/// Parent-side tracker for one outstanding `spawn_agent` tool call. The child
+/// itself is a normal Session + ChatRuntime polled by update_all; this handle
+/// links its parent's tool_call id to the agent session and carries the
+/// settled result until the whole batch commits (D3/D9).
+#[derive(Clone)]
+pub struct AgentHandle {
+    pub tool_call_id: String,
+    /// The agent's session id (= key of its ChatRuntime).
+    pub agent_session_id: String,
+    pub started: std::time::Instant,
+    /// Set when the agent reaches a terminal state; the batch commits when
+    /// every handle carries a result.
+    pub result: Option<AgentOutcome>,
+}
+
+/// Final output of one sub-agent (D3: the agent's final assistant message).
+#[derive(Clone, Debug)]
+pub struct AgentOutcome {
+    pub content: String,
+    pub is_error: bool,
+}
+
 pub struct ChatRuntime {
     pub pending_response: String,
     /// Accumulated model reasoning (extended thinking). Stored separately
@@ -173,6 +195,10 @@ pub struct ChatRuntime {
     /// pending content), we inject a "Continue" user message and re-issue the
     /// request instead of stalling or erroring out.
     pub got_response_this_turn: bool,
+    /// Outstanding sub-agent spawns for the current tool-call batch (D3).
+    /// Non-empty keeps the runtime busy so no user input can wedge itself
+    /// between the parent's assistant tool_calls and their results.
+    pub pending_agents: Vec<AgentHandle>,
     /// Freshness watermark for the preflight counting call: the session's
     /// next_message_id captured when Done last reported prompt_tokens. When
     /// fewer than PREFLIGHT_FRESH_MESSAGES messages have been appended since
@@ -231,6 +257,7 @@ impl Default for ChatRuntime {
             repeat_batch_count: 0,
             pending_loop_warning: false,
             got_response_this_turn: false,
+            pending_agents: Vec::new(),
             usage_watermark: None,
         }
     }
@@ -243,6 +270,12 @@ impl ChatRuntime {
             || self.live_shell_rx.is_some()
             || self.live_write_progress.is_some()
             || self.retry_after.is_some()
+            || !self.pending_agents.is_empty()
+    }
+
+    /// True while any spawned agent of the current batch is still unresolved.
+    pub fn agents_pending(&self) -> bool {
+        self.pending_agents.iter().any(|h| h.result.is_none())
     }
 
     pub fn drain(&mut self) {
@@ -298,6 +331,10 @@ impl ChatRuntime {
         self.pending_loop_warning = false;
         self.got_response_this_turn = false;
         self.usage_watermark = None;
+        // Sub-agent handles are settled by the caller (settle_pending_agents
+        // needs AppState to cancel children and push error results); drain
+        // only guarantees the runtime stops waiting on them.
+        self.pending_agents.clear();
 
         // Force deallocation of large buffers (clear + shrink once each).
         self.pending_response.clear();

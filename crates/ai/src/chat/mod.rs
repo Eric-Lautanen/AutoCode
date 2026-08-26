@@ -1,11 +1,12 @@
 // Re-export public API from submodules
+pub use agents::{cancel_agent, settle_agents_on_stop};
 pub use completion::{
     auto_continue, auto_execute, check_auto_handoff, handle_handoff, send_message, start_completion,
 };
 pub use errors::{fix_provider_params, shorten_err};
 pub use looping::apply_looping_window;
 pub use polling::{update_all, update_runtime};
-pub use runtime::{BlinkKind, ChatRuntime, NetworkStatus, ToolResult};
+pub use runtime::{AgentHandle, AgentOutcome, BlinkKind, ChatRuntime, NetworkStatus, ToolResult};
 pub use session::{delete_session, ensure_session};
 pub use session_ops::{
     abort_for_session, context_usage_info_for_session, format_context_usage,
@@ -16,6 +17,7 @@ pub use tools::{
     ToolExecCtx, build_tool_meta, execute_tool_with_cache, file_tool_meta, kill_process,
 };
 
+mod agents;
 mod completion;
 mod errors;
 mod looping;
