@@ -35,6 +35,7 @@ pub(crate) fn save_old_session(
             old_sess.show_project_tasks = state.show_project_tasks;
         }
         old_sess.draft_input = panel_state.input.clone();
+        old_sess.draft_attachments = std::mem::take(&mut panel_state.pending_attachments);
         old_sess.handoff_enabled = state.handoff_enabled;
         old_sess.looping_window = looping_window;
         old_sess.show_explorer = state.show_explorer;
@@ -147,6 +148,7 @@ pub(crate) fn load_new_session(
             state.show_todo = new_sess.show_todo;
             state.todo_user_dismissed = new_sess.todo_user_dismissed;
             panel_state.input = new_sess.draft_input.clone();
+            panel_state.pending_attachments = new_sess.draft_attachments.clone();
             state.handoff_enabled = new_sess.handoff_enabled;
             state.show_explorer = new_sess.show_explorer;
             state.settings_open = new_sess.settings_open;

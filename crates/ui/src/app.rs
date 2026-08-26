@@ -46,6 +46,7 @@ pub struct AutocodeApp {
     pub explorer_panel: ExplorerPanelState,
     pub settings: SettingsState,
     folder_picker: Option<std::sync::mpsc::Receiver<Option<String>>>,
+    file_picker: Option<std::sync::mpsc::Receiver<Vec<String>>>,
     repaint_scheduled: bool,
     sysinfo_rx: Option<std::sync::mpsc::Receiver<autocode_core::utils::sysinfo::SysInfo>>,
     prev_session_id: Option<String>,
@@ -86,6 +87,7 @@ impl AutocodeApp {
             explorer_panel: ExplorerPanelState::default(),
             settings: SettingsState::default(),
             folder_picker: None,
+            file_picker: None,
             repaint_scheduled: false,
             sysinfo_rx,
             prev_session_id: None,
@@ -376,6 +378,39 @@ impl eframe::App for AutocodeApp {
                 self.prev_session_id = self.state.active_session_id.clone();
             }
         }
+
+        // Attachment file picker: spawn rfd on a thread (same pattern as the
+        // folder picker), stage results into the active session.
+        if helpers::take_temp_bool(ctx, helpers::data::OPEN_FILE_PICKER)
+            && self.file_picker.is_none()
+        {
+            let (tx, rx) = std::sync::mpsc::channel::<Vec<String>>();
+            self.file_picker = Some(rx);
+            std::thread::spawn(move || {
+                let picked: Vec<String> = rfd::FileDialog::new()
+                    .set_title("Attach Files")
+                    .pick_files()
+                    .map(|files| {
+                        files
+                            .into_iter()
+                            .map(|p| p.to_string_lossy().to_string())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let _ = tx.send(picked);
+            });
+        }
+        if let Some(rx) = &self.file_picker
+            && let Ok(paths) = rx.try_recv()
+        {
+            self.file_picker = None;
+            if !paths.is_empty() {
+                for err in crate::chat::stage_paths(&mut self.state, &mut self.chat_panel, &paths) {
+                    eprintln!("[attachments] {}", err);
+                }
+            }
+            ctx.request_repaint();
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -466,6 +501,7 @@ impl eframe::App for AutocodeApp {
                 sess.show_reasoning_inline = show_reasoning_inline;
                 sess.show_project_tasks = show_project_tasks;
                 sess.draft_input = self.chat_panel.input.clone();
+                sess.draft_attachments = self.chat_panel.pending_attachments.clone();
             }
         }
         self.save_sessions();
@@ -508,6 +544,7 @@ impl eframe::App for AutocodeApp {
                 sess.show_reasoning_inline = show_reasoning_inline;
                 sess.show_project_tasks = show_project_tasks;
                 sess.draft_input = self.chat_panel.input.clone();
+                sess.draft_attachments = self.chat_panel.pending_attachments.clone();
             }
         }
         self.save_sessions();

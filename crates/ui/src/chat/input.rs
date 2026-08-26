@@ -27,6 +27,8 @@ pub(crate) fn show_input_row(
         })
         .show(ui, |ui| {
             ui.push_id(panel_state.input_scope_id, |ui| {
+                // Pending attachment chips sit above the input box.
+                super::attachments::show_pending_chips(ui, state, panel_state);
                 ui.horizontal(|ui| {
                     let active_sid = state.active_session_id.clone();
                     let busy = active_sid.as_ref().is_some_and(|sid| {
@@ -34,8 +36,28 @@ pub(crate) fn show_input_row(
                             .get(sid)
                             .is_some_and(|r| r.is_busy() || r.retry_after.is_some())
                     });
-                    let input_w = (ui.available_width() - 256.0).max(0.0);
+                    let input_w = (ui.available_width() - 288.0).max(0.0);
                     let send_enabled = !panel_state.input.trim().is_empty() && !busy;
+
+                    // "+" attach button — leftmost in the input row.
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new("+").size(16.0).color(theme().text_secondary),
+                            )
+                            .fill(Color32::TRANSPARENT)
+                            .stroke(Stroke::new(1.0, theme().border))
+                            .min_size(Vec2::new(32.0, 36.0)),
+                        )
+                        .on_hover_text("Attach files")
+                        .clicked()
+                    {
+                        crate::helpers::set_temp_bool(
+                            ui.ctx(),
+                            crate::helpers::data::OPEN_FILE_PICKER,
+                            true,
+                        );
+                    }
 
                     let resp = ScrollArea::vertical()
                         .id_salt(panel_state.input_scroll_id)
@@ -182,7 +204,8 @@ pub(crate) fn show_input_row(
                                     panel_state.input.pop();
                                 }
                                 let text = std::mem::take(&mut panel_state.input);
-                                chat::send_message(state, runtimes, text, Vec::new());
+                                let atts = std::mem::take(&mut panel_state.pending_attachments);
+                                chat::send_message(state, runtimes, text, atts);
                                 panel_state.scroll_to_bottom = true;
                                 panel_state.user_scrolled_up = false;
                             }

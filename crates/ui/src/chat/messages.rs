@@ -1,13 +1,16 @@
 // messages.rs -- User bubble, assistant content, live reasoning, empty state.
 
 use egui::{Color32, Frame, Margin, RichText, Stroke};
+use std::path::PathBuf;
 
 use crate::theme::ROUND_MD;
 use crate::theme::ROUND_SM;
 use autocode_core::helpers::sanitize_display_text;
 use autocode_core::state::{AppState, ChatMessage};
 
+use super::attachments::show_bubble_attachments;
 use super::markdown::render_markdown;
+use super::state::ChatPanelState;
 use super::theme::theme;
 
 pub(crate) fn empty_state(ui: &mut egui::Ui, state: &AppState) {
@@ -27,7 +30,13 @@ pub(crate) fn empty_state(ui: &mut egui::Ui, state: &AppState) {
     });
 }
 
-pub(crate) fn show_user_bubble(ui: &mut egui::Ui, msg: &ChatMessage, panel_w: f32) -> bool {
+pub(crate) fn show_user_bubble(
+    ui: &mut egui::Ui,
+    msg: &ChatMessage,
+    panel_w: f32,
+    panel_state: &mut ChatPanelState,
+    att_dir: Option<PathBuf>,
+) -> bool {
     let max_w = (panel_w * 0.72).max(240.0);
     let clicked = std::cell::Cell::new(false);
     ui.push_id(msg.id, |ui| {
@@ -35,6 +44,7 @@ pub(crate) fn show_user_bubble(ui: &mut egui::Ui, msg: &ChatMessage, panel_w: f3
             ui.add_space(8.0);
             ui.vertical(|ui| {
                 ui.set_max_width(max_w);
+                show_bubble_attachments(ui, msg, panel_state, att_dir);
                 let frame_resp = Frame::NONE
                     .fill(theme().user_bubble_fill)
                     .corner_radius(ROUND_MD)

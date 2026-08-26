@@ -2,6 +2,7 @@
 // Session tab bar + message bubbles + markdown renderer with syntax
 // highlighting + collapsible tool cards with diff views.
 
+mod attachments;
 mod code_block;
 mod diff_view;
 mod input;
@@ -14,6 +15,8 @@ mod state;
 mod tabs;
 mod theme;
 mod tool_result;
+
+pub(crate) use attachments::stage_paths;
 
 pub use panel::show;
 pub use state::ChatPanelState;

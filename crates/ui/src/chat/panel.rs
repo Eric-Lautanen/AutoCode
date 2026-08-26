@@ -9,7 +9,7 @@ use autocode_core::state::{AppState, Role};
 
 use super::input::show_input_row;
 use super::live::show_live_turn;
-use super::messages::{empty_state, show_assistant_content, show_user_bubble};
+use super::messages::{empty_state, show_assistant_content};
 use super::session::{
     handle_purge_on_missing, load_new_session, restore_scroll_offset, save_old_session,
 };
@@ -157,10 +157,29 @@ pub fn show(
                                 |ui| {
                                     let show_reasoning = state.show_reasoning_inline;
                                     let sid = active_sid.as_deref().unwrap_or("");
-                                    for (i, msg) in panel_state.display_buffer.iter().enumerate() {
+                                    // Staged-attachment dir for bubble thumbnails.
+                                    let att_dir: Option<std::path::PathBuf> = state
+                                        .active_session()
+                                        .and_then(|sess| {
+                                            sess.project_id.as_ref().and_then(|pid| {
+                                                state.projects.iter().find(|p| &p.id == pid).map(
+                                                    |proj| {
+                                                        autocode_core::storage::session_messages_dir(proj, sess)
+                                                    },
+                                                )
+                                            })
+                                        });
+                                    let buffer = std::mem::take(&mut panel_state.display_buffer);
+                                    for (i, msg) in buffer.iter().enumerate() {
                                         match msg.role {
                                             Role::User => {
-                                                if show_user_bubble(ui, msg, chat_w) {
+                                                if super::messages::show_user_bubble(
+                                                    ui,
+                                                    msg,
+                                                    chat_w,
+                                                    panel_state,
+                                                    att_dir.clone(),
+                                                ) {
                                                     helpers::set_temp(
                                                         ui.ctx(),
                                                         helpers::data::REPLAY_ACTION,
@@ -188,6 +207,7 @@ pub fn show(
                                         }
                                         ui.add_space(8.0);
                                     }
+                                    panel_state.display_buffer = buffer;
                                 },
                             ); // end push_id("chat_messages", ...)
                         } else {
@@ -325,6 +345,51 @@ pub fn show(
                 .flatten()
             && autocode_ai::chat::cancel_agent(state, runtimes, &agent_sid)
         {
+            ui.ctx().request_repaint();
+        }
+
+        // Drag-and-drop attachments onto the chat panel (F3 D7).
+        let (dropped_paths, hovering, pointer) = ui.ctx().input(|i| {
+            let dropped: Vec<String> = i
+                .raw
+                .dropped_files
+                .iter()
+                .filter_map(|f| f.path.clone())
+                .map(|p| p.to_string_lossy().to_string())
+                .collect();
+            let hovering = !i.raw.hovered_files.is_empty();
+            (dropped, hovering, i.pointer.latest_pos())
+        });
+        if hovering
+            && let Some(pos) = pointer
+        {
+            // Hover highlight over the whole panel while files drag.
+            ui.ctx().request_repaint();
+            let screen = ui.clip_rect();
+            let _ = pos;
+            ui.painter().rect_filled(
+                screen,
+                0.0,
+                egui::Color32::from_rgba_premultiplied(60, 90, 130, 40),
+            );
+            ui.painter().rect_stroke(
+                screen,
+                0.0,
+                egui::Stroke::new(2.0, crate::theme::Palette::ACCENT),
+                egui::StrokeKind::Inside,
+            );
+            ui.painter().text(
+                screen.center(),
+                egui::Align2::CENTER_CENTER,
+                "Drop files to attach",
+                egui::FontId::proportional(18.0),
+                crate::theme::Palette::TEXT_PRIMARY,
+            );
+        }
+        if !dropped_paths.is_empty() && state.active_session_id.is_some() {
+            for err in super::attachments::stage_paths(state, panel_state, &dropped_paths) {
+                eprintln!("[attachments] {}", err);
+            }
             ui.ctx().request_repaint();
         }
 

@@ -66,6 +66,11 @@ pub struct ChatPanelState {
 
     /// Agent windows currently open (agent session ids).
     pub agent_windows: std::collections::HashSet<String>,
+
+    /// Pending draft attachment chips (staged copies live on disk).
+    pub pending_attachments: Vec<autocode_core::state::Attachment>,
+    /// Decoded thumbnail textures keyed by (rel_path, bytes).
+    pub attachment_textures: std::collections::HashMap<(String, u64), egui::TextureHandle>,
 }
 
 impl Default for ChatPanelState {
@@ -98,6 +103,8 @@ impl Default for ChatPanelState {
             chat_scroll_id: next_id(),
             tabs_scroll_id: next_id(),
             agent_windows: std::collections::HashSet::new(),
+            pending_attachments: Vec::new(),
+            attachment_textures: std::collections::HashMap::new(),
         }
     }
 }

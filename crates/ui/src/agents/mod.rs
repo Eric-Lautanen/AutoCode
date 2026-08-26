@@ -263,7 +263,13 @@ pub fn show_windows(
                             for (i, msg) in msgs.iter().enumerate() {
                                 match msg.role {
                                     Role::User => {
-                                        show_user_bubble(ui, msg, ui.available_width());
+                                        show_user_bubble(
+                                            ui,
+                                            msg,
+                                            ui.available_width(),
+                                            panel_state,
+                                            None,
+                                        );
                                     }
                                     Role::Assistant => {
                                         show_assistant_content(ui, msg, i, false);
