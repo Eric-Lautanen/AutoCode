@@ -15,15 +15,32 @@ pub(crate) struct PreflightResult {
     pub max_tokens: u32,
 }
 
+/// True when the session's last provider-reported count lags by at most
+/// `PREFLIGHT_FRESH_MESSAGES` appends (tracked via the runtime's watermark,
+/// stamped at Done). In that window the counting-endpoint round-trip adds
+/// latency without information and is skipped.
+fn usage_count_is_fresh(runtime: &ChatRuntime, session: &autocode_core::state::Session) -> bool {
+    match runtime.usage_watermark {
+        Some(watermark) => {
+            session.next_message_id.saturating_sub(watermark)
+                <= super::super::runtime::PREFLIGHT_FRESH_MESSAGES
+        }
+        None => false,
+    }
+}
+
 /// Run the pre-flight context check: count (or recall) the request's input
 /// tokens, compare against the context window, and clamp `max_tokens` if
 /// needed. Returns `None` if the request should be aborted (context exceeded)
 /// or a handoff was triggered.
 ///
 /// Input source, in priority order:
-/// 1. The provider's counting endpoint — an exact count of the outgoing
+/// 1. A fresh provider-reported figure — when at most
+///    [`PREFLIGHT_FRESH_MESSAGES`] messages were appended since the Done that
+///    reported it, the counting call is skipped entirely.
+/// 2. The provider's counting endpoint — an exact count of the outgoing
 ///    request body, tool definitions included.
-/// 2. The last `prompt_tokens` the provider reported for this session
+/// 3. The last `prompt_tokens` the provider reported for this session
 ///    (`Session::context_tokens`), which lags by the messages appended since
 ///    that response. Zero until the first response arrives.
 pub(crate) fn preflight_context_check(
@@ -40,11 +57,18 @@ pub(crate) fn preflight_context_check(
         .sessions
         .iter()
         .find(|s| s.id == session_id)
-        .map(|s| s.context_tokens())
-        .unwrap_or(0);
+        .map(|s| {
+            let fresh = usage_count_is_fresh(runtime, s);
+            (s.context_tokens(), fresh)
+        })
+        .unwrap_or((0, false));
 
-    let used =
-        count_request_input_tokens(state, provider, session_id, session_handoff).unwrap_or(known);
+    let used = if known.1 {
+        // Fresh provider-reported figure — skip the counting round-trip.
+        known.0
+    } else {
+        count_request_input_tokens(state, provider, session_id, session_handoff).unwrap_or(known.0)
+    };
 
     let max_context = provider.max_context_tokens as usize;
     let max_output = max_tokens_in as usize;
@@ -134,7 +158,48 @@ fn count_request_input_tokens(
         provider,
         &serde_json::to_string(&body).ok()?,
         &provider.model,
-        5,
+        2,
     )
     .ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::super::runtime::{ChatRuntime, PREFLIGHT_FRESH_MESSAGES};
+    use super::usage_count_is_fresh;
+    use autocode_core::state::Session;
+
+    #[test]
+    fn fresh_within_k_appends_since_done() {
+        let mut runtime = ChatRuntime::default();
+        let sess = Session::new(None, String::new(), String::new());
+        // No Done recorded yet — never fresh.
+        assert!(!usage_count_is_fresh(&runtime, &sess));
+        for wm in [
+            Some(sess.next_message_id),
+            Some(sess.next_message_id + PREFLIGHT_FRESH_MESSAGES),
+        ] {
+            runtime.usage_watermark = wm;
+            assert!(usage_count_is_fresh(&runtime, &sess));
+        }
+    }
+
+    #[test]
+    fn stale_beyond_k_appends_since_done() {
+        let mut runtime = ChatRuntime::default();
+        let mut sess = Session::new(None, String::new(), String::new());
+        runtime.usage_watermark = Some(sess.next_message_id);
+        sess.next_message_id += PREFLIGHT_FRESH_MESSAGES + 1;
+        assert!(!usage_count_is_fresh(&runtime, &sess));
+    }
+
+    #[test]
+    fn rewind_never_reads_stale() {
+        let mut runtime = ChatRuntime::default();
+        let mut sess = Session::new(None, String::new(), String::new());
+        runtime.usage_watermark = Some(sess.next_message_id + 50);
+        // Replay truncation rewinds next_message_id below the watermark.
+        sess.next_message_id = 1;
+        assert!(usage_count_is_fresh(&runtime, &sess));
+    }
 }

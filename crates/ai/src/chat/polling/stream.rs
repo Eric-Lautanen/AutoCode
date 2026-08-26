@@ -97,6 +97,8 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                     && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
                 {
                     sess.record_actual_usage(prompt_tokens, completion_tokens);
+                    // Stamp the freshness watermark for the preflight skip.
+                    runtime.usage_watermark = Some(sess.next_message_id);
                     // Clear transient error messages on any successful completion.
                     sess.messages.retain(|m| m.role != Role::Error);
                 }

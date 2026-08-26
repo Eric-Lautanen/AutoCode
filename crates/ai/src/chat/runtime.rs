@@ -173,7 +173,17 @@ pub struct ChatRuntime {
     /// pending content), we inject a "Continue" user message and re-issue the
     /// request instead of stalling or erroring out.
     pub got_response_this_turn: bool,
+    /// Freshness watermark for the preflight counting call: the session's
+    /// next_message_id captured when Done last reported prompt_tokens. When
+    /// fewer than PREFLIGHT_FRESH_MESSAGES messages have been appended since
+    /// (i.e. the reported count lags by almost nothing), the counting-endpoint
+    /// round-trip is skipped entirely. Cleared on drain.
+    pub usage_watermark: Option<u64>,
 }
+
+/// How many appended messages beyond the last Done's watermark still count as
+/// a "fresh" token figure (one assistant message + its tool results).
+pub const PREFLIGHT_FRESH_MESSAGES: u64 = 2;
 
 impl Default for ChatRuntime {
     fn default() -> Self {
@@ -221,6 +231,7 @@ impl Default for ChatRuntime {
             repeat_batch_count: 0,
             pending_loop_warning: false,
             got_response_this_turn: false,
+            usage_watermark: None,
         }
     }
 }
@@ -286,6 +297,7 @@ impl ChatRuntime {
         self.repeat_batch_count = 0;
         self.pending_loop_warning = false;
         self.got_response_this_turn = false;
+        self.usage_watermark = None;
 
         // Force deallocation of large buffers (clear + shrink once each).
         self.pending_response.clear();
