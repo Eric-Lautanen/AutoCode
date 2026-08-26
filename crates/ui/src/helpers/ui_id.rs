@@ -98,6 +98,10 @@ pub mod data {
 
     /// Whether the project-tasks popup is open (bool).
     pub const PROJECT_TASKS_OPEN: &str = "ac::project_tasks_open";
+
+    /// Written by an agent card's Cancel button; executed where the runtimes
+    /// map is free to borrow (Option<String> — agent session id).
+    pub const CANCEL_AGENT_ACTION: &str = "ac::cancel_agent_action";
 }
 
 /// Convenience: build an `egui::Id` from a `data` constant.

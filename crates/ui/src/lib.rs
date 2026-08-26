@@ -6,6 +6,7 @@
 //! floating task list, toolbar with project/session/provider pickers,
 //! and various UI helpers.
 
+pub mod agents;
 pub mod app;
 pub mod chat;
 pub mod explorer;

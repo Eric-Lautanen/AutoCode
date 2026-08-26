@@ -18,3 +18,7 @@ mod tool_result;
 pub use panel::show;
 pub use state::ChatPanelState;
 pub use theme::ThemeColors;
+
+pub(crate) use live::show_live_turn;
+pub(crate) use messages::{show_assistant_content, show_user_bubble};
+pub(crate) use theme::theme;

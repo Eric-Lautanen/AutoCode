@@ -222,6 +222,19 @@ pub fn show(
                                     ui.add_space(8.0);
                                 }
                             }
+                            // Live sub-agent cards (D8): rendered while any
+                            // spawned agent of this batch is outstanding.
+                            if !r.pending_agents.is_empty() {
+                                let handles: Vec<(String, u64)> = r
+                                    .pending_agents
+                                    .iter()
+                                    .filter(|h| h.result.is_none())
+                                    .map(|h| {
+                                        (h.agent_session_id.clone(), h.started.elapsed().as_secs())
+                                    })
+                                    .collect();
+                                crate::agents::show_agent_cards(ui, state, &handles, panel_state);
+                            }
                         }
                     });
                 }); // end ScrollArea
@@ -303,6 +316,15 @@ pub fn show(
             panel_state.input = text;
             panel_state.scroll_to_bottom = true;
             panel_state.wants_input_focus = true;
+            ui.ctx().request_repaint();
+        }
+
+        // Execute any agent-cancel requested from a card or agent window.
+        if let Some(agent_sid) =
+            helpers::take_temp::<Option<String>>(ui.ctx(), helpers::data::CANCEL_AGENT_ACTION)
+                .flatten()
+            && autocode_ai::chat::cancel_agent(state, runtimes, &agent_sid)
+        {
             ui.ctx().request_repaint();
         }
 

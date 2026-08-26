@@ -400,6 +400,12 @@ impl eframe::App for AutocodeApp {
         explorer::show_file_viewer(&ctx, &mut self.explorer_panel);
         tasks::show_session_tasks(&ctx, &mut self.state);
         tasks::show_project_tasks(&ctx, &mut self.state);
+        crate::agents::show_windows(
+            &ctx,
+            &mut self.state,
+            &mut self.runtimes,
+            &mut self.chat_panel,
+        );
 
         Panel::top("toolbar")
             .frame(Frame::new().fill(crate::theme::Palette::BG_BASE))

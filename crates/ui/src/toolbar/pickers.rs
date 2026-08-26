@@ -49,7 +49,8 @@ pub fn show_session_picker(ui: &mut egui::Ui, state: &mut AppState) {
             .sessions
             .iter()
             .filter(|s| {
-                s.project_id.as_ref() == Some(pid)
+                !s.is_agent()
+                    && s.project_id.as_ref() == Some(pid)
                     && state
                         .projects
                         .iter()

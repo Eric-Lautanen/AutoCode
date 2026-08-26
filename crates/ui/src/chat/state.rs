@@ -63,6 +63,9 @@ pub struct ChatPanelState {
     pub(crate) chat_scroll_id: egui::Id,
     /// Unique ID for the session tabs scroll area.
     pub(crate) tabs_scroll_id: egui::Id,
+
+    /// Agent windows currently open (agent session ids).
+    pub agent_windows: std::collections::HashSet<String>,
 }
 
 impl Default for ChatPanelState {
@@ -94,6 +97,7 @@ impl Default for ChatPanelState {
             chat_messages_id: next_id(),
             chat_scroll_id: next_id(),
             tabs_scroll_id: next_id(),
+            agent_windows: std::collections::HashSet::new(),
         }
     }
 }

@@ -30,7 +30,7 @@ pub(crate) fn show_session_tabs(
                 let sessions: Vec<(String, String, Option<String>)> = state
                     .sessions
                     .iter()
-                    .filter(|s| !s.closed)
+                    .filter(|s| !s.closed && !s.is_agent())
                     .map(|s| (s.id.clone(), s.label.clone(), s.project_id.clone()))
                     .collect();
 
