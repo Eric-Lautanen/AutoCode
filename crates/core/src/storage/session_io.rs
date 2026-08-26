@@ -281,8 +281,6 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
                 session.show_explorer = meta.show_explorer;
                 session.settings_open = meta.settings_open;
                 session.actual_tokens_used = meta.actual_tokens_used;
-                session.estimated_full_at_request = meta.estimated_full_at_request;
-                session.token_correction_ratio = meta.token_correction_ratio;
                 session.thinking_mode = meta.thinking_mode;
                 session.reasoning_effort = meta.reasoning_effort;
                 session.show_reasoning_inline = meta.show_reasoning_inline;
@@ -302,9 +300,6 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
                     }
                 }
                 session.turn_count = session.messages.iter().map(|m| m.turn).max().unwrap_or(0);
-                // estimated_full_tokens is set by callers (restore_active_session,
-                // load_new_session, prepare_request_messages_for_session) via
-                // update_full_estimate which always does a full serialized estimate.
             }
             Err(_e) => {}
         },

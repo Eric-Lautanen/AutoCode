@@ -258,14 +258,6 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
     runtime.request_start = Some(std::time::Instant::now());
     runtime.last_delta_time = None;
     runtime.last_wire_time = None;
-    // Snapshot the estimated token count at request time so that when the
-    // API responds with actual prompt_tokens (always 1 turn behind), we
-    // can compute the correction ratio against the right baseline.
-    if let Some(sid) = runtime.active_session_id.as_deref()
-        && let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid)
-    {
-        sess.estimated_full_at_request = sess.estimated_full_tokens;
-    }
     // Record the rate-limit timestamp only now that we're actually dispatching
     // the request. Recording earlier (e.g. before preflight checks or before
     // the request is sent) would advance the clock for requests that never
@@ -483,7 +475,7 @@ pub fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     let Some(sess) = state.sessions.iter().find(|s| s.id == *sid) else {
         return;
     };
-    let used = sess.usage_tokens();
+    let used = sess.context_tokens();
     let Some((max, _handoff_pct, threshold)) =
         super::session_ops::handoff_usage_for_session(state, sid)
     else {
@@ -585,9 +577,6 @@ fn auto_continue_impl(
     };
 
     push_runtime(state, runtime, ChatMessage::new(Role::User, msg));
-    if let Some(sid) = runtime.active_session_id.as_deref() {
-        super::session_ops::recompute_estimate_from_disk(state, sid);
-    }
     start_completion(state, runtime);
 }
 

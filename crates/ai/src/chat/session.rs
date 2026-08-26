@@ -2,7 +2,6 @@
 
 use crate::helpers;
 use crate::provider::ApiMessage;
-use autocode_core::helpers::compute_request_estimate;
 use autocode_core::state::{AppState, ChatMessage, Role};
 
 /// Seed the system prompt into the active session if its messages are empty.
@@ -130,17 +129,6 @@ pub fn prepare_request_messages_for_session(
                 );
             }
         }
-    }
-
-    // Compute token estimates from the full disk-backed list using the unified
-    // pipeline. This sets both estimated_messages_tokens and estimated_full_tokens
-    // (including tool definitions) so the pre-flight check in start_completion
-    // has a correct baseline.
-    let tool_tokens = super::session_ops::refresh_tool_tokens_cache(state, session_id);
-    let (msg_tokens, full_tokens) = compute_request_estimate(&full_messages, tool_tokens);
-    if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == session_id) {
-        sess.estimated_messages_tokens = msg_tokens;
-        sess.estimated_full_tokens = full_tokens;
     }
 
     let mut messages: Vec<ApiMessage> = full_messages

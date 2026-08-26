@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use autocode_core::helpers::compute_request_estimate;
 use autocode_core::state::tool_name_to_op;
 use autocode_core::state::{AppState, ChatMessage, Role, TodoList};
 
@@ -23,11 +22,12 @@ pub fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: 
     // throughout the conversation. Context-window usage is intentionally NOT
     // baked in here: a push-time snapshot is stale by the time the model reads
     // it. The live usage figure is appended once per request by
-    // prepare_request_messages_for_session, which shares the same usage_tokens()
-    // source the toolbar uses, so both always derive from the same truth. Pure
-    // tool-call assistant messages (empty content) are left untouched so
-    // callers can still detect "the model produced no visible text" (e.g. the
-    // already_responded check). Error messages are display-only and skipped.
+    // prepare_request_messages_for_session, derived from the same
+    // provider-reported counts the toolbar uses, so both always derive from
+    // the same truth. Pure tool-call assistant messages (empty content) are
+    // left untouched so callers can still detect "the model produced no
+    // visible text" (e.g. the already_responded check). Error messages are
+    // display-only and skipped.
     match msg.role {
         Role::User => {
             if !msg.content.is_empty() {
@@ -52,7 +52,6 @@ pub fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: 
         msg.id = sess.next_message_id;
         msg.turn = sess.turn_count;
         sess.next_message_id += 1;
-        msg.full_token_estimate = autocode_core::helpers::estimate_single_message_json_tokens(&msg);
         // Error messages are display-only - never persist to disk.
         if msg.role != Role::Error {
             state
@@ -62,138 +61,6 @@ pub fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: 
         }
         sess.messages.push(msg);
     }
-    // Recompute token estimates from disk (source of truth).
-    recompute_estimate_from_disk(state, &sid);
-}
-
-/// Flush pending writes, load the full message history from disk JSONL,
-/// and recompute token estimates. Disk is source of truth — the in-memory
-/// display window may be missing evicted messages.
-/// Falls back to the in-memory window only when no project is assigned yet.
-pub fn recompute_estimate_from_disk(state: &mut AppState, session_id: &str) {
-    state.flush_pending_writes(true);
-    let tool_tokens = refresh_tool_tokens_cache(state, session_id);
-    let mut messages = {
-        let sess = state.sessions.iter().find(|s| s.id == session_id);
-        sess.and_then(|s| {
-            s.project_id.as_ref().and_then(|pid| {
-                state
-                    .projects
-                    .iter()
-                    .find(|p| p.id == *pid)
-                    .map(|proj| autocode_core::storage::load_all_messages(proj, s))
-            })
-        })
-        .unwrap_or_else(|| {
-            // No project yet — use in-memory window as best effort.
-            state
-                .sessions
-                .iter()
-                .find(|s| s.id == session_id)
-                .map(|s| s.messages.clone())
-                .unwrap_or_default()
-        })
-    };
-    // Deduplicate by message ID, matching prepare_request_messages_for_session
-    // so the display estimate is consistent with the request-time estimate.
-    {
-        let mut seen = std::collections::HashSet::new();
-        messages.retain(|m| seen.insert(m.id));
-    }
-    if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == session_id) {
-        let (msg_tokens, full_tokens) = compute_request_estimate(&messages, tool_tokens);
-        sess.estimated_messages_tokens = msg_tokens;
-        sess.estimated_full_tokens = full_tokens;
-    }
-}
-
-/// Compute the heuristic token count for tool definitions for a given session.
-/// Results are cached on the `Session` struct and only recomputed when the
-/// inputs that affect the tool definitions change (provider_label, model,
-/// handoff_enabled, strict-tools support). This avoids re-serializing 20+
-/// tool schemas on every message push.
-pub fn tool_defs_tokens_for_session(state: &AppState, session_id: Option<&str>) -> usize {
-    let Some(sid) = session_id else { return 0 };
-    let Some(sess) = state.sessions.iter().find(|s| s.id == sid) else {
-        return 0;
-    };
-    let prov_label = if !sess.provider_label.is_empty() {
-        sess.provider_label.clone()
-    } else {
-        state.active_provider.clone()
-    };
-    let strict = state
-        .providers
-        .get(&prov_label)
-        .map(|p| p.supports_strict_tools())
-        .unwrap_or(false);
-    let key = (
-        prov_label.clone(),
-        sess.model.clone(),
-        sess.handoff_enabled,
-        strict,
-    );
-
-    // Fast path: cache is valid.
-    if sess.cached_tool_key.as_ref() == Some(&key) && sess.cached_tool_tokens > 0 {
-        return sess.cached_tool_tokens;
-    }
-
-    // Slow path: recompute. We need a mutable session to store the cache, but
-    // we received an immutable &AppState. Fall back to computing without
-    // caching when we can't get mut access — the next call through a mut path
-    // will populate the cache.
-    let tools_json = crate::provider::tool_definitions(strict, sess.handoff_enabled);
-    // No interior mutability available via &AppState; callers holding &mut
-    // AppState should use `refresh_tool_tokens_cache` to keep the cache warm.
-    autocode_core::helpers::estimate_tools_tokens(&tools_json)
-}
-
-/// Recompute and cache the tool-definition token count on the session if the
-/// inputs have changed (or the cache is empty). Returns the cached value.
-/// Call this from any code path that holds `&mut AppState` before relying on
-/// the token estimate, so the cache stays warm and the immutable
-/// `tool_defs_tokens_for_session` fast path hits.
-pub fn refresh_tool_tokens_cache(state: &mut AppState, session_id: &str) -> usize {
-    let Some(sess) = state.sessions.iter_mut().find(|s| s.id == session_id) else {
-        return 0;
-    };
-    let prov_label = if !sess.provider_label.is_empty() {
-        sess.provider_label.clone()
-    } else {
-        state.active_provider.clone()
-    };
-    let strict = state
-        .providers
-        .get(&prov_label)
-        .map(|p| p.supports_strict_tools())
-        .unwrap_or(false);
-    let key = (
-        prov_label.clone(),
-        sess.model.clone(),
-        sess.handoff_enabled,
-        strict,
-    );
-
-    if sess.cached_tool_key.as_ref() == Some(&key) && sess.cached_tool_tokens > 0 {
-        return sess.cached_tool_tokens;
-    }
-
-    let tools_json = crate::provider::tool_definitions(strict, sess.handoff_enabled);
-    let tokens = autocode_core::helpers::estimate_tools_tokens(&tools_json);
-    sess.cached_tool_tokens = tokens;
-    sess.cached_tool_key = Some(key);
-    tokens
-}
-
-/// Unified session token estimate update using the single pipeline.
-/// Computes and sets both `estimated_messages_tokens` and `estimated_full_tokens`
-/// on the session, including tool-definition overhead.
-/// Call this after loading a session from disk, instead of the bare
-/// `update_full_estimate` which doesn't account for tool tokens.
-pub fn update_session_estimate(state: &AppState, session: &mut autocode_core::state::Session) {
-    let tool_tokens = tool_defs_tokens_for_session(state, Some(&session.id));
-    autocode_core::helpers::update_full_estimate(session, tool_tokens);
 }
 
 /// Replay from a user message: truncate the conversation at that message,
@@ -256,14 +123,6 @@ pub fn replay_to_message(
         autocode_core::storage::truncate_messages_after(proj, sess, message_id.saturating_sub(1))
             .ok()?;
         autocode_core::storage::save_session_meta(proj, sess).ok()?;
-    }
-
-    // Recompute token estimates from disk (source of truth).
-    recompute_estimate_from_disk(state, session_id);
-    // Reset the correction ratio — the estimate now reflects the full
-    // on-disk context, so any prior window-vs-full ratio is stale.
-    if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == session_id) {
-        sess.token_correction_ratio = 1.0;
     }
 
     // Discard any pending disk writes for this session (anything queued
@@ -452,10 +311,10 @@ pub fn context_usage_info_for_session(
         .iter()
         .find(|s| s.id == session_id)
         .map(|s| {
-            // Provider actual count plus the estimate of messages added since
-            // the last API response, capped at the provider's context window
-            // so the model never sees a usage count larger than it can hold.
-            s.usage_tokens().min(max)
+            // Provider-reported count from the last response, capped at the
+            // provider's context window so the model never sees a usage count
+            // larger than it can hold.
+            s.context_tokens().min(max)
         })
         .unwrap_or(0);
     let pct = (used * 100).checked_div(max).unwrap_or(0);

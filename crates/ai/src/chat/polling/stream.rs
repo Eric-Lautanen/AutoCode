@@ -238,9 +238,6 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                 runtime,
                 ChatMessage::new(Role::User, "Continue".to_string()),
             );
-            if let Some(sid) = runtime.active_session_id.as_deref() {
-                super::super::session_ops::recompute_estimate_from_disk(state, sid);
-            }
             start_completion(state, runtime);
             return true;
         }

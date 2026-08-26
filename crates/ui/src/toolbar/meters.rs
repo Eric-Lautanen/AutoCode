@@ -81,7 +81,7 @@ pub fn show_token_meter(ui: &mut egui::Ui, state: &AppState, frac: f32) {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     usage_resp.on_hover_text(
-        "Estimated: heuristic token count, updated in real time.\nActual: API-reported count from the last request (1 message behind).",
+        "Context tokens as reported by the provider's last API response.\nUpdated once per completed request.",
     );
 }
 

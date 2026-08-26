@@ -29,18 +29,6 @@ pub struct SessionMeta {
     #[serde(default)]
     pub actual_tokens_used: usize,
 
-    /// Heuristic token estimate at the time of the last API request.
-    /// Persisted as a pair with `actual_tokens_used` (both describe the
-    /// same last request) so the hybrid usage estimate survives restarts.
-    #[serde(default)]
-    pub estimated_full_at_request: usize,
-
-    /// Learned correction ratio (actual API prompt_tokens / heuristic estimate).
-    /// Persisted so the preflight estimate and hybrid usage delta stay accurate
-    /// across restarts. Defaults to 1.0 (no correction) for old sessions.
-    #[serde(default = "crate::state::default_token_correction_ratio")]
-    pub token_correction_ratio: f32,
-
     /// Per-session thinking mode and reasoning effort.
     #[serde(default)]
     pub thinking_mode: bool,
@@ -81,8 +69,6 @@ impl SessionMeta {
             show_explorer: session.show_explorer,
             settings_open: session.settings_open,
             actual_tokens_used: session.actual_tokens_used,
-            estimated_full_at_request: session.estimated_full_at_request,
-            token_correction_ratio: session.token_correction_ratio,
             thinking_mode: session.thinking_mode,
             reasoning_effort: session.reasoning_effort.clone(),
             show_reasoning_inline: session.show_reasoning_inline,

@@ -98,10 +98,6 @@ pub(crate) fn load_new_session(
             }
         }
     }
-    // Recompute token estimates from disk after loading (releases new_proj borrow).
-    if purge_on_missing.is_none() {
-        autocode_ai::chat::recompute_estimate_from_disk(state, &new_id);
-    }
     // Re-borrow for display-window setup.
     if let Some(new_sess) = state.sessions.iter_mut().find(|s| s.id == new_id) {
         let new_proj = &state.projects[new_proj];

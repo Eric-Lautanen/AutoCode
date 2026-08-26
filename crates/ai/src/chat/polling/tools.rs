@@ -53,8 +53,6 @@ pub(super) fn poll_tool_results(state: &mut AppState, runtime: &mut ChatRuntime)
                 } else {
                     push_tool_results_to_state(state, runtime, &results);
                     runtime.status = format!("{} tool(s) complete.", results.len());
-                    // Token estimate refreshed from disk by push_tool_results_to_state
-                    // -> push_to_session -> recompute_estimate_from_disk.
                     // Only start next completion if shell calls are also done.
                     if runtime.live_shell_rx.is_none() && runtime.pending_tool_remaining.is_empty()
                     {
@@ -120,8 +118,6 @@ pub(super) fn commit_tool_results(state: &mut AppState, runtime: &mut ChatRuntim
         runtime.tool_batch_start = None;
         runtime.live_write_progress = None;
         runtime.status = format!("{} tool(s) complete.", count);
-        // Token estimate refreshed from disk by push_tool_results_to_state
-        // -> push_to_session -> recompute_estimate_from_disk.
 
         // Only continue if non-shell tools are also done.
         if runtime.tool_rx.is_none() {

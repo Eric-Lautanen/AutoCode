@@ -19,7 +19,7 @@ It's not trying to be clever. It's trying to be durable. Transient errors retry 
 | **Multi-Provider** | Built-in configs for popular providers + add any OpenAI-compatible provider via Settings |
 | **Streaming** | Real-time SSE with auto-recovery, exponential backoff, auto-continue on drop |
 | **Sessions** | Named sessions per project (up to 50), JSONL history, lazy-load display buffer, per-project tab colors |
-| **Token Management** | 2-tier counting (API → heuristic), auto-handoff at configurable threshold |
+| **Token Management** | Actual API-reported token counts, counting-endpoint validation, auto-handoff at configurable threshold |
 | **LRU Looping Window** | Toggleable pruning of old message groups when context fills. Scoring-based selection (working set, recency floor, unverified-edit exemption), 3 aggressiveness levels. Disables auto-handoff when active. |
 | **File Explorer** | gitignore-aware tree with git status colors, text/image preview, inline rename/delete, code editor |
 | **Task Tracking** | Session-level floating todo list + project-level task list (disk-persisted) |
@@ -66,7 +66,7 @@ Built in **Rust 2024** with **egui 0.34** / **eframe 0.34**. Zero async — all 
 - **No async runtime** — blocking I/O on spawned threads, UI polls via channels
 - **Immediate-mode GUI** — egui rebuilds every frame
 - **Disk as source of truth** — messages always written to JSONL immediately; RAM only holds a display window (default 50 messages)
-- **2-tier token estimation** — API counting endpoint → heuristic fallback
+- **Actual token counts only** — provider-reported usage per response, counting-endpoint validation before requests
 - **7-strategy fuzzy patching** — exact → CRLF-normalized → whitespace-normalized → tabs-normalized → anchored line → Myers DP alignment → single-line fuzzy
 - **Transient/permanent error classification** — rate limits/timeouts/5xx retry forever (5s→180s cap); auth/quota/filter surface immediately
 - **LRU looping window** — scoring-based pruning when crossing configurable context thresholds. One group removed per trigger (constant across all levels); the three levels differ only in the context-usage trigger threshold (65/75/85%) and the recency-floor size (20/30/40% of recent groups protected). `FileAccessLog` tracks the working set. Breadcrumb markers replace removed content. 3 aggressiveness levels (Conservative / Balanced / Aggressive).
@@ -164,7 +164,7 @@ AutoCode ships with built-in configs for popular providers. You can also add any
 | Crate | Files | Lines | Role |
 |-------|-------|-------|------|
 | `autocode` (bin) | 4 | 27 | Entry point, icon embedding |
-| `autocode-core` (lib) | 34 | 7,983 | State types, storage, helpers, token estimator, sysinfo, HTML extraction, `FileAccessLog` |
+| `autocode-core` (lib) | 34 | 7,983 | State types, storage, helpers, sysinfo, HTML extraction, `FileAccessLog` |
 | `autocode-ai` (lib) | 35 | 11,371 | Chat loop, HTTP/SSE client, tool dispatch, retry/backoff, web scraping, LRU looping window |
 | `autocode-fs` (lib) | 18 | 2,680 | Shell executor, file explorer, git status, skill loader |
 | `autocode-ui` (lib) | 48 | 8,125 | egui panels — chat, settings, explorer, toolbar, todo windows, LRU toggle |

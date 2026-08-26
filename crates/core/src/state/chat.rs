@@ -53,23 +53,10 @@ pub struct ChatMessage {
     pub content: String,
     #[serde(default)]
     pub timestamp: u64,
-    /// Estimated token count for this message's `content` field only.
-    /// Does NOT include tool_calls, tool_call_id, or reasoning_content.
-    /// This is a heuristic estimate; the authoritative count comes from
-    /// the API response's `usage.prompt_tokens` accumulated in `actual_tokens_used`.
-    #[serde(default)]
-    pub token_count: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<serde_json::Value>,
-    /// Estimated token count for this message as it would appear in the API
-    /// JSON request body (includes role, content, tool_calls, tool_call_id,
-    /// reasoning_content, and JSON structural overhead). Cached on push so
-    /// the session running total can be updated incrementally without
-    /// re-serializing all messages.
-    #[serde(default)]
-    pub full_token_estimate: usize,
     /// Structured metadata for tool-result messages.
     /// When present, the UI uses this instead of parsing content.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -89,15 +76,11 @@ pub struct ChatMessage {
 
 impl ChatMessage {
     pub fn new(role: Role, content: impl Into<String>) -> Self {
-        let content: String = content.into();
-        let token_count = crate::helpers::estimate_tokens(&content);
         Self {
             id: 0,
             role,
-            content,
+            content: content.into(),
             timestamp: crate::helpers::unix_now(),
-            token_count,
-            full_token_estimate: 0,
             tool_call_id: None,
             tool_calls: None,
             tool_meta: None,

@@ -128,8 +128,6 @@ impl AutocodeApp {
                 autocode_core::storage::load_session(proj, sess);
             }
         }
-        // Token estimate from disk (releases proj borrow first).
-        autocode_ai::chat::recompute_estimate_from_disk(state, &sid);
         // Window eviction and state sync.
         {
             if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {

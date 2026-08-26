@@ -4,6 +4,10 @@ use autocode_core::state::{
     AppState, ChatMessage, FileOp, LoopAggressiveness, Role, tool_name_to_op,
 };
 
+/// Tool-result messages larger than this many bytes score as prunable bloat
+/// in the looping-window ranking. Bytes are measured, not estimated.
+const LARGE_TOOL_OUTPUT_BYTES: usize = 8000;
+
 fn pair_groups(messages: &[ChatMessage]) -> Vec<(usize, usize)> {
     let mut groups = Vec::new();
     let mut i = 0;
@@ -77,7 +81,7 @@ pub fn apply_looping_window(state: &mut AppState, session_id: &str) -> Option<()
 
     let agg = active_model_aggressiveness(state, session_id);
     let ctx_window = active_model_context_window(state, session_id);
-    let used_tokens = state.sessions[idx].usage_tokens();
+    let used_tokens = state.sessions[idx].context_tokens();
     let trigger_pct = agg.trigger_pct();
     if ctx_window == 0 || (used_tokens as f32 / ctx_window as f32) < trigger_pct {
         return None;
@@ -114,7 +118,7 @@ pub fn apply_looping_window(state: &mut AppState, session_id: &str) -> Option<()
                     score += 1;
                 }
                 if msg.role == Role::Tool
-                    && msg.full_token_estimate > 2000
+                    && msg.content.len() > LARGE_TOOL_OUTPUT_BYTES
                     && !signals.in_working_set
                 {
                     score -= 2;
@@ -225,8 +229,6 @@ pub fn apply_looping_window(state: &mut AppState, session_id: &str) -> Option<()
                 .collect::<Vec<_>>()
         );
     }
-
-    super::session_ops::recompute_estimate_from_disk(state, session_id);
 
     Some(())
 }

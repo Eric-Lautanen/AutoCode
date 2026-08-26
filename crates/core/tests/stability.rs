@@ -47,8 +47,6 @@ fn make_session_dir(project: &Project, label: &str) -> (SessionMeta, PathBuf) {
         show_explorer: true,
         settings_open: false,
         actual_tokens_used: 0,
-        estimated_full_at_request: 0,
-        token_correction_ratio: 1.0,
         thinking_mode: false,
         reasoning_effort: String::new(),
         show_reasoning_inline: false,
@@ -90,8 +88,6 @@ fn test_long_running_simulation() {
                     },
                     content: format!("Message {} of session {} day {}", i, s, day),
                     timestamp: 0,
-                    token_count: 10,
-                    full_token_estimate: 0,
                     tool_call_id: None,
                     tool_calls: None,
                     tool_meta: None,
@@ -163,8 +159,6 @@ fn test_crash_recovery() {
             },
             content: format!("Message {}", i),
             timestamp: 0,
-            token_count: 5,
-            full_token_estimate: 0,
             tool_call_id: None,
             tool_calls: None,
             tool_meta: None,
@@ -221,8 +215,6 @@ fn test_truncate_preserves_early_messages() {
             },
             content: format!("Message {}", i),
             timestamp: 0,
-            token_count: 5,
-            full_token_estimate: 0,
             tool_call_id: None,
             tool_calls: None,
             tool_meta: None,
@@ -279,8 +271,6 @@ fn test_remove_messages_by_id() {
             },
             content: format!("Message {}", i),
             timestamp: 0,
-            token_count: 5,
-            full_token_estimate: 0,
             tool_call_id: None,
             tool_calls: None,
             tool_meta: None,
@@ -315,46 +305,33 @@ fn test_remove_messages_by_id() {
     );
 }
 
-// ── 4.4 Correction Ratio Round-Trip Test ─────────────────────────────
+// ── 4.4 Actual Token Count Round-Trip Test ───────────────────────────
 
 #[test]
-fn test_token_correction_ratio_survives_restart() {
-    let _dir = init_test_dir("ratio_roundtrip");
+fn test_actual_tokens_survive_restart() {
+    let _dir = init_test_dir("actual_roundtrip");
 
-    let project = make_project("ratio_test");
-    let (mut meta, _msg_dir) = make_session_dir(&project, "ratio_session");
+    let project = make_project("actual_test");
+    let (mut meta, _msg_dir) = make_session_dir(&project, "actual_session");
 
-    // Simulate a session that has learned a correction ratio (e.g. the real
-    // 161897/214271 ≈ 0.755 case) and persisted it via save_session_meta.
-    meta.actual_tokens_used = 161897;
-    meta.estimated_full_at_request = 214271;
-    meta.token_correction_ratio = 0.755;
+    // Simulate a session whose provider reported prompt_tokens and persisted
+    // it via save_session_meta.
+    meta.actual_tokens_used = 161_897;
 
     let mut sess = Session::new(Some(project.id.clone()), "test".into(), "test-model".into());
     sess.id = meta.id.clone();
     sess.label = meta.label.clone();
     sess.actual_tokens_used = meta.actual_tokens_used;
-    sess.estimated_full_at_request = meta.estimated_full_at_request;
-    sess.token_correction_ratio = meta.token_correction_ratio;
     storage::save_session_meta(&project, &sess).unwrap();
 
-    // Reopen: the ratio must be restored, not reset to 1.0.
+    // Reopen: the actual count must be restored.
     let mut loaded = Session::new(Some(project.id.clone()), "test".into(), "test-model".into());
     loaded.id = meta.id.clone();
     loaded.label = meta.label.clone();
     let found = storage::load_session(&project, &mut loaded);
     assert!(found, "session must load");
     assert_eq!(
-        loaded.actual_tokens_used, 161897,
+        loaded.actual_tokens_used, 161_897,
         "actual tokens must survive restart"
-    );
-    assert_eq!(
-        loaded.estimated_full_at_request, 214271,
-        "estimate-at-request must survive restart"
-    );
-    assert!(
-        (loaded.token_correction_ratio - 0.755).abs() < 1e-4,
-        "correction ratio must survive restart, got {}",
-        loaded.token_correction_ratio
     );
 }

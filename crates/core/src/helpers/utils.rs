@@ -216,17 +216,6 @@ pub fn unique_data_dir_name(projects: &[Project], desired: &str) -> String {
     candidate
 }
 
-/// Recompute token estimates on a session using the unified pipeline.
-/// Callers must pass the tool-definition token count for the session's
-/// provider (0 if unknown — the meter will undercount until the first
-/// push_to_session or start_completion corrects it).
-pub fn update_full_estimate(session: &mut crate::state::Session, tool_tokens: usize) {
-    let (msg_tokens, full_tokens) =
-        crate::helpers::compute_request_estimate(&session.messages, tool_tokens);
-    session.estimated_messages_tokens = msg_tokens;
-    session.estimated_full_tokens = full_tokens;
-}
-
 /// Replace or strip Unicode characters that the UI framework's default fonts don't support
 /// (emojis, symbols, etc.) to avoid tofu blocks (□□□) in the UI.
 /// Lightweight — no extra font files needed.
@@ -337,66 +326,38 @@ fn session_provider_config(state: &AppState) -> (usize, usize) {
     (max, handoff_pct)
 }
 
-/// Get the token count for user-facing display.
-/// Returns `(displayed_estimate, actual_from_api)`.
-///
-/// The displayed estimate uses the provider's actual `prompt_tokens` count
-/// when available (exact for everything the API has seen) plus the heuristic
-/// estimate of only the messages added since that response, so it tracks the
-/// real count closely instead of the over-conservative full heuristic. It is
+/// Context tokens as last reported by the provider for the active session,
 /// capped at the provider's context window so the meter never shows a value
 /// larger than what the model can hold.
-/// `actual_tokens_used` is from the last API response (1 turn behind)
-/// and shown separately for comparison.
-fn session_messages_usage(state: &AppState) -> (usize, Option<usize>) {
+fn session_context_used(state: &AppState) -> usize {
     let (max, _) = session_provider_config(state);
     state
         .active_session()
-        .map(|s| {
-            let estimated = s.usage_tokens().min(max);
-            let actual = if s.actual_tokens_used > 0 {
-                Some(s.actual_tokens_used)
-            } else {
-                None
-            };
-            (estimated, actual)
-        })
-        .unwrap_or((0, None))
+        .map(|s| s.context_tokens().min(max))
+        .unwrap_or(0)
 }
 
 /// Percentage of context window used (0.0 - 1.0),
 /// based on the session's actual provider, not the UI-selected one.
-/// Uses MAX(raw, corrected, actual) so the meter never under-reports.
 pub fn budget_fraction(state: &AppState) -> f32 {
     let (max, _) = session_provider_config(state);
-    let (used, _actual) = session_messages_usage(state);
+    let used = session_context_used(state);
     (used as f32) / (max as f32).max(1.0)
 }
 
-/// Human-readable token usage string.
-/// Shows MAX(raw, corrected, actual) as "est" so the number never
-/// under-reports versus the API, and the API's actual from the last
-/// response is shown alongside for comparison.
+/// Human-readable token usage string showing API-reported context tokens
+/// from the last completed request alongside the context window and the
+/// handoff threshold.
 pub fn usage_display(state: &AppState) -> String {
     let (max, handoff_pct) = session_provider_config(state);
     let threshold = (max * handoff_pct) / 100;
-    let (used, actual) = session_messages_usage(state);
-    if let Some(actual_val) = actual {
-        format!(
-            "{} est / {} actual / {} (handoff @{})",
-            fmt_tokens(used),
-            fmt_tokens(actual_val),
-            fmt_tokens(max),
-            fmt_tokens(threshold)
-        )
-    } else {
-        format!(
-            "{} est / {} (handoff @{})",
-            fmt_tokens(used),
-            fmt_tokens(max),
-            fmt_tokens(threshold)
-        )
-    }
+    let used = session_context_used(state);
+    format!(
+        "{} / {} (handoff @{})",
+        fmt_tokens(used),
+        fmt_tokens(max),
+        fmt_tokens(threshold)
+    )
 }
 
 fn fmt_tokens(n: usize) -> String {
