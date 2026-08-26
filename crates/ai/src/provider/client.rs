@@ -4,7 +4,7 @@ use std::{
     io::{Read, Write},
     net::TcpStream,
     sync::{
-        Arc, OnceLock,
+        Arc,
         atomic::AtomicBool,
         mpsc::{self, Sender},
     },
@@ -15,7 +15,7 @@ use rustls::pki_types::ServerName;
 
 use autocode_core::state::ApiProvider;
 
-use super::thread_pool::ThreadPool;
+use super::permits::with_permit;
 
 use super::http::{
     HttpArgs, HttpConn, TimeoutConfig, auth_headers_from_manifest, decode_chunked, parse_url,
@@ -24,33 +24,36 @@ use super::http::{
 use super::tool_defs::tool_definitions;
 use super::types::{CompletionRequest, CompletionStream, ProviderEvent};
 
-/// Global thread pool for provider HTTP requests.
-/// Lazily initialized once, sized to available parallelism (2-8 threads).
-fn pool() -> &'static ThreadPool {
-    static POOL: OnceLock<ThreadPool> = OnceLock::new();
-    POOL.get_or_init(|| {
-        let size = std::thread::available_parallelism()
-            .map(|n| n.get().clamp(2, 8))
-            .unwrap_or(4);
-        ThreadPool::new(size)
-    })
-}
-
 pub struct ProviderClient;
 
 impl ProviderClient {
     pub fn complete(provider: ApiProvider, request: CompletionRequest) -> CompletionStream {
         let (tx, rx) = mpsc::channel();
         // Cancel flag shared with the worker: set when the returned handle is
-        // dropped, unblocking the worker's socket read so the pool thread is
+        // dropped, unblocking the worker's socket read so the thread is
         // released immediately instead of lingering until the request timeout.
         let cancel = Arc::new(AtomicBool::new(false));
+        let gate_cancel = Arc::clone(&cancel);
         let worker_cancel = Arc::clone(&cancel);
-        pool().execute(move || {
-            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                run_request_once(provider, request, tx, worker_cancel);
-            }));
-        });
+        // One dedicated thread per in-flight request; a hand-rolled permit
+        // gate (std has no Semaphore) bounds concurrency without a fixed
+        // worker pool's silent-queue failure mode.
+        let worker_tx = tx.clone();
+        if std::thread::Builder::new()
+            .name("provider-request".into())
+            .spawn(move || {
+                with_permit(gate_cancel.as_ref(), || {
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        run_request_once(provider, request, worker_tx, worker_cancel);
+                    }));
+                });
+            })
+            .is_err()
+        {
+            let _ = tx.send(ProviderEvent::Error(
+                "Failed to spawn request thread".to_string(),
+            ));
+        }
         CompletionStream::new(rx, cancel)
     }
 }

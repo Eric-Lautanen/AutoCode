@@ -4,8 +4,8 @@
 
 mod client;
 mod http;
+mod permits;
 mod rate_limit;
-mod thread_pool;
 mod tool_defs;
 mod types;
 mod web;
@@ -13,7 +13,6 @@ mod web;
 // Re-export public API
 pub use client::{ProviderClient, count_input_tokens, fetch_models};
 pub use rate_limit::{api_rate_limit_record, api_rate_limit_reset, api_rate_limit_wait_ms};
-pub use thread_pool::ThreadPool;
 pub use tool_defs::tool_definitions;
 pub use types::{
     ApiMessage, CompletionRequest, CompletionStream, ProviderEvent, ToolCall, ToolChoice,
