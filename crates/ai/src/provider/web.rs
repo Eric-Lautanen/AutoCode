@@ -489,30 +489,6 @@ struct WsConn {
     frag: Vec<u8>,
 }
 
-fn ws_base64(input: &[u8]) -> String {
-    const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::new();
-    for chunk in input.chunks(3) {
-        let b0 = chunk[0];
-        let b1 = *chunk.get(1).unwrap_or(&0);
-        let b2 = *chunk.get(2).unwrap_or(&0);
-        let n = ((b0 as u32) << 16) | ((b1 as u32) << 8) | (b2 as u32);
-        out.push(A[((n >> 18) & 63) as usize] as char);
-        out.push(A[((n >> 12) & 63) as usize] as char);
-        if chunk.len() > 1 {
-            out.push(A[((n >> 6) & 63) as usize] as char);
-        } else {
-            out.push('=');
-        }
-        if chunk.len() > 2 {
-            out.push(A[(n & 63) as usize] as char);
-        } else {
-            out.push('=');
-        }
-    }
-    out
-}
-
 fn ws_nonce() -> String {
     let mut seed: u64 = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -525,7 +501,7 @@ fn ws_nonce() -> String {
             .wrapping_add(1442695040888963407);
         *b = (seed >> 33) as u8;
     }
-    ws_base64(&bytes)
+    autocode_core::storage::base64_encode(&bytes)
 }
 
 fn ws_connect(url: &str) -> Option<WsConn> {
@@ -1152,7 +1128,7 @@ pub fn native_post(
 
 #[cfg(test)]
 mod tests {
-    use super::{WsConn, native_get, ws_base64};
+    use super::{WsConn, native_get};
     use autocode_core::utils::extract::extract_ddg_results;
 
     /// Offline check of the hand-written WebSocket frame codec: a masked
@@ -1192,10 +1168,11 @@ mod tests {
 
     #[test]
     fn ws_base64_known_vectors() {
-        assert_eq!(ws_base64(b"Man"), "TWFu");
-        assert_eq!(ws_base64(b"Ma"), "TWE=");
-        assert_eq!(ws_base64(b"M"), "TQ==");
-        assert_eq!(ws_base64(b"foobar"), "Zm9vYmFy");
+        // The shared std-only encoder lives in core storage.
+        assert_eq!(autocode_core::storage::base64_encode(b"Man"), "TWFu");
+        assert_eq!(autocode_core::storage::base64_encode(b"Ma"), "TWE=");
+        assert_eq!(autocode_core::storage::base64_encode(b"M"), "TQ==");
+        assert_eq!(autocode_core::storage::base64_encode(b"foobar"), "Zm9vYmFy");
     }
 
     /// Live end-to-end check against DuckDuckGo's HTML endpoint.

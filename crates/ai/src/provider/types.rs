@@ -58,7 +58,7 @@ pub struct ApiMessage {
 
 /// Owned content part assembled at request-build time for vision-capable
 /// providers (F3). Serialized exactly as an OpenAI content-part object.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ContentPart {
     Text { text: String },
     ImageUrl { url: String },

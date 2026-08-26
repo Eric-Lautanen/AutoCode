@@ -6,7 +6,9 @@ pub(crate) mod provider;
 use std::collections::HashMap;
 
 use crate::{helpers, provider::ProviderClient};
-use autocode_core::state::{AppState, Attachment, ChatMessage, Role, TodoStatus, ToolMeta};
+use autocode_core::state::{
+    AppState, Attachment, AttachmentKind, ChatMessage, Role, TodoStatus, ToolMeta,
+};
 
 use super::runtime::ChatRuntime;
 use super::session_ops::{project_root_for_session, push_error, push_runtime, push_to_session};
@@ -18,11 +20,13 @@ pub(crate) use provider::{build_completion_request, select_provider};
 
 // -- Send a user message -------------------------------------------------------
 
-/// D4 injection matrix (text side): append attachment content blocks to the
-/// outgoing user message. Text/doc files dump their capped content; images
-/// (until a vision provider consumes them as parts) and binaries get notice
-/// blocks. Runs ONCE at push time — later turns see the injected text as
-/// ordinary message history and never re-read the staged files.
+/// D4 injection matrix, push-time side: append text content blocks to the
+/// outgoing user message. Text/doc files dump their capped content; binaries
+/// get a notice block. IMAGES ARE SKIPPED here: they are handled entirely at
+/// request-build time (vision parts for vision models, a deterministic notice
+/// otherwise) so a later provider/model switch never duplicates or loses them.
+/// Runs ONCE at push time — later turns see the injected text as ordinary
+/// message history and never re-read the staged files.
 fn inject_attachments(
     mut text: String,
     attachments: &[Attachment],
@@ -41,8 +45,8 @@ fn inject_attachments(
         None => return text,
     };
     for att in attachments {
-        let size = format!("{} KB", att.bytes.max(1) / 1024);
         match autocode_core::storage::classify(&att.name) {
+            autocode_core::storage::AttClass::Image if att.kind == AttachmentKind::Image => {}
             autocode_core::storage::AttClass::Text => {
                 let path = proj.map(|p| autocode_core::storage::resolve_path(p, sess, att));
                 let content = path
@@ -57,12 +61,8 @@ fn inject_attachments(
                 );
                 text.push_str(&format!("\n\n[Attachment: {}]\n{}", att.name, capped));
             }
-            autocode_core::storage::AttClass::Image => {
-                // Vision-capable providers receive this as an image part at
-                // request-build time instead; this block is the fallback.
-                text.push_str(&format!("\n\n[Image attached: {} ({})]", att.name, size));
-            }
-            autocode_core::storage::AttClass::Binary => {
+            _ => {
+                let size = format!("{} KB", att.bytes.max(1) / 1024);
                 text.push_str(&format!(
                     "\n\n[File attached: {} ({}) -- binary file, content not shown]",
                     att.name, size

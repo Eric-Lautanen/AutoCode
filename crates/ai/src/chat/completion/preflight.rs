@@ -126,11 +126,23 @@ fn count_request_input_tokens(
     }
 
     // Load the same disk-backed message list the request will carry.
-    let full_msgs = {
-        let sess = state.sessions.iter().find(|s| s.id == session_id)?;
-        let pid = sess.project_id.as_ref()?;
-        let proj = state.projects.iter().find(|p| p.id == *pid)?;
-        autocode_core::storage::load_all_messages(proj, sess)
+    let (full_msgs, att_ctx, supports_vision) = {
+        let sess = state.sessions.iter().find(|s| s.id == session_id);
+        let ctx = sess.and_then(|s| {
+            s.project_id.as_ref().and_then(|pid| {
+                state
+                    .projects
+                    .iter()
+                    .find(|p| p.id == *pid)
+                    .map(|proj| (proj, s))
+            })
+        });
+        let (_, vision) = super::super::session_ops::model_flags_for_session(state, session_id);
+        let msgs = match (sess, ctx) {
+            (Some(s), Some((p, _))) => autocode_core::storage::load_all_messages(p, s),
+            _ => return None,
+        };
+        (msgs, ctx, vision)
     };
 
     let msgs: Vec<serde_json::Value> = full_msgs
@@ -141,6 +153,20 @@ fn count_request_input_tokens(
                 "role": m.role.label(),
                 "content": m.content,
             });
+            // Mirror the completion wire shape exactly when the message
+            // carries images (D6): parts for vision models, notices otherwise.
+            if !m.attachments.is_empty() {
+                let (plain, parts) =
+                    super::super::session::assemble_image_content(m, supports_vision, att_ctx);
+                obj["content"] = if supports_vision {
+                    serde_json::to_value(crate::provider::http::Content::Parts(
+                        crate::provider::http::parts_to_wire(&parts),
+                    ))
+                    .unwrap_or(serde_json::json!(plain))
+                } else {
+                    serde_json::json!(plain)
+                };
+            }
             if let Some(id) = &m.tool_call_id {
                 obj["tool_call_id"] = serde_json::json!(id);
             }

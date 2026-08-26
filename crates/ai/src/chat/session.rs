@@ -1,8 +1,8 @@
 // session.rs -- Session management.
 
 use crate::helpers;
-use crate::provider::ApiMessage;
-use autocode_core::state::{AppState, ChatMessage, Role};
+use crate::provider::{ApiMessage, ContentPart};
+use autocode_core::state::{AppState, AttachmentKind, ChatMessage, Project, Role, Session};
 
 /// Seed the system prompt into the active session if its messages are empty.
 /// Does NOT auto-create sessions — callers must create one first if needed.
@@ -34,6 +34,54 @@ pub fn ensure_session(state: &mut AppState) -> bool {
     false
 }
 
+/// D1/D4/D6: assemble the wire content for a message carrying image
+/// attachments. Vision models get parts `[Text{content}] ++ image data-URLs`;
+/// non-vision models get deterministic "[Image attached]" notice blocks
+/// appended to the plain content so rebuilt history stays stable.
+pub(crate) fn assemble_image_content(
+    msg: &ChatMessage,
+    vision: bool,
+    ctx: Option<(&Project, &Session)>,
+) -> (String, Vec<ContentPart>) {
+    let mut parts = vec![ContentPart::Text {
+        text: msg.content.clone(),
+    }];
+    let mut plain = msg.content.clone();
+    for att in msg
+        .attachments
+        .iter()
+        .filter(|a| a.kind == AttachmentKind::Image)
+    {
+        let size = format!("{} KB", att.bytes.max(1) / 1024);
+        if !vision {
+            plain.push_str(&format!("\n\n[Image attached: {} ({})]", att.name, size));
+            continue;
+        }
+        let Some((proj, sess)) = ctx else {
+            continue;
+        };
+        let path = autocode_core::storage::resolve_path(proj, sess, att);
+        match std::fs::read(autocode_core::utils::fsutil::extended_path(&path)) {
+            Ok(bytes) => {
+                let url = format!(
+                    "data:{};base64,{}",
+                    autocode_core::storage::image_mime(&att.name),
+                    autocode_core::storage::base64_encode(&bytes)
+                );
+                parts.push(ContentPart::ImageUrl { url });
+            }
+            Err(e) => {
+                eprintln!("[session] Failed to read staged image {}: {}", att.name, e);
+                plain.push_str(&format!(
+                    "\n\n[Image attached: {} ({}) -- staged file missing]",
+                    att.name, size
+                ));
+            }
+        }
+    }
+    (plain, parts)
+}
+
 /// Build the messages list for a specific session.
 /// The JSONL file is the source of truth — messages are written to disk
 /// immediately on push (rate-limited) and loaded here for API requests.
@@ -42,37 +90,8 @@ pub fn prepare_request_messages_for_session(
     session_id: &str,
 ) -> Vec<ApiMessage> {
     state.flush_pending_writes(true);
-    let supports_cache = {
-        let sess = state.sessions.iter().find(|s| s.id == session_id);
-        let prov_label = sess
-            .map(|s| {
-                if !s.provider_label.is_empty() {
-                    s.provider_label.clone()
-                } else {
-                    state.active_provider.clone()
-                }
-            })
-            .unwrap_or_else(|| state.active_provider.clone());
-        // Session-scoped model: the shared provider's model field is toolbar
-        // working-state mutated on every session switch.
-        let model = sess
-            .map(|s| {
-                if !s.model.is_empty() {
-                    s.model.clone()
-                } else {
-                    state
-                        .providers
-                        .get(&prov_label)
-                        .map(|p| p.model.clone())
-                        .unwrap_or_default()
-                }
-            })
-            .unwrap_or_default();
-        let p = state.providers.get(&prov_label);
-        let kind = p.map(|p| p.kind.clone());
-        kind.map(|k| autocode_core::helpers::model_or_safe(&k, &model).supports_cache_control)
-            .unwrap_or(false)
-    };
+    let (supports_cache, supports_vision) =
+        super::session_ops::model_flags_for_session(state, session_id);
 
     // Load full history from disk (the source of truth).
     let mut full_messages: Vec<ChatMessage> = {
@@ -147,6 +166,17 @@ pub fn prepare_request_messages_for_session(
         }
     }
 
+    // Resolve the (project, session) pair once for staged-attachment reads.
+    let att_ctx: Option<(&Project, &Session)> = {
+        let sess = state.sessions.iter().find(|s| s.id == session_id);
+        sess.and_then(|s| {
+            s.project_id
+                .as_ref()
+                .and_then(|pid| state.projects.iter().find(|p| p.id == *pid))
+                .map(|proj| (proj, s))
+        })
+    };
+
     let mut messages: Vec<ApiMessage> = full_messages
         .iter()
         .filter(|m| m.role != Role::Error)
@@ -155,6 +185,14 @@ pub fn prepare_request_messages_for_session(
             let mut msg = ApiMessage::from(m);
             if i == 0 && m.role == Role::System && supports_cache {
                 msg.cache_control = true;
+            }
+            if !m.attachments.is_empty() {
+                let (plain, parts) = assemble_image_content(m, supports_vision, att_ctx);
+                if supports_vision {
+                    msg.parts = parts;
+                } else {
+                    msg.content = plain;
+                }
             }
             msg
         })

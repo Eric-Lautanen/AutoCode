@@ -12,7 +12,7 @@ pub mod shell_task;
 pub use app_storage::{AppStorage, StorageLoad};
 pub use attachments::{
     AttClass, MAX_IMAGE_BYTES, MAX_TEXT_INJECTION_BYTES, MAX_TOTAL_BYTES, attachments_dir,
-    classify, resolve_path, stage_file,
+    base64_encode, classify, image_mime, resolve_path, stage_file,
 };
 pub use discovery::{
     discover_projects_from_disk, discover_sessions_from_disk, load_project_identity,

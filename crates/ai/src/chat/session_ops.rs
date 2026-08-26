@@ -295,6 +295,30 @@ pub fn project_root_for_session(state: &AppState, session_id: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Session-scoped model capability flags used at request-build time:
+/// (cache_control_supported, vision_supported). The shared ApiProvider.model
+/// is toolbar working-state; requests always consult the session's own model.
+pub fn model_flags_for_session(state: &AppState, session_id: &str) -> (bool, bool) {
+    let Some(sess) = state.sessions.iter().find(|s| s.id == session_id) else {
+        return (false, false);
+    };
+    let label = if !sess.provider_label.is_empty() {
+        &sess.provider_label
+    } else {
+        &state.active_provider
+    };
+    let Some(p) = state.providers.get(label) else {
+        return (false, false);
+    };
+    let model = if !sess.model.is_empty() {
+        &sess.model
+    } else {
+        &p.model
+    };
+    let defs = autocode_core::helpers::model_or_safe(&p.kind, model);
+    (defs.supports_cache_control, defs.supports_vision)
+}
+
 /// Max context window, handoff percentage, and handoff threshold for a
 /// session's provider. Single source of truth for the auto-handoff decision
 /// (check_auto_handoff) and the model-facing usage line, so the two can never

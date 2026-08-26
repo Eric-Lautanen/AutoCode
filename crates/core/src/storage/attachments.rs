@@ -55,6 +55,48 @@ fn sanitize_component(name: &str) -> String {
     crate::helpers::sanitize_filename(name)
 }
 
+/// Minimal standard base64 encoder (std-only; no new crates).
+pub fn base64_encode(data: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = u32::from_be_bytes([0, b[0], b[1], b[2]]);
+        out.push(TABLE[(n >> 18) as usize & 63] as char);
+        out.push(TABLE[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            TABLE[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+/// Image mime type by extension (for data URLs). Defaults are fine: providers
+/// sniff actual bytes when the mime is generic.
+pub fn image_mime(name: &str) -> &'static str {
+    let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
+        "webp" => "image/webp",
+        "tiff" | "tif" => "image/tiff",
+        _ => "application/octet-stream",
+    }
+}
+
 /// The session directory's attachments folder.
 pub fn attachments_dir(session_dir: &std::path::Path) -> PathBuf {
     session_dir.join("attachments")
@@ -132,5 +174,28 @@ mod tests {
         assert_eq!(classify("archive.zip"), AttClass::Binary);
         assert_eq!(classify("Dockerfile"), AttClass::Text);
         assert_eq!(classify("data.bin"), AttClass::Binary);
+    }
+
+    #[test]
+    fn base64_known_vectors() {
+        // RFC 4648 test vectors.
+        for (raw, encoded) in [
+            (&b""[..], ""),
+            (&b"f"[..], "Zg=="),
+            (&b"fo"[..], "Zm8="),
+            (&b"foo"[..], "Zm9v"),
+            (&b"foob"[..], "Zm9vYg=="),
+            (&b"fooba"[..], "Zm9vYmE="),
+            (&b"foobar"[..], "Zm9vYmFy"),
+        ] {
+            assert_eq!(base64_encode(raw), encoded);
+        }
+    }
+
+    #[test]
+    fn image_mime_mapping() {
+        assert_eq!(image_mime("a.png"), "image/png");
+        assert_eq!(image_mime("B.JPG"), "image/jpeg");
+        assert_eq!(image_mime("x.weird"), "application/octet-stream");
     }
 }
