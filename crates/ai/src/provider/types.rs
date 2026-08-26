@@ -52,6 +52,16 @@ pub struct ApiMessage {
     pub tool_calls: Option<serde_json::Value>,
     pub cache_control: bool,
     pub reasoning_content: Option<String>,
+    /// Multimodal content parts (F3). Empty = plain `content` string.
+    pub parts: Vec<ContentPart>,
+}
+
+/// Owned content part assembled at request-build time for vision-capable
+/// providers (F3). Serialized exactly as an OpenAI content-part object.
+#[derive(Debug, Clone)]
+pub enum ContentPart {
+    Text { text: String },
+    ImageUrl { url: String },
 }
 
 impl ApiMessage {
@@ -63,6 +73,7 @@ impl ApiMessage {
             tool_calls: None,
             cache_control: false,
             reasoning_content: None,
+            parts: Vec::new(),
         }
     }
 }
@@ -78,6 +89,8 @@ impl From<&ChatMessage> for ApiMessage {
             tool_calls,
             cache_control: false,
             reasoning_content: m.reasoning_content.clone(),
+            // Attachments assemble into parts at request-build time (F3).
+            parts: Vec::new(),
         }
     }
 }

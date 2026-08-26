@@ -101,6 +101,7 @@ fn merge_manifest(
                         supports_cache_control: m.supports_cache_control,
                         requests_per_hour: m.requests_per_hour,
                         thinking_overrides: m.thinking_overrides,
+                        supports_vision: m.supports_vision,
                     },
                 )
             })
@@ -163,6 +164,7 @@ pub fn safe_model_defaults() -> ModelManifest {
         supports_cache_control: false,
         requests_per_hour: None,
         thinking_overrides: std::collections::HashMap::new(),
+        supports_vision: false,
     }
 }
 
@@ -170,6 +172,14 @@ pub fn model_or_safe(kind: &ProviderKind, model: &str) -> ModelManifest {
     model_manifest(kind, model)
         .cloned()
         .unwrap_or_else(safe_model_defaults)
+}
+
+/// Whether the model accepts image content parts (F3 vision). Unknown
+/// models are treated as non-vision.
+pub fn model_supports_vision(kind: &ProviderKind, model: &str) -> bool {
+    model_manifest(kind, model)
+        .map(|m| m.supports_vision)
+        .unwrap_or(false)
 }
 
 pub fn provider_ids() -> Vec<String> {

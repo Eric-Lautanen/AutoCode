@@ -52,4 +52,7 @@ pub struct ModelManifest {
     /// gateway's quirk here — never in Rust.
     #[serde(default)]
     pub thinking_overrides: std::collections::HashMap<String, serde_json::Value>,
+    /// Whether this model accepts image content parts (F3 vision).
+    #[serde(default)]
+    pub supports_vision: bool,
 }

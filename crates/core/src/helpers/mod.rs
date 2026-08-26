@@ -33,8 +33,8 @@ pub use serde_defaults::{
 };
 
 pub use utils::{
-    budget_fraction, manifest, model_manifest, model_or_safe, panic_msg, parse_thinking_api,
-    provider_ids, provider_manifest, reasoning_efforts_for_provider, safe_model_defaults,
-    sanitize_display_text, sanitize_filename, truncate_middle, truncate_str, unique_data_dir_name,
-    usage_display,
+    budget_fraction, manifest, model_manifest, model_or_safe, model_supports_vision, panic_msg,
+    parse_thinking_api, provider_ids, provider_manifest, reasoning_efforts_for_provider,
+    safe_model_defaults, sanitize_display_text, sanitize_filename, truncate_middle, truncate_str,
+    unique_data_dir_name, usage_display,
 };

@@ -338,6 +338,7 @@ impl ApiProvider {
                         supports_cache_control: defs.supports_cache_control,
                         requests_per_hour: defs.requests_per_hour,
                         thinking_overrides: defs.thinking_overrides.clone(),
+                        supports_vision: defs.supports_vision,
                         handoff_percent: 80,
                         temperature: 0.2,
                         top_p: 1.0,

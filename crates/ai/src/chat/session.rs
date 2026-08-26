@@ -184,6 +184,7 @@ pub fn prepare_request_messages_for_session(
         tool_calls: None,
         cache_control: false,
         reasoning_content: None,
+        parts: Vec::new(),
     });
 
     messages

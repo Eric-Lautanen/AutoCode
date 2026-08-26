@@ -156,7 +156,7 @@ fn build_request_body(
     supports_strict: bool,
     thinking_override: Option<serde_json::Value>,
 ) -> Result<String, serde_json::Error> {
-    use super::http::{ReqMsg, RequestBody};
+    use super::http::{Content, ReqMsg, RequestBody, parts_to_wire};
 
     let handoff_enabled = req.handoff_enabled;
     let messages: Vec<ReqMsg> = req
@@ -166,8 +166,10 @@ fn build_request_body(
             role: &m.role,
             content: if m.tool_calls.is_some() {
                 None
+            } else if m.parts.is_empty() {
+                Some(Content::Text(&m.content))
             } else {
-                Some(&m.content)
+                Some(Content::Parts(parts_to_wire(&m.parts)))
             },
             tool_call_id: m.tool_call_id.as_deref(),
             tool_calls: m.tool_calls.as_ref(),

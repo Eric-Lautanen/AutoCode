@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use crate::helpers::{model_or_safe, provider_manifest};
 use crate::state::{ApiProvider, ProviderKind, SecretString, ThinkingApi};
 
-// ── File format (serialized to providers.json) ──────────────────────────
+// â”€â”€ File format (serialized to providers.json) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct ProviderFile {
@@ -51,6 +51,9 @@ pub struct ModelEntry {
     /// See ModelManifest::thinking_overrides for the full explanation.
     #[serde(default)]
     pub thinking_overrides: std::collections::HashMap<String, serde_json::Value>,
+    /// Whether this model accepts image content parts (F3 vision).
+    #[serde(default)]
+    pub supports_vision: bool,
 
     /// Handoff threshold percentage (10-95). Defaults to 80.
     #[serde(default = "default_handoff_pct")]
@@ -90,7 +93,7 @@ fn default_strict_tools_entry() -> Option<bool> {
     None
 }
 
-// ── Path ───────────────────────────────────────────────────────────────
+// â”€â”€ Path â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 fn providers_file_path() -> PathBuf {
     crate::utils::fsutil::exe_dir()
@@ -98,7 +101,7 @@ fn providers_file_path() -> PathBuf {
         .join("providers.json")
 }
 
-// ── Load from disk ─────────────────────────────────────────────────────
+// â”€â”€ Load from disk â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /// Load providers from `AutoCode_data/providers.json`.
 /// Returns None if the file doesn't exist or is corrupt.
@@ -124,7 +127,7 @@ pub fn save_providers_file(providers: &HashMap<String, ApiProvider>) -> std::io:
     crate::utils::fsutil::write(&path, json)
 }
 
-// ── Conversion ─────────────────────────────────────────────────────────
+// â”€â”€ Conversion â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 fn convert_to_providers(file: &ProviderFile) -> HashMap<String, ApiProvider> {
     let mut providers = HashMap::new();
@@ -219,6 +222,7 @@ fn convert_from_providers(providers: &HashMap<String, ApiProvider>) -> ProviderF
                         supports_cache_control: defs.supports_cache_control,
                         requests_per_hour: defs.requests_per_hour,
                         thinking_overrides: defs.thinking_overrides.clone(),
+                        supports_vision: defs.supports_vision,
                         handoff_percent: ap.handoff_percent,
                         temperature: ap.temperature,
                         top_p: ap.top_p,
@@ -245,6 +249,7 @@ fn convert_from_providers(providers: &HashMap<String, ApiProvider>) -> ProviderF
                         supports_cache_control: defs.supports_cache_control,
                         requests_per_hour: defs.requests_per_hour,
                         thinking_overrides: defs.thinking_overrides.clone(),
+                        supports_vision: defs.supports_vision,
                         handoff_percent: ap.handoff_percent,
                         temperature: ap.temperature,
                         top_p: ap.top_p,

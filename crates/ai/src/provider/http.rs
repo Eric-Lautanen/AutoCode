@@ -987,11 +987,48 @@ pub(crate) fn http_response_body(buffer: &[u8]) -> Vec<u8> {
 
 // -- Request body serialization ------------------------------------------------
 
+/// Message content: a plain string (the historical wire shape, byte-identical
+/// when no attachments exist) or OpenAI-style content parts for vision.
+#[derive(serde::Serialize)]
+#[serde(untagged)]
+pub(crate) enum Content<'a> {
+    Text(&'a str),
+    Parts(Vec<Part>),
+}
+
+/// One multimodal content part, serialized exactly as the OpenAI
+/// `{"type":"text","text":..}` / `{"type":"image_url","image_url":{"url":..}}`
+/// objects.
+#[derive(serde::Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(crate) enum Part {
+    Text { text: String },
+    ImageUrl { image_url: ImageUrlField },
+}
+
+#[derive(serde::Serialize)]
+pub(crate) struct ImageUrlField {
+    pub url: String,
+}
+
+/// Map owned request-side parts onto their wire shape.
+pub(crate) fn parts_to_wire(parts: &[super::types::ContentPart]) -> Vec<Part> {
+    parts
+        .iter()
+        .map(|p| match p {
+            super::types::ContentPart::Text { text } => Part::Text { text: text.clone() },
+            super::types::ContentPart::ImageUrl { url } => Part::ImageUrl {
+                image_url: ImageUrlField { url: url.clone() },
+            },
+        })
+        .collect()
+}
+
 #[derive(serde::Serialize)]
 pub(crate) struct ReqMsg<'a> {
     pub role: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<&'a str>,
+    pub content: Option<Content<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1035,4 +1072,59 @@ pub(crate) struct RequestBody<'a> {
     /// Bypasses the ThinkingApi convention entirely when set.
     #[serde(flatten, skip_serializing_if = "Option::is_none")]
     pub extra: Option<serde_json::Value>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Content, ReqMsg, parts_to_wire};
+    use crate::provider::types::ContentPart;
+
+    fn msg_content_json(content: Option<Content<'_>>) -> serde_json::Value {
+        let msg = ReqMsg {
+            role: "user",
+            content,
+            tool_call_id: None,
+            tool_calls: None,
+            reasoning_content: None,
+            cache_control: None,
+        };
+        serde_json::to_value(&msg).unwrap()
+    }
+
+    #[test]
+    fn plain_string_wire_shape_is_unchanged() {
+        let v = msg_content_json(Some(Content::Text("hello world")));
+        assert_eq!(v["content"], serde_json::json!("hello world"));
+        // Untagged enum must not add a wrapper object.
+        assert!(v["content"].is_string());
+    }
+
+    #[test]
+    fn content_parts_serialize_as_openai_objects() {
+        let owned = vec![
+            ContentPart::Text {
+                text: "What is in this image?".to_string(),
+            },
+            ContentPart::ImageUrl {
+                url: "data:image/png;base64,aGVsbG8=".to_string(),
+            },
+        ];
+        let v = msg_content_json(Some(Content::Parts(parts_to_wire(&owned))));
+        let arr = v["content"].as_array().expect("parts array");
+        assert_eq!(arr.len(), 2);
+        assert_eq!(
+            arr[0],
+            serde_json::json!({"type": "text", "text": "What is in this image?"})
+        );
+        assert_eq!(
+            arr[1],
+            serde_json::json!({"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}})
+        );
+    }
+
+    #[test]
+    fn tool_call_messages_omit_content() {
+        let v = msg_content_json(None);
+        assert!(v.get("content").is_none());
+    }
 }
