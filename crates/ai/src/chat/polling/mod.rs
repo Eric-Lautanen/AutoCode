@@ -107,6 +107,9 @@ pub fn update_runtime(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
 
 pub fn update_all(state: &mut AppState, runtimes: &mut HashMap<String, ChatRuntime>) -> bool {
     let mut repaint = false;
+    // Publish runtime-owned session ids so core-side pruning (MAX_SESSIONS)
+    // never evicts a session with a live runtime.
+    state.runtime_sessions = runtimes.keys().cloned().collect();
     let keys: Vec<String> = runtimes.keys().cloned().collect();
     let mut rekeys: Vec<(String, String)> = Vec::new();
     for key in keys {

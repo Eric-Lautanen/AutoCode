@@ -293,6 +293,11 @@ pub struct AppState {
     #[serde(skip)]
     pub pending_writes: PendingWrites,
 
+    /// Ids of sessions currently owned by a live ChatRuntime, refreshed by
+    /// the per-frame pump. Pruning must never evict these mid-run.
+    #[serde(skip)]
+    pub runtime_sessions: std::collections::HashSet<String>,
+
     /// Set to true when the session's provider_label or model changes
     /// in the UI so the main loop can persist the session meta to disk.
     #[serde(skip)]
@@ -352,6 +357,7 @@ impl Default for AppState {
             web_rate_limit_ms: crate::helpers::default_web_rate_limit_ms(),
             disk_write_rate_ms: crate::helpers::default_disk_write_rate_ms(),
             pending_writes: PendingWrites::new(),
+            runtime_sessions: std::collections::HashSet::new(),
             session_meta_dirty: false,
         }
     }
@@ -675,9 +681,25 @@ impl AppState {
     const MAX_SESSIONS: usize = 50;
 
     pub fn new_session_for_project(&mut self, project_id: Option<String>) {
-        // Prune oldest sessions when the limit is exceeded, keeping the newest.
+        // Prune when the limit is exceeded, keeping the newest. Never evict
+        // the active session or one owned by a live runtime (a background
+        // session mid-run would lose still_owns_session and get drained);
+        // prefer closed sessions, then the oldest open ones. If everything
+        // is protected, exceed the cap instead of killing a live session.
         while self.sessions.len() >= Self::MAX_SESSIONS {
-            self.sessions.remove(0);
+            let victim = self
+                .sessions
+                .iter()
+                .filter(|s| Some(&s.id) != self.active_session_id.as_ref())
+                .filter(|s| !self.runtime_sessions.contains(&s.id))
+                .min_by_key(|s| (!s.closed, s.created_at))
+                .map(|s| s.id.clone());
+            let Some(victim) = victim else {
+                break;
+            };
+            if let Some(idx) = self.sessions.iter().position(|s| s.id == victim) {
+                self.sessions.remove(idx);
+            }
         }
         let prov_label = self.active_provider.clone();
         let model = self
@@ -830,5 +852,74 @@ impl AppState {
         }
         self.pending_writes.last_write = std::time::Instant::now();
         batches
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sess(state: &mut AppState, created_at: u64, closed: bool) -> String {
+        let existing_ids: Vec<String> = state.sessions.iter().map(|s| s.id.clone()).collect();
+        let id = crate::helpers::generate_session_id(&existing_ids);
+        let mut s = Session::new(None, String::new(), String::new());
+        s.id = id.clone();
+        s.label = format!("S{}", id);
+        s.created_at = created_at;
+        s.closed = closed;
+        state.sessions.push(s);
+        id
+    }
+
+    fn fill(state: &mut AppState, n: usize) -> Vec<String> {
+        (0..n)
+            .map(|i| {
+                let id = sess(state, 1000 + i as u64, false);
+                // Mark every other early session closed.
+                // Mark every other early session closed.
+                if i % 2 == 0
+                    && let Some(s) = state.sessions.iter_mut().find(|s| s.id == id)
+                {
+                    s.closed = true;
+                }
+                id
+            })
+            .collect()
+    }
+
+    #[test]
+    fn prune_prefers_closed_then_oldest_and_skips_protected() {
+        let mut state = AppState::default();
+        let ids = fill(&mut state, AppState::MAX_SESSIONS);
+        // Protect the oldest open session (i=1) as a live runtime's session.
+        state.runtime_sessions.insert(ids[1].clone());
+        state.new_session_for_project(None);
+        assert_eq!(state.sessions.len(), AppState::MAX_SESSIONS);
+        assert!(!state.sessions.iter().any(|s| s.id == ids[0])); // oldest closed evicted
+        assert!(state.sessions.iter().any(|s| s.id == ids[1])); // protected survives
+        assert!(
+            state
+                .sessions
+                .iter()
+                .any(|s| s.id == ids[AppState::MAX_SESSIONS - 1])
+        );
+    }
+
+    #[test]
+    fn prune_never_kills_active_or_live_sessions() {
+        let mut state = AppState::default();
+        let ids = fill(&mut state, AppState::MAX_SESSIONS);
+        for id in &ids {
+            state.runtime_sessions.insert(id.clone());
+        }
+        let active = ids[0].clone();
+        state.active_session_id = Some(active.clone());
+        state.new_session_for_project(None);
+        // All sessions protected: cap exceeded rather than a live kill — the
+        // new session is appended and every original one survives.
+        assert_eq!(state.sessions.len(), AppState::MAX_SESSIONS + 1);
+        for id in &ids {
+            assert!(state.sessions.iter().any(|s| s.id == *id));
+        }
     }
 }
