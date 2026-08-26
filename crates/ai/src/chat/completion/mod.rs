@@ -454,7 +454,11 @@ pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
 
 /// Auto-trigger a handoff when token usage exceeds the configured threshold.
 pub fn check_auto_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
-    if !state.handoff_enabled || runtime.handoff_in_progress {
+    // Session-scoped: consult the runtime's own session flag, not the global
+    // toggle, so a session (agent) with handoff disabled never auto-hands off.
+    if !state.handoff_enabled_for(runtime.active_session_id.as_deref())
+        || runtime.handoff_in_progress
+    {
         return;
     }
     if runtime.live_shell_rx.is_some() {

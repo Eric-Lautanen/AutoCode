@@ -19,8 +19,10 @@ pub(super) fn poll_tool_results(state: &mut AppState, runtime: &mut ChatRuntime)
 
             if still_owns_session(runtime, state) {
                 let has_handoff = results.iter().any(|r| r.content.starts_with("HANDOFF:"));
+                let session_handoff =
+                    state.handoff_enabled_for(runtime.active_session_id.as_deref());
 
-                if has_handoff && state.handoff_enabled && !runtime.handoff_in_progress {
+                if has_handoff && session_handoff && !runtime.handoff_in_progress {
                     // Extract the AI-generated next_prompt from the handoff tool call args.
                     if let Some(tr) = results.iter().find(|r| r.content.starts_with("HANDOFF:"))
                         && let Ok(args) =
@@ -32,7 +34,7 @@ pub(super) fn poll_tool_results(state: &mut AppState, runtime: &mut ChatRuntime)
                     }
                     push_tool_results_to_state(state, runtime, &results);
                     handle_handoff(state, runtime);
-                } else if has_handoff && !state.handoff_enabled {
+                } else if has_handoff && !session_handoff {
                     // Give the model feedback when handoff is disabled.
                     let results: Vec<ToolResult> = results
                         .into_iter()
@@ -83,8 +85,9 @@ pub(super) fn commit_tool_results(state: &mut AppState, runtime: &mut ChatRuntim
             .pending_tool_results
             .iter()
             .any(|tr| tr.content.starts_with("HANDOFF:"));
+        let session_handoff = state.handoff_enabled_for(runtime.active_session_id.as_deref());
 
-        if has_handoff && state.handoff_enabled && !runtime.handoff_in_progress {
+        if has_handoff && session_handoff && !runtime.handoff_in_progress {
             let results = std::mem::take(&mut runtime.pending_tool_results);
             // Extract the AI-generated next_prompt from the handoff tool call args.
             if let Some(tr) = results.iter().find(|r| r.content.starts_with("HANDOFF:"))
@@ -101,7 +104,7 @@ pub(super) fn commit_tool_results(state: &mut AppState, runtime: &mut ChatRuntim
             return;
         }
 
-        if has_handoff && !state.handoff_enabled {
+        if has_handoff && !session_handoff {
             // Give the model feedback when handoff is disabled.
             for tr in &mut runtime.pending_tool_results {
                 if tr.content.starts_with("HANDOFF:") {

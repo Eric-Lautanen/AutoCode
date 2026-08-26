@@ -51,7 +51,10 @@ pub(crate) fn preflight_context_check(
 
     if used + max_output > max_context {
         let room = max_context.saturating_sub(used);
-        if room < 1000 && state.handoff_enabled {
+        // Session-scoped gate: a runtime whose own session has handoff
+        // disabled (agents, or a user toggle) takes the error path instead of
+        // hijacking the active session with a chained forced handoff.
+        if room < 1000 && session_handoff {
             runtime.drain();
             handle_handoff(state, runtime);
             return None;
