@@ -193,6 +193,19 @@ pub fn push_error(state: &mut AppState, runtime: &ChatRuntime, content: String) 
     push_runtime(state, runtime, ChatMessage::new(Role::Error, content));
 }
 
+/// Persist session metadata to disk. Keeps the stored provider-reported token
+/// count current so a reopened or restarted session restores the real context
+/// figure instead of 0.
+pub fn persist_session_meta(state: &AppState, session_id: &str) {
+    if let Some(sess) = state.sessions.iter().find(|s| s.id == session_id)
+        && let Some(pid) = sess.project_id.as_ref()
+        && let Some(proj) = state.projects.iter().find(|p| p.id == *pid)
+        && let Err(e) = autocode_core::storage::save_session_meta(proj, sess)
+    {
+        eprintln!("[chat] Failed to save session meta: {}", e);
+    }
+}
+
 pub fn push_tool_results_to_state(
     state: &mut AppState,
     runtime: &ChatRuntime,

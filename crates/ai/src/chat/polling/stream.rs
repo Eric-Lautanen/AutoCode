@@ -5,7 +5,8 @@ use super::super::completion::{auto_continue, auto_execute, start_completion};
 use super::super::errors::{fix_provider_params, shorten_err};
 use super::super::runtime::{ChatRuntime, ToolResult};
 use super::super::session_ops::{
-    project_root_for_session, push_error, push_runtime, push_to_session, sanitize_session_name,
+    persist_session_meta, project_root_for_session, push_error, push_runtime, push_to_session,
+    sanitize_session_name,
 };
 use super::super::tools::{ToolExecCtx, build_tool_meta, execute_tool_with_cache};
 
@@ -98,6 +99,11 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                     sess.record_actual_usage(prompt_tokens, completion_tokens);
                     // Clear transient error messages on any successful completion.
                     sess.messages.retain(|m| m.role != Role::Error);
+                }
+                // Persist the provider-reported token count so a restarted
+                // session resumes with the real context figure, not 0.
+                if let Some(sid) = runtime.active_session_id.as_deref() {
+                    persist_session_meta(state, sid);
                 }
                 let elapsed = runtime
                     .request_start
