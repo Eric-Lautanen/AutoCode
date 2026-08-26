@@ -45,21 +45,23 @@ test on victim selection order.
    order preservation + interleaved write/read serialization.
 
 ### F1 — Sub-agents (multiple commits, D1–D10)
-8. Storage foundation: `AgentMeta` + status enum in `state/session.rs`;
-   `Session.storage_override: Option<PathBuf>` (`#[serde(skip)]`);
-   `SessionMeta.agent` with `#[serde(default)]`; override-aware root resolver
-   in `session_io.rs`; discovery scans `agents/*/session.json`; C6 lockstep at
-   all literal sites. Integration tests: AgentMeta roundtrip, restart sweep
-   appends synthetic ToolResult to parent JSONL, agent rename stays inside
-   agents/ root, parent-delete cascades.
-9. Lifecycle core: spawn/settle/cancel module (`chat/agents.rs`),
-   `pending_agents: Vec<AgentHandle>` on runtime, D9 gates (is_busy,
-   auto-handoff guard, drain settles children + pushes error ToolResults),
-   D10 cap 4 reject-at-cap, D7 seeding via handoff skeleton, D5 tool gating
-   (options struct on `tool_definitions`; agents omit spawn_agent/handoff/
-   todo_list/project_task_list), D6 per-agent model (rides on C1).
-10. UI: agent windows (settings-window pattern), live cards in parent chat,
-    tab/dropdown filters, cancel button. Manual scripts from §7.
+Status: COMPLETE (storage foundation, lifecycle core, UI).
+Adaptations vs the audit letter (approved direction): agent runtimes are
+created by update_all via an AppState queue (the map lives there; avoids
+re-plumbing poll signatures), and settlement runs at update_all level for
+the same reason — children live in the same map the pump owns. Stop/Stop-like
+drains settle children through settle_agents_on_stop; app exit relies on the
+startup sweep converting leftover Running agents to Failed, exactly as D9.3
+specifies.
+C7 note: parallel agents on the same provider+model share the RPH budget but
+serialize request starts by design of the rate limiter. Documented, not fixed.
+
+8. Storage foundation ✓ (AgentMeta + storage_override + override-aware IO +
+   discovery scan + startup sweep with parent JSONL repair; integration tests)
+9. Lifecycle core ✓ (spawn/settle/cancel, D9 gates, D10 cap 4, D7 seeding,
+   D5 tool gating, D6 per-agent model riding on C1)
+10. UI ✓ (agent windows, live cards in parent chat, tab/dropdown filters,
+    cancel button)
 
 ### F3 — Context attachments (4 commits)
 11. Phase 1: wire format (`Content` enum on ReqMsg, `ApiMessage.parts`,

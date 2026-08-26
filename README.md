@@ -1,4 +1,4 @@
-# AutoCode
+﻿# AutoCode
 
 **AutoCode** is an autonomous AI coding agent — a native Rust desktop app that connects to LLMs and gives them full access to your filesystem and shell. Not a harness or scaffold — a single self-contained binary. Built-in code editor, handoff system. Run tasks for days or weeks.
 
@@ -15,7 +15,7 @@ It's not trying to be clever. It's trying to be durable. Transient errors retry 
 
 | Category | What it does |
 |----------|-------------|
-| **AI Coding** | Read, write, edit (7-strategy fuzzy patching), search, and execute code via 24 built-in tools |
+| **AI Coding** | Read, write, edit (7-strategy fuzzy patching), search, and execute code via 25 built-in tools |
 | **Multi-Provider** | Built-in configs for popular providers + add any OpenAI-compatible provider via Settings |
 | **Streaming** | Real-time SSE with auto-recovery, exponential backoff, auto-continue on drop |
 | **Sessions** | Named sessions per project (up to 50), JSONL history, lazy-load display buffer, per-project tab colors |
@@ -76,7 +76,7 @@ Built in **Rust 2024** with **egui 0.34** / **eframe 0.34**. Zero async — all 
 1. **Startup** — seeds `providers.json` from baked-in defaults on first launch, loads state from `app.ron` + provider configs (including API keys) from `providers.json`
 2. **User input** — typed in chat panel; toolbar selects project/session/provider
 3. **Chat orchestration** — loads history from disk, builds API POST with tool definitions, parses SSE stream, dispatches tool calls
-4. **Tool execution** — 24 handlers run autonomously (filesystem, shell, search, web, skills, tasks, session mgmt); `accessed_paths` recorded into `FileAccessLog`
+4. **Tool execution** — 25 handlers run autonomously (filesystem, shell, search, web, skills, tasks, session mgmt); `accessed_paths` recorded into `FileAccessLog`
 5. **LRU pruning** — on every frame + before each completion, `apply_looping_window()` scores message groups by working set membership, error count, superseded references, and recency floor; removes the lowest-scored group, writes breadcrumb marker
 6. **Session persistence** — atomic JSON metadata writes (temp + rename), append-mode JSONL history, rate-limited
 7. **Auto-continuation** — near context limit → generates RESUME.md → handoff to new session (suppressed when LRU is active)
@@ -122,10 +122,11 @@ Settings are persisted across restarts. Most settings in `app.ron`; **provider c
 - Atomic session file writes (temp + rename)
 - Zero confirmation prompts — designed for trusted environments
 
-## Tools (24)
+## Tools (25)
 
 | Tool | Description |
 |------|-------------|
+| `spawn_agent` | Spawn a sub-agent that works autonomously on a focused sub-goal in its own context window under this session's `agents/` folder; its final response returns verbatim as the tool result. Multiple spawns per batch run concurrently (cap 4). |
 | `run_shell` | Execute shell commands with live streaming output (scoped to builds, tests, git, and other CLI tooling — never for file I/O or code search) |
 | `read_file` | Read a file with numbered lines and byte counts |
 | `read_files` | Batch read multiple files at once |
