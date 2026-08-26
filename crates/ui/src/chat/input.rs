@@ -182,7 +182,7 @@ pub(crate) fn show_input_row(
                                     panel_state.input.pop();
                                 }
                                 let text = std::mem::take(&mut panel_state.input);
-                                chat::send_message(state, runtimes, text);
+                                chat::send_message(state, runtimes, text, Vec::new());
                                 panel_state.scroll_to_bottom = true;
                                 panel_state.user_scrolled_up = false;
                             }

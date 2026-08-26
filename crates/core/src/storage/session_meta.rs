@@ -47,6 +47,10 @@ pub struct SessionMeta {
     #[serde(default)]
     pub draft_input: String,
 
+    /// Staged draft attachments, restored on session switch (F3).
+    #[serde(default)]
+    pub draft_attachments: Vec<crate::state::Attachment>,
+
     /// Whether the looping window (LRU pruning) is enabled for this session.
     #[serde(default)]
     pub looping_window: bool,
@@ -79,6 +83,7 @@ impl SessionMeta {
             show_reasoning_inline: session.show_reasoning_inline,
             show_project_tasks: session.show_project_tasks,
             draft_input: session.draft_input.clone(),
+            draft_attachments: session.draft_attachments.clone(),
             looping_window: session.looping_window,
             agent: session.agent.clone(),
         }

@@ -6,7 +6,7 @@ pub(crate) mod provider;
 use std::collections::HashMap;
 
 use crate::{helpers, provider::ProviderClient};
-use autocode_core::state::{AppState, ChatMessage, Role, TodoStatus, ToolMeta};
+use autocode_core::state::{AppState, Attachment, ChatMessage, Role, TodoStatus, ToolMeta};
 
 use super::runtime::ChatRuntime;
 use super::session_ops::{project_root_for_session, push_error, push_runtime, push_to_session};
@@ -18,10 +18,66 @@ pub(crate) use provider::{build_completion_request, select_provider};
 
 // -- Send a user message -------------------------------------------------------
 
+/// D4 injection matrix (text side): append attachment content blocks to the
+/// outgoing user message. Text/doc files dump their capped content; images
+/// (until a vision provider consumes them as parts) and binaries get notice
+/// blocks. Runs ONCE at push time — later turns see the injected text as
+/// ordinary message history and never re-read the staged files.
+fn inject_attachments(
+    mut text: String,
+    attachments: &[Attachment],
+    state: &AppState,
+    sid: &str,
+) -> String {
+    if attachments.is_empty() {
+        return text;
+    }
+    let sess = match state.sessions.iter().find(|s| s.id == sid) {
+        Some(s) => s,
+        None => return text,
+    };
+    let proj = match sess.project_id.as_ref() {
+        Some(pid) => state.projects.iter().find(|p| &p.id == pid),
+        None => return text,
+    };
+    for att in attachments {
+        let size = format!("{} KB", att.bytes.max(1) / 1024);
+        match autocode_core::storage::classify(&att.name) {
+            autocode_core::storage::AttClass::Text => {
+                let path = proj.map(|p| autocode_core::storage::resolve_path(p, sess, att));
+                let content = path
+                    .and_then(|p| {
+                        std::fs::read_to_string(autocode_core::utils::fsutil::extended_path(&p))
+                            .ok()
+                    })
+                    .unwrap_or_default();
+                let capped = autocode_core::helpers::truncate_middle(
+                    &content,
+                    autocode_core::storage::MAX_TEXT_INJECTION_BYTES,
+                );
+                text.push_str(&format!("\n\n[Attachment: {}]\n{}", att.name, capped));
+            }
+            autocode_core::storage::AttClass::Image => {
+                // Vision-capable providers receive this as an image part at
+                // request-build time instead; this block is the fallback.
+                text.push_str(&format!("\n\n[Image attached: {} ({})]", att.name, size));
+            }
+            autocode_core::storage::AttClass::Binary => {
+                text.push_str(&format!(
+                    "\n\n[File attached: {} ({}) -- binary file, content not shown]",
+                    att.name, size
+                ));
+            }
+        }
+    }
+    text
+}
+
 pub fn send_message(
     state: &mut AppState,
     runtimes: &mut HashMap<String, ChatRuntime>,
     text: String,
+    attachments: Vec<Attachment>,
 ) {
     if text.trim().is_empty() {
         return;
@@ -41,7 +97,14 @@ pub fn send_message(
     if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
         sess.messages.retain(|m| m.role != Role::Error);
     }
-    push_to_session(state, Some(&sid), ChatMessage::new(Role::User, text));
+    let mut msg = ChatMessage::new(
+        Role::User,
+        inject_attachments(text, &attachments, state, &sid),
+    );
+    if !attachments.is_empty() {
+        msg.attachments = attachments;
+    }
+    push_to_session(state, Some(&sid), msg);
     // Clear any stale partial response backup from a previous failed attempt.
     runtime.continuation_chain = 0;
     runtime.continue_streak = 0;

@@ -82,6 +82,10 @@ pub struct Session {
     #[serde(default)]
     pub draft_input: String,
 
+    /// Staged draft attachments, restored on session switch (F3).
+    #[serde(default)]
+    pub draft_attachments: Vec<super::chat::Attachment>,
+
     /// When true, old message pairs are pruned when the session's token usage
     /// crosses the model's configured trigger threshold. Also disables auto-handoff.
     #[serde(default)]
@@ -136,6 +140,7 @@ impl Session {
             show_reasoning_inline: false,
             show_project_tasks: false,
             draft_input: String::new(),
+            draft_attachments: Vec::new(),
             looping_window: false,
             turn_count: 0,
             access_log: FileAccessLog::new(),

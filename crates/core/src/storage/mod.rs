@@ -1,4 +1,5 @@
 pub mod app_storage;
+pub mod attachments;
 pub mod discovery;
 pub mod messages;
 pub mod persistence;
@@ -9,6 +10,10 @@ pub mod shell_task;
 
 // Re-export all public items so existing call sites continue to work.
 pub use app_storage::{AppStorage, StorageLoad};
+pub use attachments::{
+    AttClass, MAX_IMAGE_BYTES, MAX_TEXT_INJECTION_BYTES, MAX_TOTAL_BYTES, attachments_dir,
+    classify, resolve_path, stage_file,
+};
 pub use discovery::{
     discover_projects_from_disk, discover_sessions_from_disk, load_project_identity,
     load_project_meta, project_meta_path, save_project_identity, save_project_meta,

@@ -320,6 +320,7 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
                 session.show_reasoning_inline = meta.show_reasoning_inline;
                 session.show_project_tasks = meta.show_project_tasks;
                 session.draft_input = meta.draft_input;
+                session.draft_attachments = meta.draft_attachments;
                 session.looping_window = meta.looping_window;
                 session.agent = meta.agent;
                 // Rebuild access log from ToolMeta in loaded messages.

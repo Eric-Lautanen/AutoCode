@@ -52,6 +52,7 @@ fn make_session_dir(project: &Project, label: &str) -> (SessionMeta, PathBuf) {
         show_reasoning_inline: false,
         show_project_tasks: false,
         draft_input: String::new(),
+        draft_attachments: Vec::new(),
         looping_window: false,
         agent: None,
     };
@@ -65,7 +66,7 @@ fn make_session_dir(project: &Project, label: &str) -> (SessionMeta, PathBuf) {
     (meta, msg_dir)
 }
 
-// ── 4.1 Long-Running Simulation Test ─────────────────────────────────
+// â”€â”€ 4.1 Long-Running Simulation Test â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[test]
 fn test_long_running_simulation() {
@@ -95,6 +96,7 @@ fn test_long_running_simulation() {
                     reasoning_content: None,
                     turn: 0,
                     is_prune_marker: false,
+                    attachments: Vec::new(),
                 })
                 .collect();
 
@@ -140,7 +142,7 @@ fn test_long_running_simulation() {
     );
 }
 
-// ── 4.2 Crash Recovery Test ──────────────────────────────────────────
+// â”€â”€ 4.2 Crash Recovery Test â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[test]
 fn test_crash_recovery() {
@@ -166,12 +168,13 @@ fn test_crash_recovery() {
             reasoning_content: None,
             turn: 0,
             is_prune_marker: false,
+            attachments: Vec::new(),
         })
         .collect();
 
     messages::append_messages(&msg_dir, &meta.id, &meta.label, &msgs).unwrap();
 
-    // Phase 2: Simulate crash — re-discover from disk.
+    // Phase 2: Simulate crash â€” re-discover from disk.
     let projects = storage::discover_projects_from_disk();
     let loaded_project = projects
         .iter()
@@ -196,7 +199,7 @@ fn test_crash_recovery() {
     assert_eq!(sess.label, "main_session");
 }
 
-// ── 4.3 Truncate Preserves Early Messages Test ──────────────────────
+// â”€â”€ 4.3 Truncate Preserves Early Messages Test â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[test]
 fn test_truncate_preserves_early_messages() {
@@ -222,6 +225,7 @@ fn test_truncate_preserves_early_messages() {
             reasoning_content: None,
             turn: 0,
             is_prune_marker: false,
+            attachments: Vec::new(),
         })
         .collect();
 
@@ -252,7 +256,7 @@ fn test_truncate_preserves_early_messages() {
     );
 }
 
-// ── 4.4 Remove Messages By ID Test ──────────────────────────────────
+// â”€â”€ 4.4 Remove Messages By ID Test â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[test]
 fn test_remove_messages_by_id() {
@@ -278,6 +282,7 @@ fn test_remove_messages_by_id() {
             reasoning_content: None,
             turn: 0,
             is_prune_marker: false,
+            attachments: Vec::new(),
         })
         .collect();
 
@@ -306,7 +311,7 @@ fn test_remove_messages_by_id() {
     );
 }
 
-// ── 4.4 Actual Token Count Round-Trip Test ───────────────────────────
+// â”€â”€ 4.4 Actual Token Count Round-Trip Test â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 #[test]
 fn test_actual_tokens_survive_restart() {
@@ -514,4 +519,115 @@ fn test_sweep_marks_running_agent_failed_and_repairs_parent_jsonl() {
     state.sweep_interrupted_agents();
     let parent_msgs2 = storage::load_all_messages(&project, &parent);
     assert_eq!(parent_msgs2.len(), parent_msgs.len());
+}
+
+// ── Attachment staging (AUDIT F3 D3/D5) ─────────────────────────────
+
+use autocode_core::state::AttachmentKind;
+use autocode_core::storage::attachments::{self};
+
+#[test]
+fn test_attachment_stage_roundtrip_and_session_delete_cascade() {
+    let _dir = init_test_dir("attach_roundtrip");
+    let project = make_project("attach_test");
+    let sess = Session::new(Some(project.id.clone()), "t".into(), "m".into());
+    storage::save_session_meta(&project, &sess).unwrap();
+
+    // Stage a small text file.
+    let src_dir = std::env::temp_dir().join(format!("ac_attach_src_{}", std::process::id()));
+    std::fs::create_dir_all(&src_dir).unwrap();
+    let src = src_dir.join("notes.txt");
+    std::fs::write(&src, "hello attachment").unwrap();
+
+    let att = attachments::stage_file(&project, &sess, &src, AttachmentKind::File, 0).unwrap();
+
+    // Metadata is sane and the staged copy resolves inside the session dir.
+    assert_eq!(att.bytes, "hello attachment".len() as u64);
+    let resolved = attachments::resolve_path(&project, &sess, &att);
+    assert!(resolved.starts_with(storage::session_messages_dir(&project, &sess)));
+    assert_eq!(
+        std::fs::read_to_string(&resolved).unwrap(),
+        "hello attachment"
+    );
+
+    // Deleting the session removes the staged copy with zero extra code.
+    storage::delete_session_file(&project, &sess);
+    assert!(!resolved.exists(), "staged file dies with the session tree");
+    let _ = std::fs::remove_dir_all(&src_dir);
+}
+
+#[test]
+fn test_attachment_caps_reject() {
+    let _dir = init_test_dir("attach_caps");
+    let project = make_project("attach_caps_test");
+    let sess = Session::new(Some(project.id.clone()), "t".into(), "m".into());
+    storage::save_session_meta(&project, &sess).unwrap();
+
+    let src_dir = std::env::temp_dir().join(format!("ac_attach_big_{}", std::process::id()));
+    std::fs::create_dir_all(&src_dir).unwrap();
+
+    // Oversized image rejected.
+    let big_img = src_dir.join("big.png");
+    std::fs::write(
+        &big_img,
+        vec![0u8; (attachments::MAX_IMAGE_BYTES as usize) + 1],
+    )
+    .unwrap();
+    assert!(attachments::stage_file(&project, &sess, &big_img, AttachmentKind::Image, 0).is_err());
+
+    // Total-per-message cap enforced across staged files.
+    let f1 = src_dir.join("f1.txt");
+    let f2 = src_dir.join("f2.txt");
+    std::fs::write(&f1, vec![b'a'; 20 * 1024 * 1024]).unwrap();
+    std::fs::write(&f2, vec![b'b'; 20 * 1024 * 1024]).unwrap();
+    let first = attachments::stage_file(&project, &sess, &f1, AttachmentKind::File, 0).unwrap();
+    let err = attachments::stage_file(&project, &sess, &f2, AttachmentKind::File, first.bytes);
+    assert!(err.is_err(), "second 20MB file must trip the 32MB cap");
+
+    let _ = std::fs::remove_dir_all(&src_dir);
+}
+
+#[test]
+fn test_draft_attachments_survive_restart() {
+    let _dir = init_test_dir("draft_att");
+    let project = make_project("draft_att_test");
+    let mut sess = Session::new(Some(project.id.clone()), "t".into(), "m".into());
+
+    sess.draft_attachments
+        .push(autocode_core::state::Attachment {
+            id: "a1".into(),
+            kind: AttachmentKind::Image,
+            name: "shot.png".into(),
+            mime: String::new(),
+            bytes: 12345,
+            rel_path: "attachments/a1_shot.png".into(),
+        });
+    sess.draft_input = "check this".into();
+    storage::save_session_meta(&project, &sess).unwrap();
+
+    let mut loaded = Session::new(Some(project.id.clone()), "t".into(), "m".into());
+    loaded.id = sess.id.clone();
+    loaded.label = sess.label.clone();
+    assert!(storage::load_session(&project, &mut loaded));
+    assert_eq!(loaded.draft_attachments.len(), 1);
+    assert_eq!(loaded.draft_attachments[0].name, "shot.png");
+    assert_eq!(loaded.draft_input, "check this");
+
+    // And a ChatMessage carrying attachments survives a JSONL roundtrip.
+    let mut msg = ChatMessage::new(autocode_core::state::Role::User, "with att");
+    msg.attachments.push(autocode_core::state::Attachment {
+        id: "a2".into(),
+        kind: AttachmentKind::File,
+        name: "log.txt".into(),
+        mime: String::new(),
+        bytes: 10,
+        rel_path: "attachments/a2_log.txt".into(),
+    });
+    msg.id = 1;
+    let dir = storage::session_messages_dir(&project, &sess);
+    storage::append_messages_to_jsonl(&project, &sess, &[msg]).unwrap();
+    let back = autocode_core::storage::messages::read_all_messages(&dir);
+    assert_eq!(back.len(), 1);
+    assert_eq!(back[0].attachments.len(), 1);
+    assert_eq!(back[0].attachments[0].rel_path, "attachments/a2_log.txt");
 }

@@ -72,6 +72,34 @@ pub struct ChatMessage {
     /// True for synthetic prune-marker messages left by apply_looping_window.
     #[serde(default)]
     pub is_prune_marker: bool,
+    /// Files attached to a user message. Bytes live in the session's
+    /// attachments/ directory; this records metadata only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<Attachment>,
+}
+
+/// A staged attachment: bytes copied into `sessions/<id>_<label>/attachments/`
+/// at stage time; `rel_path` points at the copy inside the session directory.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Attachment {
+    pub id: String,
+    pub kind: AttachmentKind,
+    pub name: String,
+    #[serde(default)]
+    pub mime: String,
+    /// Staged byte size (informational; the file on disk is authoritative).
+    #[serde(default)]
+    pub bytes: u64,
+    /// Path of the staged copy relative to the session directory.
+    #[serde(default)]
+    pub rel_path: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AttachmentKind {
+    Image,
+    File,
 }
 
 impl ChatMessage {
@@ -87,6 +115,7 @@ impl ChatMessage {
             reasoning_content: None,
             turn: 0,
             is_prune_marker: false,
+            attachments: Vec::new(),
         }
     }
 

@@ -259,6 +259,7 @@ fn session_from_meta_file(meta_path: &Path, project: &Project) -> Option<Session
         show_reasoning_inline: meta.show_reasoning_inline,
         show_project_tasks: meta.show_project_tasks,
         draft_input: meta.draft_input,
+        draft_attachments: meta.draft_attachments,
         looping_window: meta.looping_window,
         turn_count: 0,
         access_log: Default::default(),
