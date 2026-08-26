@@ -89,6 +89,8 @@ pub(crate) fn select_provider(
 pub(crate) struct CompletionParams {
     pub session_id: String,
     pub session_handoff: bool,
+    /// Sub-agent profile for tool-set gating (D4/D5).
+    pub agent_session: bool,
     pub thinking: bool,
     pub thinking_api: ThinkingApi,
     pub max_tokens: u32,
@@ -129,5 +131,6 @@ pub(crate) fn build_completion_request(
         frequency_penalty: provider.frequency_penalty.clamp(-2.0, 2.0),
         presence_penalty: provider.presence_penalty.clamp(-2.0, 2.0),
         handoff_enabled: params.session_handoff,
+        agent_session: params.agent_session,
     }
 }

@@ -26,6 +26,8 @@ pub struct CompletionRequest {
     pub frequency_penalty: f32,
     pub presence_penalty: f32,
     pub handoff_enabled: bool,
+    /// Sub-agent profile: the tool set omits spawn_agent/handoff/task tools.
+    pub agent_session: bool,
 }
 
 #[derive(Debug, Clone, Default)]

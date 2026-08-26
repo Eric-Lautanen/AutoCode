@@ -255,7 +255,13 @@ fn build_request_body(
     }
 
     if req.tools {
-        body.tools = Some(tool_definitions(supports_strict, handoff_enabled));
+        body.tools = Some(tool_definitions(
+            supports_strict,
+            super::tool_defs::ToolDefOptions {
+                handoff_enabled,
+                agent_session: req.agent_session,
+            },
+        ));
         body.tool_choice = Some(req.tool_choice.to_json());
         body.parallel_tool_calls = Some(req.parallel_tool_calls);
     }

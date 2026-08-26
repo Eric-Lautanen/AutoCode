@@ -1,6 +1,18 @@
 // tool_defs.rs -- Tool definitions sent to the API.
 
-pub fn tool_definitions(strict: bool, handoff_enabled: bool) -> serde_json::Value {
+/// Which optional tools a request's tool set carries. Mirrored exactly by
+/// the counting-endpoint body so token counts match completions.
+#[derive(Clone, Copy)]
+pub struct ToolDefOptions {
+    pub handoff_enabled: bool,
+    /// Sub-agent profile (D4/D5): omits `spawn_agent`, `handoff`,
+    /// `project_task_list`, and `todo_list`. Agents report progress via
+    /// their final output instead; task-list plumbing is active-session-
+    /// coupled and would clobber across sessions.
+    pub agent_session: bool,
+}
+
+pub fn tool_definitions(strict: bool, opts: ToolDefOptions) -> serde_json::Value {
     let grep_desc = "Search code. Returns file:line matches. Literal by default; use ^prefix or suffix$ for regex. Glob filter, .gitignore respect.".to_string();
 
     let shell_note = autocode_core::utils::sysinfo::shell_tools_note();
@@ -25,9 +37,8 @@ pub fn tool_definitions(strict: bool, handoff_enabled: bool) -> serde_json::Valu
         serde_json::json!({"type":"function","function":{"name":"patch_lines","strict":strict,"description":"Replace a range of lines by line number. Use read_file first to see numbered lines. Faster and more reliable than patch_file for multi-line edits.","parameters":{"type":"object","properties":{"path":{"type":"string","description":"Path relative to project root."},"start_line":{"type":"integer","description":"First line to replace (1-based, inclusive)."},"end_line":{"type":"integer","description":"Last line to replace (1-based, inclusive)."},"new_text":{"type":"string","description":"Replacement text."}},"required":["path","start_line","end_line","new_text"],"additionalProperties":false}}}),
         serde_json::json!({"type":"function","function":{"name":"web_search","strict":strict,"description":"Search the web. Returns summary text + URLs. Use fetch_url to read pages.","parameters":{"type":"object","properties":{"query":{"type":"string","description":"Search query. Be specific."},"num_results":{"type":"integer","description":"Results to return (1-10, default 5)."}},"required":["query"],"additionalProperties":false}}}),
         serde_json::json!({"type":"function","function":{"name":"fetch_url","strict":strict,"description":"Fetch URL text content. HTML auto-stripped.","parameters":{"type":"object","properties":{"url":{"type":"string","description":"Full URL."},"max_bytes":{"type":"integer","description":"Max bytes (default 32768, max 131072)."}},"required":["url"],"additionalProperties":false}}}),
-        serde_json::json!({"type":"function","function":{"name":"todo_list","strict":strict,"description":"Track session-scoped tasks that do NOT persist across sessions. Use for concrete, actionable steps you plan to complete right now. Send full list on every update. Set action to 'read' to return the current list without modifying it.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["update","read"],"description":"'update' (default): replace the full list. 'read': return the current list without changing it."},"task_items":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string","description":"Stable id e.g. '1'."},"content":{"type":"string","description":"Task description."},"status":{"type":"string","enum":["pending","in_progress","completed","cancelled"],"description":"Status."},"priority":{"type":"string","enum":["high","medium","low"],"description":"Priority (default medium)."}},"required":["id","content","status"],"additionalProperties":false},"description":"All items. Required for action='update', omit for action='read'."}},"required":["action"],"additionalProperties":false}}}),
-        serde_json::json!({"type":"function","function":{"name":"glob","strict":strict,"description":"Find files by glob pattern. Returns sorted relative paths.","parameters":{"type":"object","properties":{"pattern":{"type":"string","description":"Glob pattern (*, **, ?). e.g. '**/*.rs'."},"path":{"type":"string","description":"Search dir relative to project root."}},"required":["pattern"],"additionalProperties":false}}}),
         serde_json::json!({"type":"function","function":{"name":"get_skill","strict":strict,"description":"Search project skill files for guidance on any topic. Scans skills/ for .md files and matches keyword against filenames and file descriptions. Use liberally when you need best practices, patterns, or conventions. Pass an empty string to list all available skills.","parameters":{"type":"object","properties":{"keyword":{"type":"string","description":"Topic to search for (matched against filenames and file descriptions). Pass empty string to list all available skills."}},"required":["keyword"],"additionalProperties":false}}}),
+        serde_json::json!({"type":"function","function":{"name":"glob","strict":strict,"description":"Find files by glob pattern. Returns sorted relative paths.","parameters":{"type":"object","properties":{"pattern":{"type":"string","description":"Glob pattern (*, **, ?). e.g. '**/*.rs'."},"path":{"type":"string","description":"Search dir relative to project root."}},"required":["pattern"],"additionalProperties":false}}}),
         serde_json::json!({"type":"function","function":{"name":"name_session","strict":strict,"description":"Set a descriptive label for this session. Call first in every session.","parameters":{"type":"object","properties":{"name":{"type":"string","description":"Short name e.g. 'fixing_build'."}},"required":["name"],"additionalProperties":false}}}),
         serde_json::json!({"type":"function","function":{"name":"verify_proof","strict":strict,"description":"Submit a mathematical proof or proof step to an external verifier (Lean, Coq, Z3). Auto-detects the verifier system from the proof code when system='auto'. Discovers a backend via $AUTOCODE_VERIFIER, verify/<system>.sh in the project root, or the verifier on PATH. Runs the verifier as a subprocess with a timeout, parses stdout/stderr/exit-code for success/failure markers, and runs Yang-Mills mass-gap structural sanity checks (Pattern A/B failure modes + required ingredients). Returns a structured VERIFIED/REJECTED/TIMEOUT/NO_BACKEND report.","parameters":{"type":"object","properties":{"statement":{"type":"string","description":"The theorem or claim being proved."},"proof_code":{"type":"string","description":"Proof code in the target verifier's language (Lean .lean, Coq .v, SMT-LIB2 .smt2)."},"system":{"type":"string","enum":["lean","coq","z3","auto"],"description":"Verifier system. 'auto' guesses from file extension and content markers."}},"required":["statement","proof_code"],"additionalProperties":false}}}),
         serde_json::json!({"type":"function","function":{"name":"search_literature","strict":strict,"description":"Search academic literature (arXiv, web) for papers by topic, author, or keyword. Returns titles, authors, and abstracts.","parameters":{"type":"object","properties":{"query":{"type":"string","description":"Search query. Be specific — include author names, year ranges, or exact phrases."},"max_results":{"type":"integer","description":"Max results (default 5, max 20)."},"source":{"type":"string","enum":["arxiv","web","auto"],"description":"Search source. 'arxiv' queries arXiv API; 'web' uses web search; 'auto' tries arXiv first then web."}},"required":["query"],"additionalProperties":false}}}),
@@ -35,10 +46,65 @@ pub fn tool_definitions(strict: bool, handoff_enabled: bool) -> serde_json::Valu
 
     tools.push(serde_json::json!({"type":"function","function":{"name":"explore_theorem","strict":strict,"description":"Decompose a theorem into sub-goals and track exploration state. Each call updates a persistent tree of proven/pending/failed sub-goals. Use for long-running proof development across sessions.","parameters":{"type":"object","properties":{"theorem":{"type":"string","description":"The theorem statement."},"action":{"type":"string","enum":["init","refine","prove","fail","status"],"description":"'init': start new theorem tree. 'refine': add sub-goals. 'prove': mark sub-goal proven. 'fail': mark sub-goal failed. 'status': print current tree."},"goal_id":{"type":"string","description":"Sub-goal identifier (required for refine/prove/fail). Use dotted notation e.g. '1.2' for nested goals."},"sub_goals":{"type":"array","items":{"type":"string"},"description":"List of sub-goal statements (required for refine action)."},"notes":{"type":"string","description":"Optional notes about the approach, lemmas needed, or observations."}},"required":["theorem","action"],"additionalProperties":false}}}));
 
-    if handoff_enabled {
+    if !opts.agent_session {
+        tools.push(serde_json::json!({"type":"function","function":{"name":"todo_list","strict":strict,"description":"Track session-scoped tasks that do NOT persist across sessions. Use for concrete, actionable steps you plan to complete right now. Send full list on every update. Set action to 'read' to return the current list without modifying it.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["update","read"],"description":"'update' (default): replace the full list. 'read': return the current list without changing it."},"task_items":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string","description":"Stable id e.g. '1'."},"content":{"type":"string","description":"Task description."},"status":{"type":"string","enum":["pending","in_progress","completed","cancelled"],"description":"Status."},"priority":{"type":"string","enum":["high","medium","low"],"description":"Priority (default medium)."}},"required":["id","content","status"],"additionalProperties":false},"description":"All items. Required for action='update', omit for action='read'."}},"required":["action"],"additionalProperties":false}}}));
+        tools.push(serde_json::json!({"type":"function","function":{"name":"spawn_agent","strict":strict,"description":"Spawn a sub-agent that works autonomously on a focused sub-goal in its own fresh context window with the full tool set (minus spawning). Its final response is returned verbatim as this call's result; multiple spawn_agent calls in one turn run concurrently. Give a complete, self-contained brief: goal, constraints, relevant paths, and exactly what the final response must contain. Sub-agents cannot spawn further agents and cannot handoff.","parameters":{"type":"object","properties":{"goal":{"type":"string","description":"Complete brief for the agent."},"context":{"type":"string","description":"Optional extra context (file paths, decisions, code snippets)."},"model":{"type":"string","description":"Optional model id for the agent; unknown ids fall back to this session's model."}},"required":["goal"],"additionalProperties":false}}}));
+    }
+
+    if opts.handoff_enabled {
         tools.push(serde_json::json!({"type":"function","function":{"name":"project_task_list","strict":strict,"description":"Track project-level milestones that persist across sessions via handoff. Use for high-level phases (e.g. 'Phase 1: Gateway API') or long-running goals that span multiple sessions. Do NOT duplicate todo_list items here. Send full list on every update. Set action to 'read' to return the current list without modifying it.","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["update","read"],"description":"'update' (default): replace the full list. 'read': return the current list without changing it."},"task_items":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string","description":"Stable id e.g. '1'."},"content":{"type":"string","description":"Task description."},"status":{"type":"string","enum":["pending","in_progress","completed","cancelled"],"description":"Status."},"priority":{"type":"string","enum":["high","medium","low"],"description":"Priority (default medium)."}},"required":["id","content","status"],"additionalProperties":false},"description":"All items. Required for action='update', omit for action='read'."}},"required":["action"],"additionalProperties":false}}}));
         tools.push(serde_json::json!({"type":"function","function":{"name":"handoff","strict":strict,"description":"End session and start a fresh one. next_prompt becomes the first user message in the new session.","parameters":{"type":"object","properties":{"reason":{"type":"string","description":"Why handoff is needed."},"next_prompt":{"type":"string","description":"Full instructions for the next session on what to continue working on."}},"required":["reason","next_prompt"],"additionalProperties":false}}}));
     }
 
     serde_json::Value::Array(tools)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(v: &serde_json::Value) -> Vec<String> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["function"]["name"].as_str().unwrap_or("").to_string())
+            .collect()
+    }
+
+    #[test]
+    fn agent_tool_set_omits_parent_only_tools() {
+        let parent = tool_definitions(
+            true,
+            ToolDefOptions {
+                handoff_enabled: true,
+                agent_session: false,
+            },
+        );
+        let agent = tool_definitions(
+            true,
+            ToolDefOptions {
+                handoff_enabled: false,
+                agent_session: true,
+            },
+        );
+        let p = names(&parent);
+        let a = names(&agent);
+        assert!(p.contains(&"spawn_agent".to_string()));
+        assert!(p.contains(&"todo_list".to_string()));
+        assert!(p.contains(&"handoff".to_string()));
+        assert!(!a.contains(&"spawn_agent".to_string()));
+        assert!(!a.contains(&"todo_list".to_string()));
+        assert!(!a.contains(&"handoff".to_string()));
+        assert!(!a.contains(&"project_task_list".to_string()));
+        // Shared core tools survive in both profiles.
+        for core in [
+            "read_file",
+            "patch_file",
+            "grep",
+            "run_shell",
+            "name_session",
+        ] {
+            assert!(a.contains(&core.to_string()), "agent missing {core}");
+        }
+    }
 }

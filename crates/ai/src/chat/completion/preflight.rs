@@ -49,6 +49,7 @@ pub(crate) fn preflight_context_check(
     provider: &autocode_core::state::ApiProvider,
     session_id: &str,
     session_handoff: bool,
+    agent_session: bool,
     max_tokens_in: u32,
 ) -> Option<PreflightResult> {
     trim_session_ram(state, session_id);
@@ -67,7 +68,8 @@ pub(crate) fn preflight_context_check(
         // Fresh provider-reported figure — skip the counting round-trip.
         known.0
     } else {
-        count_request_input_tokens(state, provider, session_id, session_handoff).unwrap_or(known.0)
+        count_request_input_tokens(state, provider, session_id, session_handoff, agent_session)
+            .unwrap_or(known.0)
     };
 
     let max_context = provider.max_context_tokens as usize;
@@ -117,6 +119,7 @@ fn count_request_input_tokens(
     provider: &autocode_core::state::ApiProvider,
     session_id: &str,
     session_handoff: bool,
+    agent_session: bool,
 ) -> Option<usize> {
     if !provider.has_counting_api() {
         return None;
@@ -151,8 +154,13 @@ fn count_request_input_tokens(
     let mut body = serde_json::json!({ "messages": msgs });
     // Completion requests always carry tool definitions (CompletionParams
     // sets tools: true), so the counted body includes them for an exact count.
-    body["tools"] =
-        crate::provider::tool_definitions(provider.supports_strict_tools(), session_handoff);
+    body["tools"] = crate::provider::tool_definitions(
+        provider.supports_strict_tools(),
+        crate::provider::ToolDefOptions {
+            handoff_enabled: session_handoff,
+            agent_session,
+        },
+    );
 
     crate::provider::count_input_tokens(
         provider,

@@ -160,6 +160,12 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
         .find(|s| s.id == session_id)
         .map(|s| s.handoff_enabled)
         .unwrap_or(true);
+    let agent_session = state
+        .sessions
+        .iter()
+        .find(|s| s.id == session_id)
+        .map(|s| s.agent.is_some())
+        .unwrap_or(false);
     let session_reasoning_effort: std::borrow::Cow<'_, str> = state
         .sessions
         .iter()
@@ -211,6 +217,7 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
         &provider_clone,
         session_id,
         session_handoff,
+        agent_session,
         max_tokens,
     ) {
         Some(result) => result,
@@ -224,6 +231,7 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
         provider::CompletionParams {
             session_id: session_id.to_string(),
             session_handoff,
+            agent_session,
             thinking,
             thinking_api,
             max_tokens,
