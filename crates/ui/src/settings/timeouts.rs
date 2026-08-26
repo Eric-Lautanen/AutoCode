@@ -42,7 +42,7 @@ pub fn show_timeouts(ui: &mut egui::Ui, state: &mut AppState) {
                     ui.add(
                         egui::DragValue::new(&mut state.stream_idle_timeout_secs)
                             .speed(5.0)
-                            .range(10..=600),
+                            .range(10..=1800),
                     );
                     ui.label(RichText::new("s").size(10.5).color(Palette::TEXT_MUTED));
                     ui.end_row();
@@ -51,7 +51,7 @@ pub fn show_timeouts(ui: &mut egui::Ui, state: &mut AppState) {
                     ui.add(
                         egui::DragValue::new(&mut state.request_timeout_secs)
                             .speed(10.0)
-                            .range(30..=1800),
+                            .range(30..=3600),
                     );
                     ui.label(RichText::new("s").size(10.5).color(Palette::TEXT_MUTED));
                     ui.end_row();
