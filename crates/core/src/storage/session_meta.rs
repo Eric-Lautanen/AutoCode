@@ -1,4 +1,4 @@
-use crate::state::TodoList;
+use crate::state::{AgentMeta, TodoList};
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct SessionMeta {
@@ -50,6 +50,11 @@ pub struct SessionMeta {
     /// Whether the looping window (LRU pruning) is enabled for this session.
     #[serde(default)]
     pub looping_window: bool,
+
+    /// Sub-agent flag — present only for agent sessions nested under a
+    /// parent session's agents/ folder. Old files load with None.
+    #[serde(default)]
+    pub agent: Option<AgentMeta>,
 }
 
 impl SessionMeta {
@@ -75,6 +80,7 @@ impl SessionMeta {
             show_project_tasks: session.show_project_tasks,
             draft_input: session.draft_input.clone(),
             looping_window: session.looping_window,
+            agent: session.agent.clone(),
         }
     }
 }

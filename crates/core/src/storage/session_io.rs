@@ -35,9 +35,36 @@ fn find_session_file(dir: &Path, session: &Session) -> Option<PathBuf> {
     None
 }
 
+/// Root directory containing this session's own folder: the project's
+/// `sessions/` directory, or — for sub-agent sessions — the parent's
+/// `agents/` directory. The stamped override wins when it still exists;
+/// otherwise (e.g. after a parent rename moved the tree) the parent is
+/// re-located by id prefix so nested folders ride along atomically.
+fn sessions_root(project: &Project, session: &Session) -> PathBuf {
+    let top = project_sessions_dir(project);
+    if let Some(agent) = &session.agent {
+        if let Some(root) = &session.storage_override
+            && root.is_dir()
+        {
+            return root.clone();
+        }
+        let prefix = format!("{}_", agent.parent_session_id);
+        if let Ok(entries) = fsutil::read_dir(&top) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if entry.path().is_dir() && name.starts_with(&prefix) {
+                    return entry.path().join("agents");
+                }
+            }
+        }
+        return top.join(prefix).join("agents");
+    }
+    top
+}
+
 /// Check whether a session's metadata file exists on disk.
 pub fn session_exists(project: &Project, session: &Session) -> bool {
-    let dir = project_sessions_dir(project);
+    let dir = sessions_root(project, session);
     find_session_file(&dir, session).is_some()
 }
 
@@ -51,9 +78,16 @@ pub fn project_sessions_dir(project: &Project) -> PathBuf {
 
 /// Directory for a specific session's chunked message files.
 /// Named `{id}_{safe_label}/` so users can identify sessions by folder name.
+/// Sub-agent sessions resolve under the parent's `agents/` directory.
 pub fn session_messages_dir(project: &Project, session: &Session) -> PathBuf {
     let dirname = session.filename().replace(".json", "");
-    project_sessions_dir(project).join(dirname)
+    sessions_root(project, session).join(dirname)
+}
+
+/// Directory holding sub-agent session folders for a parent session:
+/// `sessions/<parent_id>_<label>/agents/`.
+pub fn agent_root_for(project: &Project, parent: &Session) -> PathBuf {
+    session_messages_dir(project, parent).join("agents")
 }
 
 pub fn ensure_project_dirs(project: &Project) -> std::io::Result<()> {
@@ -139,7 +173,7 @@ pub fn save_session(project: &Project, session: &Session) -> std::io::Result<()>
 /// keeping everything (metadata + message chunks) atomic in one folder.
 /// Preserves the on-disk todo_list — Session no longer carries it in RAM.
 pub fn save_session_meta(project: &Project, session: &Session) -> std::io::Result<()> {
-    let parent = project_sessions_dir(project);
+    let parent = sessions_root(project, session);
     let new_dirname = session.filename().replace(".json", "");
 
     // Ensure the parent sessions directory exists.
@@ -209,7 +243,7 @@ pub fn save_session_meta(project: &Project, session: &Session) -> std::io::Resul
 
 /// Load the session todo list from disk (session meta JSON).
 pub fn load_session_todo_list(project: &Project, session: &Session) -> TodoList {
-    let dir = project_sessions_dir(project);
+    let dir = sessions_root(project, session);
     let path = match find_session_file(&dir, session) {
         Some(p) => p,
         None => return TodoList::default(),
@@ -228,7 +262,7 @@ pub fn save_session_todo_list(
     session: &Session,
     todo_list: &TodoList,
 ) -> std::io::Result<()> {
-    let dir = project_sessions_dir(project);
+    let dir = sessions_root(project, session);
     let path = match find_session_file(&dir, session) {
         Some(p) => p,
         None => {
@@ -287,6 +321,7 @@ pub fn load_session(project: &Project, session: &mut Session) -> bool {
                 session.show_project_tasks = meta.show_project_tasks;
                 session.draft_input = meta.draft_input;
                 session.looping_window = meta.looping_window;
+                session.agent = meta.agent;
                 // Rebuild access log from ToolMeta in loaded messages.
                 session.access_log = crate::state::FileAccessLog::new();
                 for msg in &session.messages {

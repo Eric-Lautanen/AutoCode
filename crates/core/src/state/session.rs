@@ -1,7 +1,32 @@
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 use super::access_log::FileAccessLog;
 use super::chat::ChatMessage;
+
+/// Lifecycle of a sub-agent, persisted in its SessionMeta (`agent` field).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum AgentStatus {
+    Running,
+    Done,
+    Failed(String),
+    Cancelled,
+}
+
+/// Sub-agent metadata riding on the agent's own `SessionMeta.agent`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AgentMeta {
+    pub parent_session_id: String,
+    /// The brief the parent gave this agent (delivered as a user message).
+    pub goal: String,
+    pub status: AgentStatus,
+    #[serde(default)]
+    pub error: Option<String>,
+    pub started_at: u64,
+    #[serde(default)]
+    pub finished_at: Option<u64>,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
@@ -70,6 +95,17 @@ pub struct Session {
     #[serde(skip)]
     pub access_log: FileAccessLog,
 
+    /// Sub-agent flag: present only for agent sessions nested under a parent.
+    #[serde(default)]
+    pub agent: Option<AgentMeta>,
+
+    /// Storage root override for sub-agents — the parent's `agents/`
+    /// directory inside its session folder. Not serialized: reconstructed
+    /// from disk layout on discovery. When resolution fails (parent renamed),
+    /// the parent is re-located by id prefix at read time.
+    #[serde(skip)]
+    pub storage_override: Option<PathBuf>,
+
     /// Dry-run mode for looping: compute pruning decisions but skip disk/RAM mutation,
     /// logging candidates and scores instead. Not persisted.
     #[serde(skip)]
@@ -103,8 +139,15 @@ impl Session {
             looping_window: false,
             turn_count: 0,
             access_log: FileAccessLog::new(),
+            agent: None,
+            storage_override: None,
             loop_dry_run: false,
         }
+    }
+
+    /// True for sub-agent sessions (nested under a parent's agents/ folder).
+    pub fn is_agent(&self) -> bool {
+        self.agent.is_some()
     }
 
     /// Context size in tokens as last reported by the provider

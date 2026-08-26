@@ -7,7 +7,7 @@ use crate::helpers::utils::manifest;
 use super::chat::ChatMessage;
 use super::project::Project;
 use super::provider::{ApiProvider, ProviderKind};
-use super::session::{PendingWrites, Session, ShellTask};
+use super::session::{AgentStatus, PendingWrites, Session, ShellTask};
 use super::todo::TodoList;
 
 pub const DEFAULT_SYSTEM_PROMPT: &str = "
@@ -452,7 +452,117 @@ impl AppState {
             }
         }
 
+        // Startup sweep: agents recorded as Running died with the previous
+        // process. Must run here — after discovery, BEFORE any prune pass —
+        // so agent sessions are settled and their parents' JSONL pairing is
+        // repaired before staleness checks ever see them.
+        state.sweep_interrupted_agents();
+
         state
+    }
+
+    /// Mark every agent still recorded as Running as failed ("interrupted by
+    /// app restart") and append the missing synthetic ToolResult to its
+    /// parent's JSONL, keeping each `spawn_agent` tool_call/result pair valid.
+    /// Append-only; runs once at startup inside `load`, when no runtimes can
+    /// be live.
+    pub fn sweep_interrupted_agents(&mut self) {
+        let running: Vec<String> = self
+            .sessions
+            .iter()
+            .filter(|s| {
+                s.agent
+                    .as_ref()
+                    .is_some_and(|a| a.status == AgentStatus::Running)
+            })
+            .map(|s| s.id.clone())
+            .collect();
+        for aid in running {
+            let Some(agent) = self
+                .sessions
+                .iter()
+                .find(|s| s.id == aid)
+                .and_then(|s| s.agent.clone())
+            else {
+                continue;
+            };
+            let Some(proj) = self
+                .sessions
+                .iter()
+                .find(|s| s.id == aid)
+                .and_then(|s| s.project_id.clone())
+                .and_then(|pid| self.projects.iter().find(|p| p.id == pid).cloned())
+            else {
+                continue;
+            };
+
+            // 1. Persist Failed status on the agent's own meta.
+            if let Some(s) = self.sessions.iter_mut().find(|s| s.id == aid)
+                && let Some(a) = &mut s.agent
+            {
+                a.status = AgentStatus::Failed("interrupted by app restart".to_string());
+                a.finished_at = Some(crate::helpers::unix_now());
+            }
+            if let Some(sess) = self.sessions.iter().find(|s| s.id == aid)
+                && let Err(e) = crate::storage::save_session_meta(&proj, sess)
+            {
+                eprintln!("[state] Failed to persist interrupted agent meta: {}", e);
+            }
+
+            // 2. Append a synthetic ToolResult to the parent for every
+            //    spawn_agent call left without a result. Without it,
+            //    prepare_request_messages_for_session would strip the orphaned
+            //    assistant tool_calls (from RAM AND disk), erasing the record.
+            let Some(parent) = self
+                .sessions
+                .iter()
+                .find(|s| s.id == agent.parent_session_id)
+                .cloned()
+            else {
+                continue;
+            };
+            let all_msgs = crate::storage::load_all_messages(&proj, &parent);
+            let mut spawn_ids: Vec<String> = Vec::new();
+            for m in &all_msgs {
+                if m.role != super::chat::Role::Assistant {
+                    continue;
+                }
+                if let Some(calls) = &m.tool_calls
+                    && let Some(arr) = calls.as_array()
+                {
+                    for c in arr {
+                        let name = c["function"]["name"].as_str().unwrap_or("");
+                        let id = c["id"].as_str().unwrap_or("");
+                        if name == "spawn_agent" && !id.is_empty() {
+                            spawn_ids.push(id.to_string());
+                        }
+                    }
+                }
+            }
+            for id in &spawn_ids {
+                if all_msgs.iter().any(|m| {
+                    m.role == super::chat::Role::Tool && m.tool_call_id.as_deref() == Some(id)
+                }) {
+                    continue;
+                }
+                let mut msg = ChatMessage::new(
+                    super::chat::Role::Tool,
+                    "[agent interrupted by app restart]".to_string(),
+                );
+                msg.tool_call_id = Some(id.clone());
+                msg.tool_meta = Some(super::chat::ToolMeta {
+                    tool_name: "spawn_agent".into(),
+                    is_error: true,
+                    ..Default::default()
+                });
+                if let Err(e) = crate::storage::append_messages_to_jsonl(&proj, &parent, &[msg]) {
+                    eprintln!(
+                        "[state] Failed to append interrupted-agent result to parent: {}",
+                        e
+                    );
+                }
+            }
+        }
     }
 
     /// Remove projects/sessions whose disk data was deleted by the user.
@@ -485,36 +595,18 @@ impl AppState {
                 .is_none_or(|pid| valid_pids.contains(pid))
         });
 
-        // 3. Remove sessions whose files are gone from disk.
-        // Session data lives in `{sessions_dir}/{id}_{label}/session.json`.
+        // 3. Remove sessions whose files are gone from disk. The check goes
+        // through the override-aware resolver so sub-agent sessions (rooted
+        // under their parent's agents/ directory) resolve correctly instead
+        // of reading as missing on the first periodic prune.
         let stale: Vec<String> = self
             .sessions
             .iter()
             .filter(|s| {
                 s.project_id
                     .as_ref()
-                    .and_then(|pid| {
-                        self.projects.iter().find(|p| &p.id == pid).map(|proj| {
-                            let dir = crate::storage::project_sessions_dir(proj);
-                            // Check if the session's subdirectory exists with metadata inside.
-                            let dirname = s.filename().replace(".json", "");
-                            let subdir = dir.join(&dirname);
-                            if subdir.join("session.json").exists() {
-                                return false;
-                            }
-                            // Fallback: scan for any subdirectory with this session's ID prefix.
-                            let prefix = format!("{}_", s.id);
-                            if let Ok(entries) = std::fs::read_dir(&dir) {
-                                !entries.flatten().any(|e| {
-                                    let name = e.file_name().to_string_lossy().to_string();
-                                    e.path().is_dir() && name.starts_with(&prefix)
-                                })
-                            } else {
-                                true
-                            }
-                        })
-                    })
-                    .unwrap_or(true)
+                    .and_then(|pid| self.projects.iter().find(|p| &p.id == pid))
+                    .is_none_or(|proj| !crate::storage::session_exists(proj, s))
             })
             .map(|s| s.id.clone())
             .collect();

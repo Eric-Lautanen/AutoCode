@@ -19,5 +19,5 @@ pub use manifest::{ModelManifest, ProviderManifest};
 pub use project::Project;
 pub use provider::{ApiProvider, LoopAggressiveness, ProviderKind, ThinkingApi};
 pub use secret::SecretString;
-pub use session::{PendingWrites, Session, ShellStatus, ShellTask};
+pub use session::{AgentMeta, AgentStatus, PendingWrites, Session, ShellStatus, ShellTask};
 pub use todo::{ProjectMeta, TodoItem, TodoList, TodoStatus};

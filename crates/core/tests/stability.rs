@@ -53,6 +53,7 @@ fn make_session_dir(project: &Project, label: &str) -> (SessionMeta, PathBuf) {
         show_project_tasks: false,
         draft_input: String::new(),
         looping_window: false,
+        agent: None,
     };
     let sess_dir = storage::project_sessions_dir(project);
     // Create the session subdirectory with metadata inside.
@@ -334,4 +335,183 @@ fn test_actual_tokens_survive_restart() {
         loaded.actual_tokens_used, 161_897,
         "actual tokens must survive restart"
     );
+}
+
+// -- Sub-agent storage (AUDIT D1) -------------------------------------
+
+use autocode_core::state::{AgentMeta, AgentStatus};
+
+fn make_agent_meta(parent_id: &str, status: AgentStatus) -> AgentMeta {
+    AgentMeta {
+        parent_session_id: parent_id.to_string(),
+        goal: "summarize the codebase".to_string(),
+        status,
+        error: None,
+        started_at: 100,
+        finished_at: None,
+    }
+}
+
+/// A parent with a nested agent folder; returns (project, parent session, agent session).
+fn setup_parent_with_agent(dir_name: &str, status: AgentStatus) -> (Project, Session, Session) {
+    let _dir = init_test_dir(dir_name);
+    let project = make_project(dir_name);
+    let parent = Session::new(Some(project.id.clone()), "test".into(), "m".into());
+    let mut agent = Session::new(Some(project.id.clone()), "test".into(), "m".into());
+    agent.agent = Some(make_agent_meta(&parent.id, status));
+
+    // Persist both through the normal meta path (agent nests under parent).
+    storage::save_session_meta(&project, &parent).unwrap();
+    let agents_root = storage::session_messages_dir(&project, &parent).join("agents");
+    std::fs::create_dir_all(&agents_root).unwrap();
+    // Stamp the override the spawn path would set.
+    agent.storage_override = Some(agents_root.clone());
+    storage::save_session_meta(&project, &agent).unwrap();
+
+    // Sanity: the agent's folder lives INSIDE the parent's agents/ dir and
+    // no top-level directory was created for it.
+    let agent_dir = storage::session_messages_dir(&project, &agent);
+    assert!(agent_dir.join("session.json").exists());
+    assert!(agent_dir.starts_with(storage::session_messages_dir(&project, &parent).join("agents")));
+    let top_level = std::fs::read_dir(storage::project_sessions_dir(&project))
+        .unwrap()
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .count();
+    assert_eq!(top_level, 1, "only the parent dir exists at top level");
+
+    (project, parent, agent)
+}
+
+#[test]
+fn test_agent_session_roundtrip_and_discovery() {
+    let (project, parent, agent) = setup_parent_with_agent("agent_roundtrip", AgentStatus::Running);
+
+    // Discovery finds BOTH sessions; the agent comes back flagged closed
+    // with its storage root under the parent's agents/ dir.
+    let found = storage::discover_sessions_from_disk(&project);
+    assert_eq!(found.len(), 2, "parent + agent discovered");
+    let found_agent = found.iter().find(|s| s.id == agent.id).unwrap();
+    assert!(found_agent.closed);
+    assert!(found_agent.agent.is_some());
+    assert_eq!(
+        found_agent.agent.as_ref().unwrap().parent_session_id,
+        parent.id
+    );
+    assert!(found_agent.storage_override.is_some());
+
+    // Meta roundtrip preserves every AgentMeta field.
+    let loaded_agent_status = found_agent.agent.as_ref().unwrap().status.clone();
+    assert_eq!(loaded_agent_status, AgentStatus::Running);
+    assert_eq!(
+        found_agent.agent.as_ref().unwrap().goal,
+        "summarize the codebase"
+    );
+
+    // Old-format compatibility: a legacy session.json written before the
+    // `agent` field existed (no such key) must load with agent = None.
+    let mut legacy = Session::new(Some(project.id.clone()), "test".into(), "m".into());
+    legacy.id = "legacy_1".into();
+    let legacy_dir = storage::session_messages_dir(&project, &legacy);
+    std::fs::create_dir_all(&legacy_dir).unwrap();
+    std::fs::write(
+        legacy_dir.join("session.json"),
+        r#"{"id":"legacy_1","label":"legacy","next_message_id":4,"model":"m"}"#,
+    )
+    .unwrap();
+    let mut loaded_legacy = Session::new(Some(project.id.clone()), "test".into(), "m".into());
+    loaded_legacy.id = "legacy_1".into();
+    assert!(storage::load_session(&project, &mut loaded_legacy));
+    assert!(loaded_legacy.agent.is_none(), "absent agent field defaults");
+    assert_eq!(loaded_legacy.next_message_id, 4);
+}
+
+#[test]
+fn test_agent_rename_stays_inside_agents_root() {
+    let (project, parent, mut agent) =
+        setup_parent_with_agent("agent_rename", AgentStatus::Running);
+
+    // The agent calls name_session: its label changes and save_session_meta
+    // renames its folder WITHIN the parent's agents/ root.
+    agent.label = "research_bot".to_string();
+    agent.session_named = true;
+    storage::save_session_meta(&project, &agent).unwrap();
+
+    let agents_root = storage::session_messages_dir(&project, &parent).join("agents");
+    assert!(
+        agents_root
+            .join(format!("{}_research_bot", agent.id))
+            .join("session.json")
+            .exists(),
+        "renamed agent dir lives inside agents/"
+    );
+    // No stray top-level directories appeared.
+    let top_level: Vec<String> = std::fs::read_dir(storage::project_sessions_dir(&project))
+        .unwrap()
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    assert_eq!(top_level.len(), 1, "no stray top-level dirs: {top_level:?}");
+}
+
+#[test]
+fn test_sweep_marks_running_agent_failed_and_repairs_parent_jsonl() {
+    let (project, parent, agent) = setup_parent_with_agent("agent_sweep", AgentStatus::Running);
+
+    // Parent JSONL ends with an assistant spawn_agent tool_call, no result.
+    let calls = serde_json::json!([{
+        "id": "call_spawn_1",
+        "type": "function",
+        "function": {"name": "spawn_agent", "arguments": "{\"goal\":\"g\"}"}
+    }]);
+    let mut assistant = autocode_core::state::ChatMessage::new(
+        autocode_core::state::Role::Assistant,
+        String::new(),
+    );
+    assistant.tool_calls = Some(calls);
+    let msgs_on_disk = storage::load_all_messages(&project, &parent);
+    let next_id = msgs_on_disk.iter().map(|m| m.id).max().unwrap_or(0) + 1;
+    let mut assistant2 = assistant;
+    assistant2.id = next_id;
+    storage::append_messages_to_jsonl(&project, &parent, &[assistant2]).unwrap();
+
+    // Build app state as startup would: discovery + sweep via AppState::load.
+    let mut state = autocode_core::state::AppState::default();
+    state.projects.push(project.clone());
+    for s in storage::discover_sessions_from_disk(&project) {
+        if !state.sessions.iter().any(|x| x.id == s.id) {
+            state.sessions.push(s);
+        }
+    }
+    state.sweep_interrupted_agents();
+
+    // The agent's persisted meta now reads Failed.
+    let swept = state.sessions.iter().find(|s| s.id == agent.id).unwrap();
+    assert_eq!(
+        swept.agent.as_ref().unwrap().status,
+        AgentStatus::Failed("interrupted by app restart".to_string())
+    );
+    let on_disk: Vec<String> =
+        std::fs::read_dir(storage::session_messages_dir(&project, &parent).join("agents"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+    assert_eq!(on_disk.len(), 1);
+
+    // The parent JSONL gained exactly one synthetic ToolResult paired to the call.
+    let parent_msgs = storage::load_all_messages(&project, &parent);
+    let results: Vec<&autocode_core::state::ChatMessage> = parent_msgs
+        .iter()
+        .filter(|m| m.role == autocode_core::state::Role::Tool)
+        .collect();
+    assert_eq!(results.len(), 1, "exactly one synthetic result appended");
+    assert_eq!(results[0].tool_call_id.as_deref(), Some("call_spawn_1"));
+    assert_eq!(results[0].content, "[agent interrupted by app restart]");
+
+    // Sweep is idempotent: re-running appends nothing.
+    state.sweep_interrupted_agents();
+    let parent_msgs2 = storage::load_all_messages(&project, &parent);
+    assert_eq!(parent_msgs2.len(), parent_msgs.len());
 }

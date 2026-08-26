@@ -186,7 +186,9 @@ pub fn discover_projects_from_disk() -> Vec<Project> {
 }
 
 /// Discover sessions from disk for the given project by scanning its sessions/
-/// directory for subdirectories containing session.json.
+/// directory for subdirectories containing session.json. Also scans each
+/// session's agents/ subdirectory so sub-agent sessions are discovered
+/// (flagged closed, storage rooted under the parent's agents/ folder).
 /// Returns sessions in creation order (oldest first).
 pub fn discover_sessions_from_disk(project: &Project) -> Vec<Session> {
     let dir = project_sessions_dir(project);
@@ -201,39 +203,67 @@ pub fn discover_sessions_from_disk(project: &Project) -> Vec<Session> {
                 continue;
             }
             let meta_path = path.join("session.json");
-            if let Ok(content) = fsutil::read_to_string(&meta_path)
-                && let Ok(meta) = serde_json::from_str::<SessionMeta>(&content)
-            {
-                sessions.push(Session {
-                    id: meta.id,
-                    project_id: Some(project.id.clone()),
-                    messages: Vec::new(),
-                    next_message_id: meta.next_message_id,
-                    created_at: meta.created_at,
-                    label: meta.label,
-                    actual_tokens_used: meta.actual_tokens_used,
-                    provider_label: meta.provider_label,
-                    model: meta.model,
-                    show_todo: meta.show_todo,
-                    todo_user_dismissed: meta.todo_user_dismissed,
-                    session_named: meta.session_named,
-                    handoff_enabled: meta.handoff_enabled,
-                    show_explorer: meta.show_explorer,
-                    settings_open: meta.settings_open,
-                    closed: true,
-                    thinking_mode: meta.thinking_mode,
-                    reasoning_effort: meta.reasoning_effort,
-                    show_reasoning_inline: meta.show_reasoning_inline,
-                    show_project_tasks: meta.show_project_tasks,
-                    draft_input: meta.draft_input,
-                    looping_window: meta.looping_window,
-                    turn_count: 0,
-                    access_log: Default::default(),
-                    loop_dry_run: false,
-                });
+            if let Some(session) = session_from_meta_file(&meta_path, project) {
+                // Sub-agents nested under this parent.
+                let agents_dir = path.join("agents");
+                if let Ok(agent_entries) = fsutil::read_dir(&agents_dir) {
+                    for agent_entry in agent_entries.flatten() {
+                        let agent_path = agent_entry.path();
+                        if !agent_path.is_dir() {
+                            continue;
+                        }
+                        let agent_meta_path = agent_path.join("session.json");
+                        if let Some(mut agent_session) =
+                            session_from_meta_file(&agent_meta_path, project)
+                            && agent_session.agent.is_some()
+                        {
+                            agent_session.closed = true;
+                            agent_session.storage_override = Some(agents_dir.clone());
+                            sessions.push(agent_session);
+                        }
+                    }
+                }
+                sessions.push(session);
             }
         }
     }
     sessions.sort_by_key(|a| a.created_at);
     sessions
+}
+
+/// Read one session.json into a Session. The caller stamps
+/// `storage_override` for sub-agent sessions (it depends on the parent's
+/// location) and flips `closed` for top-level sessions as appropriate.
+fn session_from_meta_file(meta_path: &Path, project: &Project) -> Option<Session> {
+    let content = fsutil::read_to_string(meta_path).ok()?;
+    let meta = serde_json::from_str::<SessionMeta>(&content).ok()?;
+    Some(Session {
+        id: meta.id,
+        project_id: Some(project.id.clone()),
+        messages: Vec::new(),
+        next_message_id: meta.next_message_id,
+        created_at: meta.created_at,
+        label: meta.label,
+        actual_tokens_used: meta.actual_tokens_used,
+        provider_label: meta.provider_label,
+        model: meta.model,
+        show_todo: meta.show_todo,
+        todo_user_dismissed: meta.todo_user_dismissed,
+        session_named: meta.session_named,
+        handoff_enabled: meta.handoff_enabled,
+        show_explorer: meta.show_explorer,
+        settings_open: meta.settings_open,
+        closed: true,
+        thinking_mode: meta.thinking_mode,
+        reasoning_effort: meta.reasoning_effort,
+        show_reasoning_inline: meta.show_reasoning_inline,
+        show_project_tasks: meta.show_project_tasks,
+        draft_input: meta.draft_input,
+        looping_window: meta.looping_window,
+        turn_count: 0,
+        access_log: Default::default(),
+        agent: meta.agent,
+        storage_override: None,
+        loop_dry_run: false,
+    })
 }
