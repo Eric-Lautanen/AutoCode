@@ -107,11 +107,20 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                 }
                 let elapsed = runtime
                     .request_start
-                    .map(|t| t.elapsed().as_secs_f32())
-                    .unwrap_or(0.0);
+                    .map(|t| t.elapsed())
+                    .unwrap_or_default();
+                crate::helpers::log_timing(|| {
+                    format!(
+                        "request {} done in {} ({prompt_tokens} prompt + {completion_tokens} completion tokens)",
+                        runtime.active_session_id.as_deref().unwrap_or("?"),
+                        crate::helpers::format_duration(elapsed),
+                    )
+                });
                 runtime.status = format!(
                     "Done -- {} prompt + {} completion tokens ({:.1}s)",
-                    prompt_tokens, completion_tokens, elapsed
+                    prompt_tokens,
+                    completion_tokens,
+                    elapsed.as_secs_f32()
                 );
                 break;
             }
@@ -760,6 +769,18 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                         };
 
                         let duration_ms = start.elapsed().as_millis() as u64;
+                        crate::helpers::log_timing(|| {
+                            format!(
+                                "tool {} {} -> {}",
+                                tc.name,
+                                crate::helpers::format_duration(start.elapsed()),
+                                if result.starts_with("Error") {
+                                    "error"
+                                } else {
+                                    "ok"
+                                }
+                            )
+                        });
                         let meta = build_tool_meta(
                             tc,
                             &result,

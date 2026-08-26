@@ -12,6 +12,15 @@ pub(super) fn poll_tool_results(state: &mut AppState, runtime: &mut ChatRuntime)
 
     match rx.try_recv() {
         Ok(results) => {
+            if let Some(start) = runtime.tool_batch_start {
+                crate::helpers::log_timing(|| {
+                    format!(
+                        "tool_batch wall {} for {} tool(s)",
+                        crate::helpers::format_duration(start.elapsed()),
+                        results.len()
+                    )
+                });
+            }
             runtime.tool_rx = None;
             runtime.live_tool_call = None;
             runtime.tool_batch_start = None;
@@ -115,6 +124,15 @@ pub(super) fn commit_tool_results(state: &mut AppState, runtime: &mut ChatRuntim
         }
 
         let count = runtime.pending_tool_results.len();
+        if let Some(start) = runtime.tool_batch_start {
+            crate::helpers::log_timing(|| {
+                format!(
+                    "tool_batch wall {} for {} tool(s)",
+                    crate::helpers::format_duration(start.elapsed()),
+                    count
+                )
+            });
+        }
         push_tool_results_to_state(state, runtime, &runtime.pending_tool_results);
         runtime.pending_tool_results.clear();
         runtime.live_tool_call = None;
