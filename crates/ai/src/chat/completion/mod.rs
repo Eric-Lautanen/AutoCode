@@ -257,6 +257,7 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
     }
     runtime.request_start = Some(std::time::Instant::now());
     runtime.last_delta_time = None;
+    runtime.last_wire_time = None;
     // Snapshot the estimated token count at request time so that when the
     // API responds with actual prompt_tokens (always 1 turn behind), we
     // can compute the correction ratio against the right baseline.
@@ -442,6 +443,7 @@ pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     runtime.status = "Session handed off — starting fresh.".into();
     runtime.request_start = None;
     runtime.last_delta_time = None;
+    runtime.last_wire_time = None;
     runtime.live_shell_rx = None;
     runtime.live_shell_buf.clear();
     // The new session is a clean slate — drop loop-detection state from the

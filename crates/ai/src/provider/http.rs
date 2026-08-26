@@ -4,6 +4,7 @@
 use std::io;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
     io::{BufRead, BufReader, Read, Write},
     net::TcpStream,
@@ -88,13 +89,20 @@ pub(crate) fn connect_tcp(host: &str, port: u16, timeout_secs: u64) -> std::io::
 
 // -- Timeout configuration -----------------------------------------------------
 
+/// How often a blocked read wakes up to check the cancel flag. Short enough
+/// that aborting a request feels instant, long enough that the per-second
+/// wakeup cost is negligible.
+pub(crate) const READ_POLL_SECS: u64 = 1;
+
 pub(crate) struct TimeoutConfig {
     pub request: u64,
 }
 
 pub(crate) fn apply_timeouts(stream: &TcpStream, cfg: &TimeoutConfig) -> std::io::Result<()> {
-    let read_timeout = cfg.request;
-    stream.set_read_timeout(Some(Duration::from_secs(read_timeout)))?;
+    // Reads poll on a short interval so a cancel flag can unblock them; long
+    // silences are tolerated by the read wrapper (the provider may legitimately
+    // be quiet while generating). Writes stay on the full request budget.
+    stream.set_read_timeout(Some(Duration::from_secs(READ_POLL_SECS)))?;
     stream.set_write_timeout(Some(Duration::from_secs(cfg.request)))
 }
 
@@ -115,6 +123,54 @@ pub(crate) struct HttpArgs<'a> {
     pub tx: Sender<ProviderEvent>,
     pub timeouts: &'a TimeoutConfig,
     pub extra_headers: &'a [(String, String)],
+    /// Set when the caller drops the completion handle. The read wrapper
+    /// checks this each poll tick and tears the connection down promptly
+    /// instead of waiting out the request timeout.
+    pub cancel: Arc<AtomicBool>,
+}
+
+// -- Cancellation-aware read wrapper -------------------------------------------
+
+/// Wraps the underlying connection so blocked reads wake up every poll tick.
+/// Read timeouts (`WouldBlock`/`TimedOut`) are swallowed and retried while the
+/// caller is still interested — a provider may legitimately stay silent for
+/// minutes during a long generation — but the moment the cancel flag is set
+/// the read fails immediately, unblocking the worker thread. Writes pass
+/// through untouched on the full write timeout.
+pub(crate) struct CancellableStream<S> {
+    inner: S,
+    cancel: Arc<AtomicBool>,
+}
+
+impl<S: Read> Read for CancellableStream<S> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        loop {
+            match self.inner.read(buf) {
+                Ok(n) => return Ok(n),
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    if self.cancel.load(Ordering::Relaxed) {
+                        return Err(io::Error::other("stream cancelled by caller"));
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+}
+
+impl<S: Write> Write for CancellableStream<S> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.inner.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
 }
 
 // -- HTTP request building -----------------------------------------------------
@@ -224,7 +280,7 @@ pub(crate) fn send_http(
     args: HttpArgs<'_>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let _t0 = std::time::Instant::now();
-    let mut stream_conn = connect_tcp(args.conn.host, args.conn.port, args.timeouts.request)?;
+    let stream_conn = connect_tcp(args.conn.host, args.conn.port, args.timeouts.request)?;
     apply_timeouts(&stream_conn, args.timeouts)?;
 
     let extra_refs: Vec<(&str, &str)> = args
@@ -240,9 +296,13 @@ pub(crate) fn send_http(
         &extra_refs,
     );
     let _t1 = std::time::Instant::now();
-    stream_conn.write_all(request.as_bytes())?;
-    stream_conn.flush()?;
-    let mut reader = BufReader::with_capacity(8192, stream_conn);
+    let mut io = CancellableStream {
+        inner: stream_conn,
+        cancel: Arc::clone(&args.cancel),
+    };
+    io.write_all(request.as_bytes())?;
+    io.flush()?;
+    let mut reader = BufReader::with_capacity(8192, io);
     process_http_response(&mut reader, args.stream, args.model, args.tx)
 }
 
@@ -259,7 +319,10 @@ pub(crate) fn send_https(
     let server_name = ServerName::DnsName(dns_name);
     let client = rustls::ClientConnection::new(config, server_name)?;
     let _t1 = std::time::Instant::now();
-    let mut tls_stream = rustls::StreamOwned::new(client, stream);
+    let mut io = CancellableStream {
+        inner: rustls::StreamOwned::new(client, stream),
+        cancel: Arc::clone(&args.cancel),
+    };
     let extra_refs: Vec<(&str, &str)> = args
         .extra_headers
         .iter()
@@ -273,9 +336,11 @@ pub(crate) fn send_https(
         &extra_refs,
     );
     let _t2 = std::time::Instant::now();
-    tls_stream.write_all(request.as_bytes())?;
-    tls_stream.flush()?;
-    let mut reader = BufReader::with_capacity(16384, tls_stream);
+    // Writing also drives the TLS handshake; handshake reads go through the
+    // cancellable wrapper, so a slow handshake stays interruptible.
+    io.write_all(request.as_bytes())?;
+    io.flush()?;
+    let mut reader = BufReader::with_capacity(16384, io);
     process_http_response(&mut reader, args.stream, args.model, args.tx)
 }
 
@@ -494,6 +559,7 @@ pub(crate) fn parse_sse_stream_from_reader<R: BufRead>(
     let mut finish_reason: Option<String> = None;
     let mut raw_buf = String::new();
     let mut last_log = std::time::Instant::now();
+    let mut last_ping = std::time::Instant::now();
     let mut tag_filter = ThinkTagFilter::new();
 
     // Validate tool call arguments as valid JSON; repair if possible.
@@ -542,6 +608,17 @@ pub(crate) fn parse_sse_stream_from_reader<R: BufRead>(
             last_log = std::time::Instant::now();
         }
         if line.starts_with(':') {
+            // SSE comment — providers send these as keep-alive/ping markers
+            // while upstream work continues (long prefill, buffered tool-call
+            // generation). Surface a lightweight liveness event so the caller's
+            // stall watchdog can tell a healthy quiet stream from a dead socket.
+            // Throttled: some providers emit these aggressively.
+            if last_ping.elapsed().as_millis() >= 500 {
+                last_ping = std::time::Instant::now();
+                if tx.send(ProviderEvent::KeepAlive).is_err() {
+                    return Err("channel closed".into());
+                }
+            }
             continue;
         }
         if !line.starts_with("data: ") {

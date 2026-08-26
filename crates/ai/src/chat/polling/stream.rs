@@ -16,7 +16,7 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
     let stream_idle_timeout_secs = state.stream_idle_timeout_secs;
 
     let rx = match runtime.stream_rx.as_ref() {
-        Some(r) => r,
+        Some(h) => &h.rx,
         None => return false,
     };
 
@@ -32,6 +32,7 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                 runtime.net_status.bytes += text.len() as u64;
                 append_to_pending(&mut runtime.pending_response, &text);
                 runtime.last_delta_time = Some(std::time::Instant::now());
+                runtime.last_wire_time = Some(std::time::Instant::now());
                 runtime.got_response_this_turn = true;
                 got_something = true;
                 events_this_frame += 1;
@@ -43,6 +44,7 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                 runtime.net_status.bytes += text.len() as u64;
                 append_to_reasoning(&mut runtime.reasoning_buf, &text);
                 runtime.last_delta_time = Some(std::time::Instant::now());
+                runtime.last_wire_time = Some(std::time::Instant::now());
                 runtime.got_response_this_turn = true;
                 got_something = true;
             }
@@ -51,8 +53,16 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
             }) => {
                 runtime.live_tool_call = Some((name, arguments));
                 runtime.last_delta_time = Some(std::time::Instant::now());
+                runtime.last_wire_time = Some(std::time::Instant::now());
                 runtime.got_response_this_turn = true;
                 got_something = true;
+            }
+            Ok(ProviderEvent::KeepAlive) => {
+                // Wire liveness only (SSE keep-alive comment). Resets the
+                // wire-idle clock so a healthy stream that is merely quiet
+                // isn't killed, but deliberately does NOT count as response
+                // content for silent-done detection or the content watchdog.
+                runtime.last_wire_time = Some(std::time::Instant::now());
             }
             Ok(ProviderEvent::ToolCall(tc)) => {
                 let tc_json = serde_json::json!({
@@ -68,6 +78,7 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                 }
                 runtime.pending_tool_calls.push(tc);
                 runtime.last_delta_time = Some(std::time::Instant::now());
+                runtime.last_wire_time = Some(std::time::Instant::now());
                 runtime.got_response_this_turn = true;
                 got_something = true;
             }
@@ -114,32 +125,65 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
     }
 
     if !done {
-        // Apply a fixed idle timeout to detect stalled streams.
-        if let Some(last) = runtime.last_delta_time {
-            if last.elapsed().as_secs() >= stream_idle_timeout_secs {
+        // Two-window stall watchdog.
+        //
+        // Wire window (stream_idle_timeout_secs): no events AT ALL — not even
+        // SSE keep-alive comments, which arrive as ProviderEvent::KeepAlive —
+        // means the connection itself is dead. Abort quickly.
+        //
+        // Content window (request_timeout_secs): the wire may still be alive
+        // (pings keep arriving) while the provider quietly works — running a
+        // long thinking phase, or buffering a giant tool_call it refuses to
+        // stream argument-by-argument. That silence gets a full request
+        // budget, matching the pre-first-byte guarantee below, instead of the
+        // tight wire window. This is what used to kill healthy streams
+        // mid-generation of large write_file/patch_file calls.
+        let now = std::time::Instant::now();
+        let wire_idle = runtime
+            .last_wire_time
+            .map(|t| now.duration_since(t).as_secs())
+            .unwrap_or(0);
+        let content_idle = runtime
+            .last_delta_time
+            .or(runtime.request_start)
+            .map(|t| now.duration_since(t).as_secs());
+
+        if wire_idle >= stream_idle_timeout_secs {
+            runtime.provider_error = Some(format!(
+                "Stream stalled -- no data for {}s",
+                stream_idle_timeout_secs
+            ));
+            runtime.status = format!(
+                "Stream stalled ({}s idle) -- aborting",
+                stream_idle_timeout_secs
+            );
+            done = true;
+        } else if let Some(secs) = content_idle
+            && secs >= state.request_timeout_secs
+        {
+            if runtime.last_delta_time.is_some() {
                 runtime.provider_error = Some(format!(
-                    "Stream stalled -- no data for {}s",
-                    stream_idle_timeout_secs
+                    "No response content after {}s -- aborting",
+                    state.request_timeout_secs
                 ));
                 runtime.status = format!(
-                    "Stream stalled ({}s idle) -- aborting",
-                    stream_idle_timeout_secs
+                    "No content after {}s -- aborting",
+                    state.request_timeout_secs
                 );
-                done = true;
-            }
-        } else if let Some(start) = runtime.request_start {
-            // Before any data received, use the request timeout rather than the
-            // stream idle timeout. This avoids aborting a slow initial response
-            // while the connection is still waiting for the first byte.
-            let timeout = state.request_timeout_secs;
-            if start.elapsed().as_secs() >= timeout {
+            } else {
+                // Before any data received, use the request timeout rather than the
+                // stream idle timeout. This avoids aborting a slow initial response
+                // while the connection is still waiting for the first byte.
                 runtime.provider_error = Some(format!(
                     "No response received after {}s -- timed out",
-                    timeout
+                    state.request_timeout_secs
                 ));
-                runtime.status = format!("No response after {}s -- timed out", timeout);
-                done = true;
+                runtime.status = format!(
+                    "No response after {}s -- timed out",
+                    state.request_timeout_secs
+                );
             }
+            done = true;
         }
     }
 

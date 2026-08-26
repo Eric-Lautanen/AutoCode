@@ -1,5 +1,9 @@
 // types.rs -- Public API types for the provider module.
 
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::mpsc::Receiver;
+
 use autocode_core::state::ChatMessage;
 
 #[derive(Debug, Clone)]
@@ -100,6 +104,13 @@ pub enum ProviderEvent {
         name: String,
         arguments: String,
     },
+    /// Wire liveness signal. Emitted when the SSE stream delivers a comment
+    /// line (`: ping` / `: keep-alive`). Providers send these while upstream
+    /// work continues (long prefills, buffered generations), so they prove
+    /// the connection is healthy even though no content is flowing. The chat
+    /// loop's stall watchdog resets its wire-idle clock on this event instead
+    /// of killing a live stream that simply has nothing to say yet.
+    KeepAlive,
     Done {
         prompt_tokens: usize,
         completion_tokens: usize,
@@ -109,4 +120,31 @@ pub enum ProviderEvent {
         finish_reason: Option<String>,
     },
     Error(String),
+}
+
+/// Handle for one in-flight streaming completion.
+///
+/// Bundles the event receiver with the socket-cancel flag owned by the worker
+/// thread. Dropping the handle sets the cancel flag, which unblocks the
+/// worker's read within one poll tick and releases the provider-pool thread
+/// immediately — without this, an aborted (stalled/timed out/stopped) request
+/// would leave its worker parked inside a blocking socket read for the rest of
+/// the request timeout, silently exhausting the small provider thread pool.
+#[derive(Debug)]
+pub struct CompletionStream {
+    pub rx: Receiver<ProviderEvent>,
+    cancel: Arc<AtomicBool>,
+}
+
+impl CompletionStream {
+    pub(crate) fn new(rx: Receiver<ProviderEvent>, cancel: Arc<AtomicBool>) -> Self {
+        Self { rx, cancel }
+    }
+}
+
+impl Drop for CompletionStream {
+    fn drop(&mut self) {
+        self.cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
 }

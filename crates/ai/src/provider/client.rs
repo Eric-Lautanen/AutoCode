@@ -4,8 +4,9 @@ use std::{
     io::{Read, Write},
     net::TcpStream,
     sync::{
-        OnceLock,
-        mpsc::{self, Receiver, Sender},
+        Arc, OnceLock,
+        atomic::AtomicBool,
+        mpsc::{self, Sender},
     },
     time::Duration,
 };
@@ -21,7 +22,7 @@ use super::http::{
     send_http, send_https, tls_config,
 };
 use super::tool_defs::tool_definitions;
-use super::types::{CompletionRequest, ProviderEvent};
+use super::types::{CompletionRequest, CompletionStream, ProviderEvent};
 
 /// Global thread pool for provider HTTP requests.
 /// Lazily initialized once, sized to available parallelism (2-8 threads).
@@ -38,22 +39,32 @@ fn pool() -> &'static ThreadPool {
 pub struct ProviderClient;
 
 impl ProviderClient {
-    pub fn complete(provider: ApiProvider, request: CompletionRequest) -> Receiver<ProviderEvent> {
+    pub fn complete(provider: ApiProvider, request: CompletionRequest) -> CompletionStream {
         let (tx, rx) = mpsc::channel();
+        // Cancel flag shared with the worker: set when the returned handle is
+        // dropped, unblocking the worker's socket read so the pool thread is
+        // released immediately instead of lingering until the request timeout.
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = Arc::clone(&cancel);
         pool().execute(move || {
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                run_request_once(provider, request, tx);
+                run_request_once(provider, request, tx, worker_cancel);
             }));
         });
-        rx
+        CompletionStream::new(rx, cancel)
     }
 }
 
 // -- Request wrapper (single-shot, retry is handled by chat.rs outer layer) ------
 
-fn run_request_once(provider: ApiProvider, request: CompletionRequest, tx: Sender<ProviderEvent>) {
+fn run_request_once(
+    provider: ApiProvider,
+    request: CompletionRequest,
+    tx: Sender<ProviderEvent>,
+    cancel: Arc<AtomicBool>,
+) {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        run_request(provider, request, tx.clone())
+        run_request(provider, request, tx.clone(), cancel)
     }));
     match result {
         Ok(Err(e)) => {
@@ -76,6 +87,7 @@ fn run_request(
     provider: ApiProvider,
     req: CompletionRequest,
     tx: Sender<ProviderEvent>,
+    cancel: Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let thinking_key: &str = if req.thinking_mode {
         req.reasoning_effort.as_str()
@@ -114,6 +126,7 @@ fn run_request(
             tx,
             timeouts: &timeouts,
             extra_headers: &extra_headers,
+            cancel,
         })
     } else {
         send_http(HttpArgs {
@@ -129,6 +142,7 @@ fn run_request(
             tx,
             timeouts: &timeouts,
             extra_headers: &extra_headers,
+            cancel,
         })
     }
 }

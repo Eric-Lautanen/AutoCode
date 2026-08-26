@@ -1,6 +1,6 @@
 use std::sync::mpsc::Receiver;
 
-use crate::provider::{ProviderEvent, ToolCall};
+use crate::provider::{CompletionStream, ToolCall};
 use autocode_core::state::{TodoItem, ToolMeta};
 
 /// Semantic blink state for `NetworkStatus::blink_dot()`.
@@ -77,7 +77,7 @@ pub struct ChatRuntime {
     /// Accumulated model reasoning (extended thinking). Stored separately
     /// so it doesn't pollute the main response or consume context budget.
     pub reasoning_buf: String,
-    pub stream_rx: Option<Receiver<ProviderEvent>>,
+    pub stream_rx: Option<CompletionStream>,
     pub running_tasks: Vec<(String, Receiver<autocode_fs::shell::ShellEvent>, u32)>,
     pub status: String,
     pub active_session_id: Option<String>,
@@ -89,6 +89,11 @@ pub struct ChatRuntime {
     pub retry_count: u8,
     pub request_start: Option<std::time::Instant>,
     pub last_delta_time: Option<std::time::Instant>,
+    /// Last time ANY event arrived from the provider stream, including
+    /// keep-alive pings that carry no content. The stall watchdog uses this
+    /// to distinguish a dead connection (wire silent past the idle timeout)
+    /// from a healthy one whose provider is simply still working.
+    pub last_wire_time: Option<std::time::Instant>,
     pub live_shell_rx: Option<Receiver<autocode_fs::shell::ShellEvent>>,
     pub live_shell_buf: String,
     pub live_shell_pid: Option<u32>,
@@ -187,6 +192,7 @@ impl Default for ChatRuntime {
             retry_count: 0,
             request_start: None,
             last_delta_time: None,
+            last_wire_time: None,
             live_shell_rx: None,
             live_shell_buf: String::new(),
             live_shell_pid: None,
@@ -248,6 +254,7 @@ impl ChatRuntime {
         self.status = "Ready".to_string();
         self.request_start = None;
         self.last_delta_time = None;
+        self.last_wire_time = None;
         self.live_shell_rx = None;
         self.orphaned_retry_count = 0;
         self.pending_start = 0;
