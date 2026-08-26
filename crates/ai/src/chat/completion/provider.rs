@@ -9,32 +9,51 @@ use super::super::session_ops::push_error;
 
 /// Look up the provider for a given session, falling back to the global
 /// active provider if the session has none configured. Returns the provider
-/// and its label.
+/// and its label. The returned clone carries the SESSION's model: the shared
+/// `ApiProvider.model` is toolbar working-state that the UI mutates on every
+/// session switch, so requests must never read it for a background session.
 pub(crate) fn select_provider(
     state: &mut AppState,
     runtime: &mut ChatRuntime,
     session_id: &str,
 ) -> Option<(ApiProvider, String)> {
-    let prov_label = state
+    let (prov_label, sess_model) = state
         .sessions
         .iter()
         .find(|s| s.id == session_id)
-        .and_then(|s| {
+        .map(|s| {
             let label = if !s.provider_label.is_empty() {
                 s.provider_label.clone()
             } else {
                 state.active_provider.clone()
             };
-            state.providers.get(&label).and_then(|p| {
-                if p.enabled && !p.api_key.is_empty() {
-                    Some((label, p.clone()))
-                } else {
-                    None
-                }
-            })
-        });
+            let model = if !s.model.is_empty() {
+                s.model.clone()
+            } else {
+                state
+                    .providers
+                    .get(&label)
+                    .map(|p| p.model.clone())
+                    .unwrap_or_default()
+            };
+            (label, model)
+        })
+        .unwrap_or_else(|| (state.active_provider.clone(), String::new()));
+    let prov_label = state.providers.get(&prov_label).and_then(|p| {
+        if p.enabled && !p.api_key.is_empty() {
+            Some(prov_label.clone())
+        } else {
+            None
+        }
+    });
     match prov_label {
-        Some((label, p)) => Some((p, label)),
+        Some(label) => {
+            let mut p = state.providers.get(&label).cloned()?;
+            if !sess_model.is_empty() {
+                p.model.clone_from(&sess_model);
+            }
+            Some((p, label))
+        }
         None => {
             let label = state.active_provider.clone();
             match state.providers.get(&label) {
