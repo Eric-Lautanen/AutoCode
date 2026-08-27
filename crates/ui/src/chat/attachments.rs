@@ -151,56 +151,59 @@ pub(crate) fn show_pending_chips(
                 .map(|proj| autocode_core::storage::session_messages_dir(proj, sess))
         })
     });
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = Vec2::new(6.0, 6.0);
-        let count = panel_state.pending_attachments.len();
-        for i in (0..count).rev() {
-            let att = panel_state.pending_attachments[i].clone();
-            let abs = att_dir.clone().map(|d| d.join(&att.rel_path));
-            Frame::NONE
-                .fill(theme().bg_surface)
-                .corner_radius(ROUND_SM)
-                .stroke(egui::Stroke::new(1.0, theme().border))
-                .inner_margin(egui::Margin::symmetric(6, 4))
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        if att.kind == AttachmentKind::Image {
-                            let tex = load_texture(ui.ctx(), panel_state, &att, abs);
-                            if let Some(tex) = tex {
-                                ui.image(SizedTexture::new(&tex, Vec2::new(36.0, 36.0)));
+    ui.with_layout(
+        egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true),
+        |ui| {
+            ui.spacing_mut().item_spacing = Vec2::new(6.0, 6.0);
+            let count = panel_state.pending_attachments.len();
+            for i in (0..count).rev() {
+                let att = panel_state.pending_attachments[i].clone();
+                let abs = att_dir.clone().map(|d| d.join(&att.rel_path));
+                Frame::NONE
+                    .fill(theme().bg_surface)
+                    .corner_radius(ROUND_SM)
+                    .stroke(egui::Stroke::new(1.0, theme().border))
+                    .inner_margin(egui::Margin::symmetric(6, 4))
+                    .show(ui, |ui| {
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            if att.kind == AttachmentKind::Image {
+                                let tex = load_texture(ui.ctx(), panel_state, &att, abs);
+                                if let Some(tex) = tex {
+                                    ui.image(SizedTexture::new(&tex, Vec2::new(36.0, 36.0)));
+                                }
                             }
-                        }
-                        ui.vertical(|ui| {
-                            ui.label(
-                                egui::RichText::new(shorten_name(&att.name, 28))
-                                    .size(10.5)
-                                    .color(theme().text_primary),
-                            );
-                            ui.label(
-                                egui::RichText::new(format!("{} KB", att.bytes.max(1) / 1024))
-                                    .size(9.5)
-                                    .color(theme().text_muted),
-                            );
-                        });
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    egui::RichText::new("X")
-                                        .size(10.0)
-                                        .color(Palette::TEXT_MUTED),
+                            ui.vertical(|ui| {
+                                ui.label(
+                                    egui::RichText::new(shorten_name(&att.name, 28))
+                                        .size(10.5)
+                                        .color(theme().text_primary),
+                                );
+                                ui.label(
+                                    egui::RichText::new(format!("{} KB", att.bytes.max(1) / 1024))
+                                        .size(9.5)
+                                        .color(theme().text_muted),
+                                );
+                            });
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("X")
+                                            .size(10.0)
+                                            .color(Palette::TEXT_MUTED),
+                                    )
+                                    .fill(egui::Color32::TRANSPARENT)
+                                    .stroke(egui::Stroke::NONE)
+                                    .min_size(Vec2::new(18.0, 18.0)),
                                 )
-                                .fill(egui::Color32::TRANSPARENT)
-                                .stroke(egui::Stroke::NONE)
-                                .min_size(Vec2::new(18.0, 18.0)),
-                            )
-                            .clicked()
-                        {
-                            remove_chip(state, panel_state, i);
-                        }
+                                .clicked()
+                            {
+                                remove_chip(state, panel_state, i);
+                            }
+                        });
                     });
-                });
-        }
-    });
+            }
+        },
+    );
 }
 
 fn shorten_name(name: &str, max: usize) -> String {
@@ -226,28 +229,31 @@ pub(crate) fn show_bubble_attachments(
         return;
     }
     ui.add_space(4.0);
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = Vec2::new(6.0, 6.0);
-        for att in &msg.attachments {
-            let abs = att_dir.clone().map(|d| d.join(&att.rel_path));
-            Frame::NONE
-                .fill(theme().bg_base)
-                .corner_radius(ROUND_SM)
-                .stroke(egui::Stroke::new(1.0, theme().border))
-                .inner_margin(egui::Margin::symmetric(5, 3))
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        if att.kind == AttachmentKind::Image {
-                            let tex = load_texture(ui.ctx(), panel_state, att, abs);
-                            if let Some(tex) = tex {
-                                ui.image(SizedTexture::new(&tex, Vec2::new(48.0, 48.0)));
+    ui.with_layout(
+        egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true),
+        |ui| {
+            ui.spacing_mut().item_spacing = Vec2::new(6.0, 6.0);
+            for att in &msg.attachments {
+                let abs = att_dir.clone().map(|d| d.join(&att.rel_path));
+                Frame::NONE
+                    .fill(theme().bg_base)
+                    .corner_radius(ROUND_SM)
+                    .stroke(egui::Stroke::new(1.0, theme().border))
+                    .inner_margin(egui::Margin::symmetric(5, 3))
+                    .show(ui, |ui| {
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            if att.kind == AttachmentKind::Image {
+                                let tex = load_texture(ui.ctx(), panel_state, att, abs);
+                                if let Some(tex) = tex {
+                                    ui.image(SizedTexture::new(&tex, Vec2::new(48.0, 48.0)));
+                                }
+                            } else {
+                                ui.label(egui::RichText::new("\u{1F4C4}").size(14.0));
                             }
-                        } else {
-                            ui.label(egui::RichText::new("\u{1F4C4}").size(14.0));
-                        }
-                        ui.label(egui::RichText::new(shorten_name(&att.name, 24)).size(10.0));
+                            ui.label(egui::RichText::new(shorten_name(&att.name, 24)).size(10.0));
+                        });
                     });
-                });
-        }
-    });
+            }
+        },
+    );
 }
