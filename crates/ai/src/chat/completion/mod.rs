@@ -6,9 +6,7 @@ pub(crate) mod provider;
 use std::collections::HashMap;
 
 use crate::{helpers, provider::ProviderClient};
-use autocode_core::state::{
-    AppState, Attachment, AttachmentKind, ChatMessage, Role, TodoStatus, ToolMeta,
-};
+use autocode_core::state::{AppState, Attachment, ChatMessage, Role, TodoStatus, ToolMeta};
 
 use super::runtime::ChatRuntime;
 use super::session_ops::{project_root_for_session, push_error, push_runtime, push_to_session};
@@ -20,56 +18,17 @@ pub(crate) use provider::{build_completion_request, select_provider};
 
 // -- Send a user message -------------------------------------------------------
 
-/// D4 injection matrix, push-time side: append text content blocks to the
-/// outgoing user message. Text/doc files dump their capped content; binaries
-/// get a notice block. IMAGES ARE SKIPPED here: they are handled entirely at
-/// request-build time (vision parts for vision models, a deterministic notice
-/// otherwise) so a later provider/model switch never duplicates or loses them.
-/// Runs ONCE at push time — later turns see the injected text as ordinary
-/// message history and never re-read the staged files.
+/// Attachments are kept out of the persisted user text so the chat UI
+/// shows only the filename/size chip (via `show_bubble_attachments`).
+/// File contents are appended at request-build time in
+/// `assemble_image_content`, so the model still sees them without ever
+/// bloating the visible conversation.
 fn inject_attachments(
-    mut text: String,
-    attachments: &[Attachment],
-    state: &AppState,
-    sid: &str,
+    text: String,
+    _attachments: &[Attachment],
+    _state: &AppState,
+    _sid: &str,
 ) -> String {
-    if attachments.is_empty() {
-        return text;
-    }
-    let sess = match state.sessions.iter().find(|s| s.id == sid) {
-        Some(s) => s,
-        None => return text,
-    };
-    let proj = match sess.project_id.as_ref() {
-        Some(pid) => state.projects.iter().find(|p| &p.id == pid),
-        None => return text,
-    };
-    for att in attachments {
-        match autocode_core::storage::classify(&att.name) {
-            autocode_core::storage::AttClass::Image if att.kind == AttachmentKind::Image => {}
-            autocode_core::storage::AttClass::Text => {
-                let path = proj.map(|p| autocode_core::storage::resolve_path(p, sess, att));
-                let content = path
-                    .and_then(|p| {
-                        std::fs::read_to_string(autocode_core::utils::fsutil::extended_path(&p))
-                            .ok()
-                    })
-                    .unwrap_or_default();
-                let capped = autocode_core::helpers::truncate_middle(
-                    &content,
-                    autocode_core::storage::MAX_TEXT_INJECTION_BYTES,
-                );
-                text.push_str(&format!("\n\n[Attachment: {}]\n{}", att.name, capped));
-            }
-            _ => {
-                let size = format!("{} KB", att.bytes.max(1) / 1024);
-                text.push_str(&format!(
-                    "\n\n[File attached: {} ({}) -- binary file, content not shown]",
-                    att.name, size
-                ));
-            }
-        }
-    }
     text
 }
 

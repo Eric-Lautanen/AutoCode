@@ -34,10 +34,11 @@ pub fn ensure_session(state: &mut AppState) -> bool {
     false
 }
 
-/// D1/D4/D6: assemble the wire content for a message carrying image
-/// attachments. Vision models get parts `[Text{content}] ++ image data-URLs`;
-/// non-vision models get deterministic "[Image attached]" notice blocks
-/// appended to the plain content so rebuilt history stays stable.
+/// D1/D4/D6: assemble the wire content for a message carrying
+/// attachments. Images become data-URL parts for vision models (or a notice
+/// otherwise); text files are appended as capped `[Attachment: name]` blocks.
+/// This runs at request-build time so the visible chat stays as just the
+/// filename/size chip while the model still sees the file contents.
 pub(crate) fn assemble_image_content(
     msg: &ChatMessage,
     vision: bool,
@@ -47,35 +48,77 @@ pub(crate) fn assemble_image_content(
         text: msg.content.clone(),
     }];
     let mut plain = msg.content.clone();
-    for att in msg
-        .attachments
-        .iter()
-        .filter(|a| a.kind == AttachmentKind::Image)
-    {
+    for att in &msg.attachments {
         let size = format!("{} KB", att.bytes.max(1) / 1024);
-        if !vision {
-            plain.push_str(&format!("\n\n[Image attached: {} ({})]", att.name, size));
+        if att.kind == AttachmentKind::Image {
+            if !vision {
+                plain.push_str(&format!("\n\n[Image attached: {} ({})]", att.name, size));
+                continue;
+            }
+            let Some((proj, sess)) = ctx else {
+                continue;
+            };
+            let path = autocode_core::storage::resolve_path(proj, sess, att);
+            match std::fs::read(autocode_core::utils::fsutil::extended_path(&path)) {
+                Ok(bytes) => {
+                    let url = format!(
+                        "data:{};base64,{}",
+                        autocode_core::storage::image_mime(&att.name),
+                        autocode_core::storage::base64_encode(&bytes)
+                    );
+                    parts.push(ContentPart::ImageUrl { url });
+                }
+                Err(e) => {
+                    eprintln!("[session] Failed to read staged image {}: {}", att.name, e);
+                    let m = format!(
+                        "\n\n[Image attached: {} ({}) -- staged file missing]",
+                        att.name, size
+                    );
+                    plain.push_str(&m);
+                    parts[0] = ContentPart::Text {
+                        text: plain.clone(),
+                    };
+                }
+            }
             continue;
         }
-        let Some((proj, sess)) = ctx else {
-            continue;
-        };
-        let path = autocode_core::storage::resolve_path(proj, sess, att);
-        match std::fs::read(autocode_core::utils::fsutil::extended_path(&path)) {
-            Ok(bytes) => {
-                let url = format!(
-                    "data:{};base64,{}",
-                    autocode_core::storage::image_mime(&att.name),
-                    autocode_core::storage::base64_encode(&bytes)
+        // File attachments (outside images)
+        match autocode_core::storage::classify(&att.name) {
+            autocode_core::storage::AttClass::Text => {
+                let content = ctx
+                    .and_then(|(proj, sess)| {
+                        let p = autocode_core::storage::resolve_path(proj, sess, att);
+                        std::fs::read_to_string(autocode_core::utils::fsutil::extended_path(&p))
+                            .ok()
+                    })
+                    .unwrap_or_default();
+                let capped = autocode_core::helpers::truncate_middle(
+                    &content,
+                    autocode_core::storage::MAX_TEXT_INJECTION_BYTES,
                 );
-                parts.push(ContentPart::ImageUrl { url });
+                let block = format!("\n\n[Attachment: {}]\n{}", att.name, capped);
+                plain.push_str(&block);
+                if let ContentPart::Text { text } = &mut parts[0] {
+                    text.push_str(&block);
+                }
             }
-            Err(e) => {
-                eprintln!("[session] Failed to read staged image {}: {}", att.name, e);
-                plain.push_str(&format!(
-                    "\n\n[Image attached: {} ({}) -- staged file missing]",
+            autocode_core::storage::AttClass::Image => {
+                // Image file seen as File kind (shouldn't happen, but treat as image)
+                let m = format!("\n\n[Image attached: {} ({})]", att.name, size);
+                plain.push_str(&m);
+                if let ContentPart::Text { text } = &mut parts[0] {
+                    text.push_str(&m);
+                }
+            }
+            _ => {
+                let m = format!(
+                    "\n\n[File attached: {} ({}) -- binary file, content not shown]",
                     att.name, size
-                ));
+                );
+                plain.push_str(&m);
+                if let ContentPart::Text { text } = &mut parts[0] {
+                    text.push_str(&m);
+                }
             }
         }
     }
