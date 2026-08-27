@@ -39,15 +39,16 @@ pub(crate) fn show_input_row(
                     let input_w = (ui.available_width() - 288.0).max(0.0);
                     let send_enabled = !panel_state.input.trim().is_empty() && !busy;
 
-                    // "+" attach button — leftmost in the input row.
+                    // Attach button — leftmost in the input row, same
+                    // frame as the thinking / task-list toggles.
                     if ui
                         .add(
                             egui::Button::new(
-                                RichText::new("+").size(16.0).color(theme().text_secondary),
+                                RichText::new("+").size(12.0).color(theme().text_secondary),
                             )
                             .fill(Color32::TRANSPARENT)
                             .stroke(Stroke::new(1.0, theme().border))
-                            .min_size(Vec2::new(32.0, 36.0)),
+                            .min_size(Vec2::new(28.0, 36.0)),
                         )
                         .on_hover_text("Attach files")
                         .clicked()
