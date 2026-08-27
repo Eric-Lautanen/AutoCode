@@ -396,8 +396,10 @@ pub fn show(
         // Pending attachment chips float above the input row, overlapping
         // the chat scroll area so the input never gets pushed off-screen.
         if !panel_state.pending_attachments.is_empty() {
+            let avail = ui.available_rect_before_wrap();
             egui::Area::new(panel_state.chat_panel_id.with("chips_overlay"))
-                .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(10.0, -98.0))
+                .fixed_pos(egui::pos2(avail.left() + 10.0, avail.bottom() - 98.0))
+                .pivot(egui::Align2::LEFT_BOTTOM)
                 .order(egui::Order::Foreground)
                 .interactable(true)
                 .show(ui.ctx(), |ui| {
