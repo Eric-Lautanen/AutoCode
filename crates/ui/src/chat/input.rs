@@ -29,7 +29,8 @@ pub(crate) fn show_input_row(
             ui.push_id(panel_state.input_scope_id, |ui| {
                 // Pending attachment chips sit above the input box.
                 super::attachments::show_pending_chips(ui, state, panel_state);
-                ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
                     let active_sid = state.active_session_id.clone();
                     let busy = active_sid.as_ref().is_some_and(|sid| {
                         runtimes
