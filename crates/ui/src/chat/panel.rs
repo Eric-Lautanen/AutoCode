@@ -393,6 +393,33 @@ pub fn show(
             ui.ctx().request_repaint();
         }
 
+        // Pending attachment chips float above the input row, overlapping
+        // the chat scroll area so the input never gets pushed off-screen.
+        if !panel_state.pending_attachments.is_empty() {
+            egui::Area::new(panel_state.chat_panel_id.with("chips_overlay"))
+                .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(10.0, -98.0))
+                .order(egui::Order::Foreground)
+                .interactable(true)
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::NONE
+                        .fill(theme().bg_base)
+                        .corner_radius(4)
+                        .stroke(egui::Stroke::new(1.0, theme().border))
+                        .inner_margin(egui::Margin::symmetric(8, 6))
+                        .shadow(egui::Shadow {
+                            offset: [0, 2],
+                            blur: 8,
+                            spread: 0,
+                            color: egui::Color32::from_black_alpha(60),
+                        })
+                        .show(ui, |ui| {
+                            // Reuse the same chip renderer; it handles
+                            // horizontal wrapping and the X remove buttons.
+                            super::attachments::show_pending_chips(ui, state, panel_state);
+                        });
+                });
+        }
+
         ui.separator();
         show_input_row(ui, state, runtimes, panel_state, &active_sid_str);
     }); // end push_id("chat_panel", ...)
