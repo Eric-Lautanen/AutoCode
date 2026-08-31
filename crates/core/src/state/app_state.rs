@@ -697,6 +697,23 @@ impl AppState {
         crate::storage::load_session_todo_list(proj, sess)
     }
 
+    /// Read a specific session's todo list from disk. Unlike [`Self::todo_list`]
+    /// this never consults the app-active session, so background runtimes
+    /// (and sub-agents) read their own tasks instead of the viewed tab's.
+    /// Returns an empty list when the session or its project is unknown.
+    pub fn todo_list_for(&self, session_id: &str) -> TodoList {
+        let Some(sess) = self.sessions.iter().find(|s| s.id == session_id) else {
+            return TodoList::default();
+        };
+        let Some(pid) = sess.project_id.as_ref() else {
+            return TodoList::default();
+        };
+        let Some(proj) = self.projects.iter().find(|p| p.id == *pid) else {
+            return TodoList::default();
+        };
+        crate::storage::load_session_todo_list(proj, sess)
+    }
+
     /// Write the session todo list to disk (session.json).
     pub fn set_todo_list(&mut self, todo: &TodoList) {
         let sid = match self.active_session_id.clone() {
@@ -731,9 +748,18 @@ impl AppState {
     /// Read the project task list from disk (project meta.json).
     /// Returns default if no active project or file not found.
     pub fn project_task_list(&self) -> TodoList {
-        let proj = match self.active_project() {
-            Some(p) => p,
-            None => return TodoList::default(),
+        self.project_task_list_for(self.active_project_id.as_deref())
+    }
+
+    /// Read a specific project's task list. Unlike [`Self::project_task_list`]
+    /// this never falls back to the app-active project, so a background
+    /// session of another project reads its own project's milestones.
+    pub fn project_task_list_for(&self, project_id: Option<&str>) -> TodoList {
+        let Some(pid) = project_id else {
+            return TodoList::default();
+        };
+        let Some(proj) = self.projects.iter().find(|p| p.id == pid) else {
+            return TodoList::default();
         };
         crate::storage::load_project_meta(proj)
             .map(|m| m.project_task_list)
@@ -742,13 +768,18 @@ impl AppState {
 
     /// Write the project task list to disk (project meta.json).
     pub fn set_project_task_list(&mut self, todo: &TodoList) {
-        let proj_id = match self.active_project_id.clone() {
-            Some(p) => p,
-            None => return,
+        let Some(proj_id) = self.active_project_id.clone() else {
+            return;
         };
-        let proj_idx = match self.projects.iter().position(|p| p.id == proj_id) {
-            Some(i) => i,
-            None => return,
+        self.set_project_task_list_for(&proj_id, todo);
+    }
+
+    /// Write a specific project's task list. Unlike [`Self::set_project_task_list`]
+    /// this targets the given project explicitly, so a background session never
+    /// writes its project's milestones into the app-active project's meta.json.
+    pub fn set_project_task_list_for(&mut self, project_id: &str, todo: &TodoList) {
+        let Some(proj_idx) = self.projects.iter().position(|p| p.id == project_id) else {
+            return;
         };
         let mut meta =
             crate::storage::load_project_meta(&self.projects[proj_idx]).unwrap_or_default();
@@ -778,7 +809,44 @@ impl AppState {
     /// first when this limit is exceeded (e.g. repeated handoffs).
     const MAX_SESSIONS: usize = 50;
 
+    /// Create and activate a new session (UI-visible path).
     pub fn new_session_for_project(&mut self, project_id: Option<String>) {
+        let sid = self.create_session_for_project(project_id);
+        self.activate_session(sid);
+    }
+
+    /// Sync the global working-copy UI flags from the given session and make
+    /// it the app-active session. Callers that create background sessions
+    /// (e.g. a session-scoped handoff) must NOT call this — activating would
+    /// steal the main window's view.
+    pub fn activate_session(&mut self, session_id: String) {
+        let Some(sess) = self.sessions.iter().find(|s| s.id == session_id) else {
+            return;
+        };
+        let show_todo = sess.show_todo;
+        let handoff_enabled = sess.handoff_enabled;
+        let show_explorer = sess.show_explorer;
+        let settings_open = sess.settings_open;
+        let show_reasoning_inline = sess.show_reasoning_inline;
+        let show_project_tasks = sess.show_project_tasks;
+        self.active_session_id = Some(session_id);
+        // Sync the global working-copy UI flags to the session's values so
+        // the next auto-save (which copies global → session → disk) does not
+        // overwrite the session's session.json with stale values left over
+        // from the previously active session via app.ron.
+        self.show_todo = show_todo;
+        self.handoff_enabled = handoff_enabled;
+        self.show_explorer = show_explorer;
+        self.settings_open = settings_open;
+        self.show_reasoning_inline = show_reasoning_inline;
+        self.show_project_tasks = show_project_tasks;
+    }
+
+    /// Create a new session for a project without activating it. Returns the
+    /// new session's id. Prunes stale sessions first, persists the meta so
+    /// the session survives app restarts, and leaves `active_session_id` and
+    /// the global UI flags untouched.
+    pub fn create_session_for_project(&mut self, project_id: Option<String>) -> String {
         // Prune when the limit is exceeded, keeping the newest. Never evict
         // the active session or one owned by a live runtime (a background
         // session mid-run would lose still_owns_session and get drained);
@@ -858,19 +926,9 @@ impl AppState {
         {
             eprintln!("[state] Failed to save new session meta: {}", e);
         }
-        self.active_session_id = Some(sess.id.clone());
-        // Sync the global working-copy UI flags to the new session's defaults
-        // so the next auto-save (which copies global → session → disk) does
-        // not overwrite the new session's session.json with stale values
-        // left over from the previously active session via app.ron.
-        self.show_todo = sess.show_todo;
-        self.todo_user_dismissed = sess.todo_user_dismissed;
-        self.handoff_enabled = sess.handoff_enabled;
-        self.show_explorer = sess.show_explorer;
-        self.settings_open = sess.settings_open;
-        self.show_reasoning_inline = sess.show_reasoning_inline;
-        self.show_project_tasks = sess.show_project_tasks;
+        let sid = sess.id.clone();
         self.sessions.push(sess);
+        sid
     }
 
     /// Flush pending message writes to disk synchronously, respecting the rate limit.

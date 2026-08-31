@@ -282,9 +282,9 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
     // Consumed: the salvaged-reasoning user message was already injected and
     // this request carries it, so don't suppress task reminders on later turns.
     runtime.reasoning_dropped = false;
-    if runtime.active_session_id.is_none() {
-        runtime.active_session_id = state.active_session_id.clone();
-    }
+    // NOTE: no fallback to `state.active_session_id` here. A runtime that lost
+    // its session must fail loudly ("No active session") rather than silently
+    // adopt whatever tab the user is currently viewing.
     runtime.request_start = Some(std::time::Instant::now());
     runtime.last_delta_time = None;
     runtime.last_wire_time = None;
@@ -303,15 +303,22 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
 
 /// Handle a `handoff` tool call: archive the session and start a fresh one
 /// with the model's next_prompt as the first user message.
+///
+/// Fully session-scoped: the session being handed off is the runtime's own
+/// `active_session_id`, never the app-active session. The continuation
+/// session is created without activating it, so a background session (or
+/// sub-agent runtime) handing off can't steal the main window's view or
+/// corrupt the viewed tab's metadata. Only when the handing-off session IS
+/// the one being viewed does the UI switch to the continuation.
 pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     let was_in_progress = std::mem::replace(&mut runtime.handoff_in_progress, true);
     if was_in_progress {
         return;
     }
     runtime.handoff_trigger_sent = false;
+    let old_sid = runtime.active_session_id.clone();
 
     // Push error results for any pending tools so they aren't silently lost.
-    let sid_for_errors = runtime.active_session_id.clone();
     if !runtime.pending_tool_remaining.is_empty() {
         for tc in runtime.pending_tool_remaining.drain(..) {
             let mut msg = ChatMessage::new(
@@ -325,12 +332,15 @@ pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
                 exit_code: Some(-1),
                 ..Default::default()
             });
-            push_to_session(state, sid_for_errors.as_deref(), msg);
+            push_to_session(state, old_sid.as_deref(), msg);
         }
     }
 
-    // Save the old session to disk before creating the new one.
-    if let Some(sess) = state.active_session()
+    // Save the old session to disk before creating the new one. This is the
+    // runtime's own session, NOT `state.active_session()` — a background
+    // handoff must never overwrite the viewed tab's metadata.
+    if let Some(old_sid) = &old_sid
+        && let Some(sess) = state.sessions.iter().find(|s| s.id == *old_sid)
         && let Some(pid) = sess.project_id.as_ref()
         && let Some(proj) = state.projects.iter().find(|p| &p.id == pid)
         && let Err(e) = autocode_core::storage::save_session_meta(proj, sess)
@@ -341,19 +351,42 @@ pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
             format!("Failed to save session meta before handoff: {}", e),
         );
     }
-    // Capture the project task list from disk before creating the new session.
-    let old_ptl = state.project_task_list();
-    state.flush_pending_writes(true);
-    let handoff_was_enabled = state.handoff_enabled;
-    state.new_session_for_project(state.active_project_id.clone());
 
-    // Carry forward the handoff setting so the chain continues.
-    if let Some(sess) = state.active_session_mut() {
+    // Capture the project task list from the handing-off session's own
+    // project (not the app-active project, which may be a different one).
+    let old_pid = old_sid.as_deref().and_then(|sid| {
+        state
+            .sessions
+            .iter()
+            .find(|s| s.id == sid)
+            .and_then(|s| s.project_id.clone())
+    });
+    let old_ptl = state.project_task_list_for(old_pid.as_deref());
+    state.flush_pending_writes(true);
+
+    // Carry forward the handing-off session's own handoff setting so the
+    // chain continues (the global toggle may belong to a different tab).
+    let handoff_was_enabled = old_sid
+        .as_deref()
+        .and_then(|sid| state.sessions.iter().find(|s| s.id == sid))
+        .map(|s| s.handoff_enabled)
+        .unwrap_or(state.handoff_enabled);
+
+    // Create the continuation session WITHOUT activating it, so the main
+    // window's view is only switched when the handing-off session was the
+    // one being viewed (foreground handoffs keep the old UX).
+    let was_viewed = old_sid.is_some() && state.active_session_id == old_sid;
+    let project_id = old_pid.clone().or_else(|| state.active_project_id.clone());
+    let new_sid = state.create_session_for_project(project_id);
+    if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == new_sid) {
         sess.handoff_enabled = handoff_was_enabled;
+    }
+    if was_viewed {
+        state.activate_session(new_sid.clone());
     }
 
     // Point the runtime at the new session before pushing messages.
-    runtime.active_session_id = state.active_session_id.clone();
+    runtime.active_session_id = Some(new_sid);
 
     // Seed the new session with system prompt + host environment + project context.
     let mut sys_prompt = state.system_prompt.clone();
@@ -365,13 +398,17 @@ pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
         sys_prompt.push_str(&state.sysinfo.report);
         sys_prompt.push('\n');
     }
-    sys_prompt.push_str(&crate::helpers::project_context_string(state));
+    sys_prompt.push_str(&crate::helpers::project_context_for_project(
+        state,
+        old_pid.as_deref(),
+    ));
     sys_prompt.push('\n');
     let sys = ChatMessage::new(Role::System, sys_prompt);
     push_runtime(state, runtime, sys);
 
     // Inject synthetic bootstrap messages so the model sees the project task list
     // from the previous session.
+    let old_ptl_incomplete = old_ptl.has_incomplete();
     let ptl_opt = if old_ptl.is_empty() {
         None
     } else {
@@ -439,7 +476,7 @@ pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
     let handoff_msg = runtime.handoff_next_prompt.take().unwrap_or_else(|| {
         if !state.handoff_fallback_prompt.trim().is_empty() {
             state.handoff_fallback_prompt.clone()
-        } else if state.project_task_list().has_incomplete() {
+        } else if old_ptl_incomplete {
             "Project tasks remain. Continue working and create a todo list to track progress."
                 .to_string()
         } else {
@@ -560,9 +597,24 @@ fn auto_continue_impl(
     if !state.handoff_enabled_for(runtime.active_session_id.as_deref()) {
         return;
     }
-    let has_todo_incomplete = state.todo_list().has_incomplete();
+    // Task lists are read from the runtime's own session and its project —
+    // never the app-active ones, which may belong to a different tab.
+    let session_todo = runtime
+        .active_session_id
+        .as_deref()
+        .map(|sid| state.todo_list_for(sid))
+        .unwrap_or_default();
+    let session_project = runtime.active_session_id.as_deref().and_then(|sid| {
+        state
+            .sessions
+            .iter()
+            .find(|s| s.id == sid)
+            .and_then(|s| s.project_id.clone())
+    });
+    let session_ptl = state.project_task_list_for(session_project.as_deref());
+    let has_todo_incomplete = session_todo.has_incomplete();
     let has_project_tasks_incomplete =
-        state.project_task_list().has_incomplete() && !state.todo_list().has_incomplete();
+        session_ptl.has_incomplete() && !session_todo.has_incomplete();
     if !has_todo_incomplete
         && !has_project_tasks_incomplete
         && !truncated
@@ -596,12 +648,12 @@ fn auto_continue_impl(
     }
 
     let msg = if has_todo_incomplete {
-        let (done, total) = state.todo_list().progress();
+        let (done, total) = session_todo.progress();
         format!(
             "Session tasks remain ({done}/{total} complete). Update the todo list with your next concrete steps and continue working.",
         )
     } else if has_project_tasks_incomplete {
-        let (done, total) = state.project_task_list().progress();
+        let (done, total) = session_ptl.progress();
         format!(
             "Project milestones remain ({done}/{total} complete). Update project_task_list when a phase is finished and continue working.",
         )

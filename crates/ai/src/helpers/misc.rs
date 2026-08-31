@@ -78,7 +78,17 @@ pub fn gen_tool_call_id() -> String {
 /// Build a PROJECT CONTEXT string (name, root path, top-level entries).
 /// Returns empty string if no active project.
 pub fn project_context_string(state: &AppState) -> String {
-    let proj = match state.active_project() {
+    project_context_for_project(state, state.active_project_id.as_deref())
+}
+
+/// Build a PROJECT CONTEXT string for a specific project id. Unlike
+/// [`project_context_string`] this never falls back to the app-active
+/// project, so background runtimes describe their own project.
+pub fn project_context_for_project(state: &AppState, project_id: Option<&str>) -> String {
+    let Some(pid) = project_id else {
+        return String::new();
+    };
+    let proj = match state.projects.iter().find(|p| p.id == pid) {
         Some(p) => p,
         None => return String::new(),
     };

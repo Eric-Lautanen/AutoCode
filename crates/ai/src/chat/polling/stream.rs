@@ -573,6 +573,45 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                 }
             }
 
+            // Parent-only tools must never execute inside a sub-agent, even
+            // when the model hallucinates a call that wasn't advertised in
+            // its tool set (D4/D5: agents cannot spawn, hand off, or touch
+            // task lists). Answer with an error result immediately so the
+            // assistant's tool_calls block is never left orphaned.
+            let is_agent_session = state
+                .sessions
+                .iter()
+                .find(|s| s.id == session_id)
+                .is_some_and(|s| s.agent.is_some());
+            if is_agent_session {
+                let mut rejected: Vec<ToolCall> = std::mem::take(&mut spawn_agent_calls);
+                let mut remaining = Vec::with_capacity(normal_calls.len());
+                for tc in normal_calls.drain(..) {
+                    if matches!(
+                        tc.name.as_str(),
+                        "handoff" | "todo_list" | "project_task_list"
+                    ) {
+                        rejected.push(tc);
+                    } else {
+                        remaining.push(tc);
+                    }
+                }
+                normal_calls = remaining;
+                for tc in rejected {
+                    let mut msg = ChatMessage::new(
+                        Role::Tool,
+                        format!("{} is not available to sub-agents.", tc.name),
+                    );
+                    msg.tool_call_id = Some(tc.id.clone());
+                    msg.tool_meta = Some(ToolMeta {
+                        tool_name: tc.name.clone(),
+                        is_error: true,
+                        ..Default::default()
+                    });
+                    push_to_session(state, runtime.active_session_id.as_deref(), msg);
+                }
+            }
+
             // Apply name_session synchronously on the main thread.
             for tc in &name_session_calls {
                 let args: serde_json::Value =
@@ -767,10 +806,17 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                 // escape into a `'static` thread closure).
                 let chrome_path = state.sysinfo.chrome_path.clone();
                 let use_headless_chrome = state.use_headless_chrome;
-                // Snapshot the current task lists so the `read` action can
-                // return them without the thread borrowing `&AppState`.
-                let current_todo = state.todo_list();
-                let current_project_tasks = state.project_task_list();
+                // Snapshot the task lists so the `read` action can return them
+                // without the thread borrowing `&AppState`. Read from THIS
+                // session's/project's lists, never the app-active ones — a
+                // background runtime must not see the viewed tab's tasks.
+                let current_todo = state.todo_list_for(session_id);
+                let session_project = state
+                    .sessions
+                    .iter()
+                    .find(|s| s.id == session_id)
+                    .and_then(|s| s.project_id.clone());
+                let current_project_tasks = state.project_task_list_for(session_project.as_deref());
                 std::thread::spawn(move || {
                     let ctx = super::super::tools::BatchCtx {
                         project_root: pr_clone,

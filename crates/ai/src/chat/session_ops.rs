@@ -246,21 +246,41 @@ pub fn push_tool_results_to_state(
                     }
                 }
             }
-            let was_empty = todo.items.is_empty() || state.todo_list().is_empty();
-            if was_empty || !state.todo_user_dismissed {
-                state.todo_user_dismissed = false;
-                state.show_todo = true;
+            // Panel visibility flags are global working state for the VIEWED
+            // tab. A background runtime (or sub-agent) must update its own
+            // session on disk (above) without popping panels over whatever
+            // session the user is looking at.
+            if sess_id.is_some() && state.active_session_id.as_deref() == sess_id {
+                let was_empty = todo.items.is_empty() || state.todo_list().is_empty();
+                if was_empty || !state.todo_user_dismissed {
+                    state.todo_user_dismissed = false;
+                    state.show_todo = true;
+                }
             }
         }
         if let Some((title, items)) = &tr.project_todo_update {
-            // Write project task list to disk (project meta.json).
+            // Write project task list to disk (project meta.json) — into the
+            // runtime session's OWN project, never whichever project happens
+            // to be app-active (a background session of another project would
+            // otherwise clobber the active project's milestones).
             let todo = {
                 let mut t = TodoList::default();
                 t.set_items(title.clone(), items.clone());
                 t
             };
-            state.set_project_task_list(&todo);
-            state.show_project_tasks = true;
+            let session_project = sess_id.and_then(|sid| {
+                state
+                    .sessions
+                    .iter()
+                    .find(|s| s.id == sid)
+                    .and_then(|s| s.project_id.clone())
+            });
+            if let Some(pid) = session_project {
+                state.set_project_task_list_for(&pid, &todo);
+            }
+            if sess_id.is_some() && state.active_session_id.as_deref() == sess_id {
+                state.show_project_tasks = true;
+            }
         }
     }
     // Record file accesses into the access log for looping window scoring.
