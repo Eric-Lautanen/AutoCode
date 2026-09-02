@@ -124,9 +124,16 @@ pub fn build_tool_meta(
             let path = args["path"].as_str().unwrap_or("").to_string();
             let start_line = args["start_line"].as_u64().unwrap_or(0) as usize;
             let end_line = args["end_line"].as_u64().unwrap_or(0) as usize;
+            // `new_text` comes straight from the call args; `old_text` (the
+            // replaced lines) is filled in by the parallel executor, which
+            // snapshots the file before running the edit. Both let the UI
+            // render the same unified diff as `patch_file`.
+            let new_text = args["new_text"].as_str().unwrap_or("").to_string();
             ToolMeta {
                 tool_name: "patch_lines".into(),
                 file_path: Some(path),
+                old_text: None,
+                new_text: Some(new_text),
                 edit_line: Some(start_line),
                 line_count: Some(end_line.saturating_sub(start_line).saturating_add(1)),
                 is_error,

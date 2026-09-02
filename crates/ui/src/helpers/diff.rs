@@ -60,6 +60,109 @@ pub fn lcs_diff_lines<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<DiffLine<'a>>
     result
 }
 
+/// Plain-text rendering of the unified diff shown by
+/// `chat::diff_view::render_unified_diff`, for the copy button. Same
+/// LCS/simple algorithm, same 3-line context hunks and ` [...] ` separators,
+/// flattened to `"{num:>w} |{prefix} {text}"` lines so the clipboard matches
+/// what the user sees (including file line numbers from `line_offset`).
+pub fn format_unified_diff(old: &str, new: &str, line_offset: usize) -> String {
+    const CONTEXT: usize = 3;
+    let old_lines: Vec<&str> = old.lines().collect();
+    let new_lines: Vec<&str> = new.lines().collect();
+    let line_data = if old_lines.len() < 2000 && new_lines.len() < 2000 {
+        lcs_diff_lines(&old_lines, &new_lines)
+    } else {
+        simple_diff_lines(&old_lines, &new_lines)
+    };
+
+    let mut change_runs: Vec<(usize, usize)> = Vec::new();
+    let mut run_start: Option<usize> = None;
+    for (i, dl) in line_data.iter().enumerate() {
+        if dl.prefix != ' ' {
+            if run_start.is_none() {
+                run_start = Some(i);
+            }
+        } else if let Some(start) = run_start.take() {
+            change_runs.push((start, i));
+        }
+    }
+    if let Some(start) = run_start {
+        change_runs.push((start, line_data.len()));
+    }
+
+    let mut hunks: Vec<(usize, usize)> = Vec::new();
+    for (start, end) in &change_runs {
+        let hs = start.saturating_sub(CONTEXT);
+        let he = (*end + CONTEXT).min(line_data.len());
+        if let Some((_ps, pe)) = hunks.last_mut()
+            && hs <= *pe
+        {
+            *pe = he.max(*pe);
+            continue;
+        }
+        hunks.push((hs, he));
+    }
+
+    // Flatten hunks; `None` marks a ` [...] ` gap between hunks.
+    let mut flat: Vec<Option<&DiffLine<'_>>> = Vec::new();
+    for (hi, (start, end)) in hunks.iter().enumerate() {
+        if hi > 0 {
+            flat.push(None);
+        }
+        for dl in &line_data[*start..*end] {
+            flat.push(Some(dl));
+        }
+    }
+
+    if flat.is_empty() {
+        return "(no differences)".to_string();
+    }
+
+    let max_line_num = flat
+        .iter()
+        .flatten()
+        .map(|dl| {
+            let raw = if dl.prefix == '-' {
+                dl.old_lineno
+            } else {
+                dl.new_lineno
+            };
+            if raw > 0 { raw + line_offset } else { 0 }
+        })
+        .max()
+        .unwrap_or(0);
+    let num_width = max_line_num.to_string().len().max(2);
+
+    let mut out = String::new();
+    for entry in flat {
+        let Some(dl) = entry else {
+            out.push_str(" [...] \n");
+            continue;
+        };
+        let raw_num = if dl.prefix == '-' {
+            dl.old_lineno
+        } else {
+            dl.new_lineno
+        };
+        let line_num = if raw_num > 0 {
+            raw_num + line_offset
+        } else {
+            0
+        };
+        out.push_str(&format!(
+            "{:>width$} |{} {}\n",
+            line_num,
+            dl.prefix,
+            dl.text.trim_end(),
+            width = num_width
+        ));
+    }
+    if out.ends_with('\n') {
+        out.pop();
+    }
+    out
+}
+
 /// Simple line-by-line diff for very large files (>2000 lines).
 /// Walks both files greedily, emitting matching lines as context
 /// and unmatched lines as deletions / insertions.

@@ -136,6 +136,38 @@ fn execute_one(
     cache: &mut LruPathCache,
 ) -> (usize, ToolResult) {
     let start = std::time::Instant::now();
+    // Snapshot the replaced lines before a `patch_lines` edit runs so the UI
+    // can render the same unified diff as `patch_file`. Same-path calls are
+    // serialized in one conflict group, so no other worker can mutate the
+    // file between this read and the execution below.
+    let patch_lines_old: Option<String> = if tc.name == "patch_lines" {
+        let args: serde_json::Value =
+            serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
+        let (start_line, end_line) = (
+            args["start_line"].as_u64().unwrap_or(0) as usize,
+            args["end_line"].as_u64().unwrap_or(0) as usize,
+        );
+        args["path"].as_str().and_then(|raw| {
+            let path = autocode_core::helpers::resolve_path_write_cached(
+                raw,
+                &ctx.project_root,
+                cache,
+                ctx.allow_escape,
+            );
+            autocode_core::utils::fsutil::read_to_string(&path)
+                .ok()
+                .and_then(|content| {
+                    let lines: Vec<&str> = content.lines().collect();
+                    if start_line >= 1 && end_line >= start_line && end_line <= lines.len() {
+                        Some(lines[start_line - 1..end_line].join("\n"))
+                    } else {
+                        None
+                    }
+                })
+        })
+    } else {
+        None
+    };
     let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         execute_tool_with_cache(ToolExecCtx {
             tc,
@@ -172,13 +204,21 @@ fn execute_one(
         )
     });
     let duration_ms = start.elapsed().as_millis() as u64;
-    let meta = build_tool_meta(
+    let mut meta = build_tool_meta(
         tc,
         &result,
         duration_ms,
         &ctx.current_todo,
         &ctx.current_project_tasks,
     );
+    // Attach the pre-edit snapshot so `patch_lines` cards can diff old vs new.
+    // Only on success: on error the file is untouched and there is no diff.
+    if tc.name == "patch_lines"
+        && !meta.is_error
+        && let Some(old) = patch_lines_old
+    {
+        meta.old_text = Some(old);
+    }
     let args: serde_json::Value =
         serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
     let accessed_paths = match tc.name.as_str() {
