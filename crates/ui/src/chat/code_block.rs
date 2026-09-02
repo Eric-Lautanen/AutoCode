@@ -283,6 +283,7 @@ pub(crate) fn tok_fg(kind: super::syntax::Tok, fallback: Color32) -> Color32 {
         super::syntax::Tok::Function => theme().code_function,
         super::syntax::Tok::Type => theme().code_type,
         super::syntax::Tok::Annotation => theme().code_annotation,
+        super::syntax::Tok::Doc => theme().code_doc,
         super::syntax::Tok::Normal => fallback,
     }
 }
@@ -373,7 +374,8 @@ pub(crate) fn render_code_block(ui: &mut egui::Ui, lang: &str, code: &str, width
             ..Default::default()
         };
         let mut in_block = false;
-        let mut first_row = true;
+        // (row tint, styled segments) per logical line, wrapped below.
+        let mut styled: Vec<(Option<Color32>, Vec<Seg>)> = Vec::new();
         for line in display_lines.iter() {
             // Tinted rows pad full-bleed; plain rows need no padding.
             let row_bg = if is_diff {
@@ -400,17 +402,28 @@ pub(crate) fn render_code_block(ui: &mut egui::Ui, lang: &str, code: &str, width
             } else {
                 vec![Seg::plain(line.replace('\t', "    "), theme().text_code)]
             };
-            for mut row in wrap_segs(&segs, cols) {
-                if !first_row {
-                    job.append("\n", 0.0, mono_format(theme().text_code));
-                }
-                first_row = false;
-                if let Some(b) = row_bg {
-                    pad_row(&mut row, cols, b);
-                }
-                for s in &row {
-                    job.append(&s.text, 0.0, seg_format(&mono, s));
-                }
+            for row in wrap_segs(&segs, cols) {
+                styled.push((row_bg, row));
+            }
+        }
+        // Tinted rows pad to the longest row so the card hugs its content
+        // instead of ballooning to the full transcript width.
+        let max_len = styled
+            .iter()
+            .map(|(_, r)| r.iter().map(|s| s.text.chars().count()).sum::<usize>())
+            .max()
+            .unwrap_or(0);
+        let mut first_row = true;
+        for (bg, mut row) in styled {
+            if let Some(b) = bg {
+                pad_row(&mut row, max_len, b);
+            }
+            if !first_row {
+                job.append("\n", 0.0, mono_format(theme().text_code));
+            }
+            first_row = false;
+            for s in &row {
+                job.append(&s.text, 0.0, seg_format(&mono, s));
             }
         }
         ui.label(job);

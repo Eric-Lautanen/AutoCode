@@ -253,12 +253,28 @@ pub(crate) fn render_unified_diff(
             tokenize_content(&text, &profile, &mut in_block, base_fg, line_bg)
         };
         for (k, row) in wrap_segs(&content, text_cols).iter().enumerate() {
-            // Tinted rows pad full-bleed; context rows need no padding.
-            let mut row = row.clone();
-            if let Some(b) = line_bg {
-                pad_row(&mut row, text_cols, b);
-            }
-            rows.push((if k == 0 { Some(line_num) } else { None }, dl.prefix, row));
+            rows.push((
+                if k == 0 { Some(line_num) } else { None },
+                dl.prefix,
+                row.clone(),
+            ));
+        }
+    }
+    // Tinted rows pad to the longest row so the card hugs its content
+    // instead of ballooning to the full transcript width.
+    let max_text = rows
+        .iter()
+        .map(|(_, _, segs)| segs.iter().map(|s| s.text.chars().count()).sum::<usize>())
+        .max()
+        .unwrap_or(0);
+    for (_, prefix, segs) in rows.iter_mut() {
+        let bg = match prefix {
+            '-' => Some(theme().diff_del_bg),
+            '+' => Some(theme().diff_add_bg),
+            _ => None,
+        };
+        if let Some(b) = bg {
+            pad_row(segs, max_text, b);
         }
     }
 

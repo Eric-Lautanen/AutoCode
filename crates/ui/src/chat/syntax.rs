@@ -22,7 +22,8 @@ pub enum Tok {
     Str,
     Comment,
     Number,
-    /// `foo(` — identifier immediately followed by `(`. Keywords win ties
+    /// `foo(` — identifier immediately followed by `(` (or `!` for
+    /// `vec!`-style macros, unless it is `!=`). Keywords win ties
     /// (`if (` stays a keyword).
     Function,
     /// `Foo`, `MAX_SIZE` — identifier starting with an uppercase letter.
@@ -31,6 +32,8 @@ pub enum Tok {
     /// `#[derive(…)]`, `#include`, `@decorator` — preprocessor and
     /// annotation markers.
     Annotation,
+    /// `///` and `//!` doc comments — brighter than plain comments.
+    Doc,
 }
 
 /// One highlighted span of a tokenized line.
@@ -646,7 +649,15 @@ pub fn highlight_line(line: &str, profile: &Profile, in_block_comment: &mut bool
         if let Some(lc) = profile.line_comment
             && rest.starts_with(lc)
         {
-            push_span(&mut spans, rest.to_string(), Tok::Comment);
+            // `///` / `//!` (but not `////`) are doc comments.
+            let kind = if lc == "//"
+                && (rest.starts_with("///") && !rest.starts_with("////") || rest.starts_with("//!"))
+            {
+                Tok::Doc
+            } else {
+                Tok::Comment
+            };
+            push_span(&mut spans, rest.to_string(), kind);
             break;
         }
         if profile.block_comment && rest.starts_with("/*") {
@@ -718,12 +729,14 @@ pub fn highlight_line(line: &str, profile: &Profile, in_block_comment: &mut bool
                 }
             }
             let word = &line[i..j];
+            let after = &line[j..];
             let kind = if profile
                 .keywords
                 .contains(&word.to_ascii_lowercase().as_str())
             {
                 Tok::Keyword
-            } else if line[j..].starts_with('(') {
+            } else if after.starts_with('(') || (after.starts_with('!') && !after.starts_with("!="))
+            {
                 Tok::Function
             } else if word.chars().next().is_some_and(|f| f.is_uppercase()) {
                 Tok::Type
@@ -992,6 +1005,27 @@ mod tests {
         let spans = kinds("@app.route('/x')", &py);
         assert_eq!(kind_of(&spans, "app"), Some(Tok::Annotation));
         assert_eq!(kind_of(&spans, "route"), Some(Tok::Function));
+    }
+
+    #[test]
+    fn macro_bang_is_function_not_equal() {
+        let spans = kinds("let v = vec![1, 2]; assert!(ok);", &rust());
+        assert_eq!(kind_of(&spans, "vec"), Some(Tok::Function));
+        assert_eq!(kind_of(&spans, "assert"), Some(Tok::Function));
+        let spans = kinds("if (a != b) { }", &rust());
+        assert_eq!(kind_of(&spans, "a"), Some(Tok::Normal));
+    }
+
+    #[test]
+    fn doc_comments() {
+        let spans = kinds("/// Adds two numbers.", &rust());
+        assert!(spans.iter().all(|(_, k)| *k == Tok::Doc));
+        let spans = kinds("//! Module docs.", &rust());
+        assert!(spans.iter().all(|(_, k)| *k == Tok::Doc));
+        let spans = kinds("//// separator", &rust());
+        assert!(spans.iter().all(|(_, k)| *k == Tok::Comment));
+        let spans = kinds("// plain", &rust());
+        assert!(spans.iter().all(|(_, k)| *k == Tok::Comment));
     }
 
     #[test]

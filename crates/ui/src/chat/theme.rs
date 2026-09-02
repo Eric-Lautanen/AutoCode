@@ -44,6 +44,7 @@ pub struct ThemeColors {
     pub code_function: Color32,
     pub code_type: Color32,
     pub code_annotation: Color32,
+    pub code_doc: Color32,
     pub reason_bg: Color32,
     pub reason_border: Color32,
 }
@@ -86,6 +87,7 @@ pub(crate) static THEME: ThemeColors = ThemeColors {
     code_function: Color32::from_rgb(220, 220, 170),
     code_type: Color32::from_rgb(78, 201, 176),
     code_annotation: Color32::from_rgb(140, 140, 140),
+    code_doc: Color32::from_rgb(130, 175, 125),
     reason_bg: Color32::from_rgb(18, 20, 26),
     reason_border: Color32::from_rgb(41, 48, 61),
 };
