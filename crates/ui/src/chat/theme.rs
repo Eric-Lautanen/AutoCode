@@ -58,7 +58,10 @@ pub(crate) static THEME: ThemeColors = ThemeColors {
     text_primary: Palette::TEXT_PRIMARY,
     text_secondary: Palette::TEXT_SECONDARY,
     text_muted: Palette::TEXT_MUTED,
-    text_code: Palette::TEXT_CODE,
+    // Neutral light gray (VSCode-style): the old greenish base was
+    // ~7 RGB steps from the number sage, making numbers unreadable as
+    // a separate color. Palette::TEXT_CODE keeps its terminal tint.
+    text_code: Color32::from_rgb(212, 212, 212),
     border: Palette::BORDER,
     success: Palette::SUCCESS,
     error: Palette::ERROR,

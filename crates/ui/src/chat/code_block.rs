@@ -612,6 +612,32 @@ mod tests {
     }
 
     #[test]
+    fn token_colors_all_distinct() {
+        // Regression test: the number sage once differed from the base
+        // code color by ~7 RGB steps, making numbers unreadable as a
+        // separate color. Every token kind must map to its own color.
+        use super::super::syntax::Tok;
+        use super::tok_fg;
+        use crate::chat::theme::theme;
+        let colors = [
+            tok_fg(Tok::Normal, theme().text_code),
+            tok_fg(Tok::Keyword, theme().text_code),
+            tok_fg(Tok::Str, theme().text_code),
+            tok_fg(Tok::Comment, theme().text_code),
+            tok_fg(Tok::Number, theme().text_code),
+            tok_fg(Tok::Function, theme().text_code),
+            tok_fg(Tok::Type, theme().text_code),
+            tok_fg(Tok::Annotation, theme().text_code),
+            tok_fg(Tok::Doc, theme().text_code),
+        ];
+        for (i, a) in colors.iter().enumerate() {
+            for (j, b) in colors.iter().enumerate() {
+                assert!(i == j || a != b, "token colors {i} and {j} collide");
+            }
+        }
+    }
+
+    #[test]
     fn budget_math() {
         use super::proportional_cols;
         // Fits: never wrap what fits.

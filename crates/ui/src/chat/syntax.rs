@@ -56,10 +56,11 @@ pub struct Profile {
 }
 
 const RUST_KW: &[&str] = &[
-    "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern",
-    "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "none",
-    "ok", "err", "pub", "ref", "return", "self", "static", "struct", "super", "trait", "true",
-    "unsafe", "use", "where", "while",
+    "as", "async", "await", "bool", "break", "char", "const", "continue", "crate", "dyn", "else",
+    "enum", "extern", "f32", "f64", "false", "fn", "for", "i8", "i16", "i32", "i64", "i128", "if",
+    "impl", "in", "isize", "let", "loop", "match", "mod", "move", "mut", "none", "ok", "err",
+    "pub", "ref", "return", "self", "static", "str", "struct", "super", "trait", "true", "u8",
+    "u16", "u32", "u64", "u128", "unsafe", "use", "usize", "where", "while",
 ];
 
 const PY_KW: &[&str] = &[
@@ -168,11 +169,20 @@ const TS_KW: &[&str] = &[
     "type",
     "typeof",
     "undefined",
+    "unknown",
     "var",
     "void",
     "while",
     "with",
     "yield",
+    "any",
+    "bigint",
+    "boolean",
+    "never",
+    "number",
+    "object",
+    "string",
+    "symbol",
 ];
 
 const SH_KW: &[&str] = &[
@@ -182,10 +192,57 @@ const SH_KW: &[&str] = &[
 ];
 
 const C_KW: &[&str] = &[
-    "auto", "break", "case", "char", "const", "continue", "default", "do", "double", "else",
-    "enum", "extern", "false", "float", "for", "goto", "if", "inline", "int", "long", "register",
-    "restrict", "return", "short", "signed", "sizeof", "static", "struct", "switch", "true",
-    "typedef", "union", "unsigned", "void", "volatile", "while", "null",
+    "auto",
+    "break",
+    "case",
+    "char",
+    "const",
+    "continue",
+    "default",
+    "do",
+    "double",
+    "else",
+    "enum",
+    "extern",
+    "false",
+    "float",
+    "for",
+    "goto",
+    "if",
+    "inline",
+    "int",
+    "long",
+    "register",
+    "restrict",
+    "return",
+    "short",
+    "signed",
+    "sizeof",
+    "static",
+    "struct",
+    "switch",
+    "true",
+    "typedef",
+    "union",
+    "unsigned",
+    "void",
+    "volatile",
+    "while",
+    "null",
+    "bool",
+    "size_t",
+    "ssize_t",
+    "wchar_t",
+    "file",
+    "ptrdiff_t",
+    "int8_t",
+    "int16_t",
+    "int32_t",
+    "int64_t",
+    "uint8_t",
+    "uint16_t",
+    "uint32_t",
+    "uint64_t",
 ];
 
 const CPP_KW: &[&str] = &[
@@ -248,6 +305,39 @@ const CPP_KW: &[&str] = &[
     "void",
     "volatile",
     "while",
+    "std",
+    "string",
+    "vector",
+    "map",
+    "set",
+    "list",
+    "deque",
+    "array",
+    "optional",
+    "variant",
+    "function",
+    "pair",
+    "tuple",
+    "shared_ptr",
+    "unique_ptr",
+    "weak_ptr",
+    "unordered_map",
+    "unordered_set",
+    "string_view",
+    "span",
+    "size_t",
+    "ssize_t",
+    "ptrdiff_t",
+    "wchar_t",
+    "file",
+    "int8_t",
+    "int16_t",
+    "int32_t",
+    "int64_t",
+    "uint8_t",
+    "uint16_t",
+    "uint32_t",
+    "uint64_t",
 ];
 
 const JAVA_KW: &[&str] = &[
@@ -332,6 +422,27 @@ const GO_KW: &[&str] = &[
     "var",
     "true",
     "false",
+    "string",
+    "int",
+    "int8",
+    "int16",
+    "int32",
+    "int64",
+    "uint",
+    "uint8",
+    "uint16",
+    "uint32",
+    "uint64",
+    "uintptr",
+    "float32",
+    "float64",
+    "complex64",
+    "complex128",
+    "byte",
+    "rune",
+    "bool",
+    "error",
+    "any",
 ];
 
 const SQL_KW: &[&str] = &[
@@ -1026,6 +1137,30 @@ mod tests {
         assert!(spans.iter().all(|(_, k)| *k == Tok::Comment));
         let spans = kinds("// plain", &rust());
         assert!(spans.iter().all(|(_, k)| *k == Tok::Comment));
+    }
+
+    #[test]
+    fn primitives_and_std_types() {
+        let cpp = profile_for("a.cpp").unwrap();
+        let spans = kinds("static void f(const std::vector<int> &v, size_t n);", &cpp);
+        for w in ["static", "void", "const", "std", "vector", "int", "size_t"] {
+            assert_eq!(kind_of(&spans, w), Some(Tok::Keyword), "{w}");
+        }
+        assert_eq!(kind_of(&spans, "f"), Some(Tok::Function));
+        assert_eq!(kind_of(&spans, "v"), Some(Tok::Normal));
+        assert_eq!(kind_of(&spans, "n"), Some(Tok::Normal));
+        let spans = kinds("let x: u32 = str::len(s);", &rust());
+        assert_eq!(kind_of(&spans, "u32"), Some(Tok::Keyword));
+        assert_eq!(kind_of(&spans, "str"), Some(Tok::Keyword));
+        let go = profile_for("a.go").unwrap();
+        let spans = kinds("func f(s string) (int, error) {", &go);
+        assert_eq!(kind_of(&spans, "string"), Some(Tok::Keyword));
+        assert_eq!(kind_of(&spans, "int"), Some(Tok::Keyword));
+        assert_eq!(kind_of(&spans, "error"), Some(Tok::Keyword));
+        assert_eq!(kind_of(&spans, "f"), Some(Tok::Function));
+        let ts = profile_for("a.ts").unwrap();
+        let spans = kinds("const s: string = 'x';", &ts);
+        assert_eq!(kind_of(&spans, "string"), Some(Tok::Keyword));
     }
 
     #[test]
