@@ -21,6 +21,7 @@ pub(crate) fn show_agent_cards(
     state: &AppState,
     handles: &[(String, u64)],
     panel_state: &mut ChatPanelState,
+    width: f32,
 ) {
     for (agent_sid, elapsed) in handles {
         let (agent_sid, elapsed) = (agent_sid.clone(), *elapsed);
@@ -55,7 +56,7 @@ pub(crate) fn show_agent_cards(
             .stroke(egui::Stroke::new(1.0, theme().border))
             .inner_margin(Margin::symmetric(10, 8))
             .show(ui, |ui| {
-                ui.set_max_width(ui.available_width());
+                ui.set_max_width(width - 20.0);
                 ui.horizontal(|ui| {
                     ui.add(egui::Spinner::new().size(12.0));
                     ui.label(

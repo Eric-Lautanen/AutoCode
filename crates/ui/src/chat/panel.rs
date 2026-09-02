@@ -144,6 +144,13 @@ pub fn show(
                     Frame::NONE.inner_margin(bubble_indent).show(ui, |ui| {
                         ui.set_min_width(inner_max_w - 12.0);
                         ui.set_max_width(inner_max_w - 12.0);
+                        // Exact content width every card must fit in. The
+                        // scroll area is horizontally unbounded, so wrap
+                        // decisions can't use ui metrics — and chat_w itself
+                        // is 42px wider than what fits (scroll reservation +
+                        // frame indent), which pushed full-width cards past
+                        // the right edge with no right padding.
+                        let content_w = inner_max_w - 12.0;
                         if !panel_state.display_buffer.is_empty() {
                             if panel_state.oldest_disk_id > 0
                                 && panel_state.loaded_min_id > panel_state.oldest_disk_id
@@ -172,7 +179,7 @@ pub fn show(
                                             })
                                         });
                                     let ctx = TranscriptCtx {
-                                        width: chat_w,
+                                        width: content_w,
                                         show_reasoning: state.show_reasoning_inline,
                                         att_dir,
                                         interactive: true,
@@ -218,8 +225,13 @@ pub fn show(
                             } else {
                                 // Live reveal pacing is scoped to this surface.
                                 let live = panel_state.live_reveal(&active_sid_str);
-                                let rendered =
-                                    show_live_turn(ui, r, live, state.show_reasoning_inline, chat_w);
+                                let rendered = show_live_turn(
+                                    ui,
+                                    r,
+                                    live,
+                                    state.show_reasoning_inline,
+                                    content_w,
+                                );
                                 if !rendered && r.is_busy() {
                                     // Busy with nothing to stream yet (e.g. waiting
                                     // for the first delta) -- show the status line.
@@ -243,7 +255,13 @@ pub fn show(
                                         (h.agent_session_id.clone(), h.started.elapsed().as_secs())
                                     })
                                     .collect();
-                                crate::agents::show_agent_cards(ui, state, &handles, panel_state);
+                                crate::agents::show_agent_cards(
+                                    ui,
+                                    state,
+                                    &handles,
+                                    panel_state,
+                                    content_w,
+                                );
                             }
                         }
                     });

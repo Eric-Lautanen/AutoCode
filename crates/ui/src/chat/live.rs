@@ -173,7 +173,7 @@ fn render_tool_card(ui: &mut egui::Ui, name: &str, args: Option<&str>, width: f3
         .stroke(Stroke::new(1.0, theme().border))
         .inner_margin(Margin::symmetric(10, 8))
         .show(ui, |ui| {
-            ui.set_max_width(ui.available_width());
+            ui.set_max_width((width - 20.0).max(100.0));
             ui.label(
                 RichText::new(format!("[tool] {}", tool_label(name)))
                     .size(FONT_SMALL)

@@ -88,13 +88,13 @@ impl FramedCard {
     }
 }
 
-/// Standard wrapping for monospace card bodies: break anywhere with a return
-/// glyph on overflow, at the given pixel width.
+/// Standard wrapping for monospace card bodies: wrap on whole words with a
+/// return glyph on overflow, at the given pixel width.
 pub(crate) fn mono_wrap(max_width: f32) -> TextWrapping {
     TextWrapping {
         max_rows: usize::MAX,
         max_width,
-        break_anywhere: true,
+        break_anywhere: false,
         overflow_character: Some('\u{23CE}'),
     }
 }
