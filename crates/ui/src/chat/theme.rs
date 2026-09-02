@@ -79,7 +79,7 @@ pub(crate) static THEME: ThemeColors = ThemeColors {
     code_string: Color32::from_rgb(206, 145, 120),
     code_comment: Color32::from_rgb(110, 140, 105),
     code_number: Color32::from_rgb(181, 206, 168),
-    code_keyword: Palette::PURPLE,
+    code_keyword: Color32::from_rgb(86, 156, 214),
     reason_bg: Color32::from_rgb(18, 20, 26),
     reason_border: Color32::from_rgb(41, 48, 61),
 };

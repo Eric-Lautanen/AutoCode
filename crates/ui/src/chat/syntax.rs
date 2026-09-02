@@ -708,10 +708,15 @@ fn fold_parts(dl: &[crate::helpers::DiffLine<'_>], want: char, parts: &mut Vec<W
 
 /// Char-level diff of two paired `-`/`+` lines for intra-line highlighting.
 /// Returns the fragments for the old and new line. `None` when the pair is
-/// too big for the O(n·m) LCS to be worth it — callers fall back to
-/// whole-line highlighting.
+/// too big for the O(n·m) LCS to be worth it, or when the lines are too
+/// dissimilar — positional pairing on rewritten blocks matches unrelated
+/// lines, and highlighting those fragments is noise, so callers fall back
+/// to whole-line highlighting in both cases.
 pub fn word_diff(old: &str, new: &str) -> Option<(Vec<WordPart>, Vec<WordPart>)> {
     const MAX_CHARS: usize = 1500;
+    /// Minimum fraction of unchanged chars for the pair to count as "the
+    /// same line, edited" rather than two unrelated lines.
+    const MIN_SIMILARITY: f32 = 0.4;
     let o = chars_as_str(old);
     let n = chars_as_str(new);
     if o.len() + n.len() > MAX_CHARS || o.is_empty() || n.is_empty() {
@@ -722,7 +727,17 @@ pub fn word_diff(old: &str, new: &str) -> Option<(Vec<WordPart>, Vec<WordPart>)>
     let mut new_parts = Vec::new();
     fold_parts(&dl, '-', &mut old_parts);
     fold_parts(&dl, '+', &mut new_parts);
-    Some((old_parts, new_parts))
+    let unchanged: usize = old_parts
+        .iter()
+        .filter(|p| !p.changed)
+        .map(|p| p.text.chars().count())
+        .sum();
+    let total = o.len().max(n.len()).max(1);
+    if unchanged as f32 / total as f32 >= MIN_SIMILARITY {
+        Some((old_parts, new_parts))
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -878,5 +893,24 @@ mod tests {
     fn word_diff_caps_size() {
         let big = "x".repeat(2000);
         assert!(word_diff(&big, "y").is_none());
+    }
+
+    #[test]
+    fn word_diff_rejects_dissimilar_pairs() {
+        // A rewritten line paired positionally with unrelated code must
+        // not produce fragments (the artifact: random pink spans).
+        assert!(word_diff("return out;", "   out += hex[c >> 4];").is_none());
+        assert!(word_diff("auto x = 1;", "static const char *hex = \"0123\";").is_none());
+    }
+
+    #[test]
+    fn word_diff_keeps_half_edited_lines() {
+        let (old, new) = word_diff(
+            "if (unreserved || (!component && reserved)) {",
+            "if (reserved || (!component && unreserved)) {",
+        )
+        .unwrap();
+        assert!(old.iter().any(|p| p.changed));
+        assert!(new.iter().any(|p| p.changed));
     }
 }
