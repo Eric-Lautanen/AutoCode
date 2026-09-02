@@ -22,6 +22,15 @@ pub enum Tok {
     Str,
     Comment,
     Number,
+    /// `foo(` — identifier immediately followed by `(`. Keywords win ties
+    /// (`if (` stays a keyword).
+    Function,
+    /// `Foo`, `MAX_SIZE` — identifier starting with an uppercase letter.
+    /// Checked after keywords (`Self`, `None` stay keywords).
+    Type,
+    /// `#[derive(…)]`, `#include`, `@decorator` — preprocessor and
+    /// annotation markers.
+    Annotation,
 }
 
 /// One highlighted span of a tokenized line.
@@ -536,6 +545,55 @@ pub fn profile_for(lang: &str) -> Option<Profile> {
     Some(p)
 }
 
+/// Consume a `#…` marker (`#[derive(…)]`, `#include`, `#!…`) or `@…`
+/// annotation, returning its byte length. Plain `#`/`@` with nothing
+/// marker-like after them are not markers.
+fn marker_len(rest: &str) -> Option<usize> {
+    let mut it = rest.chars();
+    match it.next() {
+        Some('#') => {
+            if let Some(inner) = rest.strip_prefix("#[") {
+                // Bracketed attribute: consume to the first `]`.
+                let mut len = 2;
+                for c in inner.chars() {
+                    len += c.len_utf8();
+                    if c == ']' {
+                        return Some(len);
+                    }
+                }
+                None
+            } else {
+                // `#`/`#!` plus a word (`include`, `pragma`, `!…`).
+                let mut len = 1;
+                let mut word = 0;
+                for c in rest[1..].chars() {
+                    if c == '!' && word == 0 {
+                        len += 1;
+                    } else if c.is_alphanumeric() || c == '_' {
+                        len += c.len_utf8();
+                        word += 1;
+                    } else {
+                        break;
+                    }
+                }
+                (word > 0).then_some(len)
+            }
+        }
+        Some('@') => {
+            let mut len = 1;
+            for c in rest[1..].chars() {
+                if c.is_alphanumeric() || c == '_' {
+                    len += c.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            (len > 1).then_some(len)
+        }
+        _ => None,
+    }
+}
+
 /// `'` opens a string only for genuine char literals (`'x'`, `'\n'`).
 /// Everything else — Rust lifetimes, shell/Python prose apostrophes —
 /// stays plain text (or is handled by `single_quote_string` profiles).
@@ -602,6 +660,15 @@ pub fn highlight_line(line: &str, profile: &Profile, in_block_comment: &mut bool
             }
             continue;
         }
+        // `#…` / `@…` markers, except where `#` starts a line comment
+        // (handled above).
+        if (c == '#' || c == '@')
+            && let Some(len) = marker_len(rest)
+        {
+            push_span(&mut spans, rest[..len].to_string(), Tok::Annotation);
+            i += len;
+            continue;
+        }
         if c == '"'
             || c == '`'
             || (c == '\'' && (profile.single_quote_string || is_char_literal(rest)))
@@ -656,6 +723,10 @@ pub fn highlight_line(line: &str, profile: &Profile, in_block_comment: &mut bool
                 .contains(&word.to_ascii_lowercase().as_str())
             {
                 Tok::Keyword
+            } else if line[j..].starts_with('(') {
+                Tok::Function
+            } else if word.chars().next().is_some_and(|f| f.is_uppercase()) {
+                Tok::Type
             } else {
                 Tok::Normal
             };
@@ -887,6 +958,47 @@ mod tests {
             new.iter().map(|p| p.text.as_str()).collect::<String>(),
             "let foo_baz = 1;"
         );
+    }
+
+    #[test]
+    fn functions_and_types() {
+        let spans = kinds("let x = foo(a, MAX); Bar::baz(qux);", &rust());
+        assert_eq!(kind_of(&spans, "foo"), Some(Tok::Function));
+        assert_eq!(kind_of(&spans, "baz"), Some(Tok::Function));
+        assert_eq!(kind_of(&spans, "Bar"), Some(Tok::Type));
+        assert_eq!(kind_of(&spans, "MAX"), Some(Tok::Type));
+        assert_eq!(kind_of(&spans, "let"), Some(Tok::Keyword));
+    }
+
+    #[test]
+    fn keyword_wins_over_function() {
+        let spans = kinds("if (x) { while (y) {} }", &rust());
+        assert_eq!(kind_of(&spans, "if"), Some(Tok::Keyword));
+        assert_eq!(kind_of(&spans, "while"), Some(Tok::Keyword));
+    }
+
+    #[test]
+    fn attributes_and_directives() {
+        let spans = kinds("#[derive(Debug)]", &rust());
+        assert!(
+            spans
+                .iter()
+                .any(|(s, k)| s == "#[derive(Debug)]" && *k == Tok::Annotation)
+        );
+        let c = profile_for("a.c").unwrap();
+        let spans = kinds("#include <stdio.h>", &c);
+        assert_eq!(kind_of(&spans, "include"), Some(Tok::Annotation));
+        let py = profile_for("a.py").unwrap();
+        let spans = kinds("@app.route('/x')", &py);
+        assert_eq!(kind_of(&spans, "app"), Some(Tok::Annotation));
+        assert_eq!(kind_of(&spans, "route"), Some(Tok::Function));
+    }
+
+    #[test]
+    fn hash_comments_unaffected() {
+        let p = profile_for("run.sh").unwrap();
+        let spans = kinds("# just a comment", &p);
+        assert!(spans.iter().all(|(_, k)| *k == Tok::Comment));
     }
 
     #[test]

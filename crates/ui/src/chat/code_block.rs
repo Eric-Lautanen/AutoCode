@@ -280,7 +280,25 @@ pub(crate) fn tok_fg(kind: super::syntax::Tok, fallback: Color32) -> Color32 {
         super::syntax::Tok::Str => theme().code_string,
         super::syntax::Tok::Comment => theme().code_comment,
         super::syntax::Tok::Number => theme().code_number,
+        super::syntax::Tok::Function => theme().code_function,
+        super::syntax::Tok::Type => theme().code_type,
+        super::syntax::Tok::Annotation => theme().code_annotation,
         super::syntax::Tok::Normal => fallback,
+    }
+}
+
+/// Pad a styled row with trailing spaces so its background tint covers the
+/// full card width instead of ending at the last word (egui paints
+/// backgrounds behind space glyphs, and pre-fit rows never re-break, so
+/// the padding is invisible except for the tint). No-op for untinted rows.
+pub(crate) fn pad_row(row: &mut Vec<Seg>, cols: usize, bg: Color32) {
+    let len: usize = row.iter().map(|s| s.text.chars().count()).sum();
+    if let Some(pad) = cols.checked_sub(len).filter(|p| *p > 0) {
+        row.push(Seg {
+            text: " ".repeat(pad),
+            fg: Color32::TRANSPARENT,
+            bg: Some(bg),
+        });
     }
 }
 
@@ -357,6 +375,16 @@ pub(crate) fn render_code_block(ui: &mut egui::Ui, lang: &str, code: &str, width
         let mut in_block = false;
         let mut first_row = true;
         for line in display_lines.iter() {
+            // Tinted rows pad full-bleed; plain rows need no padding.
+            let row_bg = if is_diff {
+                match line.chars().next() {
+                    Some('+') => Some(theme().diff_add_bg),
+                    Some('-') => Some(theme().diff_del_bg),
+                    _ => None,
+                }
+            } else {
+                None
+            };
             // Style the whole logical line, then wrap its segments.
             let segs: Vec<Seg> = if is_diff {
                 diff_fence_segs(line)
@@ -372,11 +400,14 @@ pub(crate) fn render_code_block(ui: &mut egui::Ui, lang: &str, code: &str, width
             } else {
                 vec![Seg::plain(line.replace('\t', "    "), theme().text_code)]
             };
-            for row in wrap_segs(&segs, cols) {
+            for mut row in wrap_segs(&segs, cols) {
                 if !first_row {
                     job.append("\n", 0.0, mono_format(theme().text_code));
                 }
                 first_row = false;
+                if let Some(b) = row_bg {
+                    pad_row(&mut row, cols, b);
+                }
                 for s in &row {
                     job.append(&s.text, 0.0, seg_format(&mono, s));
                 }

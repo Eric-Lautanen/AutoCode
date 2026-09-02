@@ -12,7 +12,7 @@ use egui::{Color32, FontId, Stroke, TextFormat};
 use crate::helpers::{self, DiffLine};
 
 use super::code_block::{
-    FramedCard, Seg, card_inner_width, mono_wrap, mono_wrap_cols, tok_fg, wrap_segs,
+    FramedCard, Seg, card_inner_width, mono_wrap, mono_wrap_cols, pad_row, tok_fg, wrap_segs,
 };
 use super::syntax;
 use super::theme::theme;
@@ -253,11 +253,12 @@ pub(crate) fn render_unified_diff(
             tokenize_content(&text, &profile, &mut in_block, base_fg, line_bg)
         };
         for (k, row) in wrap_segs(&content, text_cols).iter().enumerate() {
-            rows.push((
-                if k == 0 { Some(line_num) } else { None },
-                dl.prefix,
-                row.clone(),
-            ));
+            // Tinted rows pad full-bleed; context rows need no padding.
+            let mut row = row.clone();
+            if let Some(b) = line_bg {
+                pad_row(&mut row, text_cols, b);
+            }
+            rows.push((if k == 0 { Some(line_num) } else { None }, dl.prefix, row));
         }
     }
 
