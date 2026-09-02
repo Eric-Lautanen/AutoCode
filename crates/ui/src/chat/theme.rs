@@ -29,6 +29,18 @@ pub struct ThemeColors {
     pub diff_del_text: Color32,
     pub diff_add_text: Color32,
     pub diff_num: Color32,
+    /// Tinted row backgrounds for `-`/`+` lines (GitHub style: the
+    /// background carries the meaning, text stays readable).
+    pub diff_del_bg: Color32,
+    pub diff_add_bg: Color32,
+    /// Stronger tint for changed fragments inside paired diff lines.
+    pub diff_word_del_bg: Color32,
+    pub diff_word_add_bg: Color32,
+    /// Syntax token colors for code views.
+    pub code_string: Color32,
+    pub code_comment: Color32,
+    pub code_number: Color32,
+    pub code_keyword: Color32,
     pub reason_bg: Color32,
     pub reason_border: Color32,
 }
@@ -57,9 +69,17 @@ pub(crate) static THEME: ThemeColors = ThemeColors {
     terminal_border: Color32::from_rgb(36, 46, 36),
     code_frame_bg: Color32::from_rgb(15, 18, 26),
     diff_frame_bg: Color32::from_rgb(15, 18, 26),
-    diff_del_text: Color32::from_rgb(255, 140, 140),
-    diff_add_text: Color32::from_rgb(140, 255, 161),
+    diff_del_text: Color32::from_rgb(240, 170, 170),
+    diff_add_text: Color32::from_rgb(165, 230, 190),
     diff_num: Palette::TEXT_MUTED,
+    diff_del_bg: Color32::from_rgb(48, 26, 28),
+    diff_add_bg: Color32::from_rgb(26, 50, 34),
+    diff_word_del_bg: Color32::from_rgb(96, 42, 44),
+    diff_word_add_bg: Color32::from_rgb(38, 96, 56),
+    code_string: Color32::from_rgb(206, 145, 120),
+    code_comment: Color32::from_rgb(110, 140, 105),
+    code_number: Color32::from_rgb(181, 206, 168),
+    code_keyword: Palette::PURPLE,
     reason_bg: Color32::from_rgb(18, 20, 26),
     reason_border: Color32::from_rgb(41, 48, 61),
 };

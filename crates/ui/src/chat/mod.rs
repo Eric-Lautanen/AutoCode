@@ -12,6 +12,7 @@ mod messages;
 mod panel;
 mod session;
 mod state;
+mod syntax;
 mod tabs;
 mod theme;
 mod tool_result;

@@ -1,26 +1,63 @@
-// diff_view.rs -- Unified diff rendering with line numbers and coloured text.
+// diff_view.rs -- Unified diff rendering with line numbers, tinted rows,
+// syntax colors, and intra-line change highlighting.
+//
+// Rows carry the meaning via background tints (GitHub style) while text
+// stays readable; paired `-`/`+` lines additionally highlight just the
+// changed fragments.
+
+use std::collections::HashMap;
 
 use egui::{Color32, FontId, Stroke, TextFormat};
 
 use crate::helpers::{self, DiffLine};
 
-use super::code_block::{FramedCard, card_inner_width, mono_wrap, mono_wrap_cols, wrap_mono_text};
+use super::code_block::{
+    FramedCard, Seg, card_inner_width, mono_wrap, mono_wrap_cols, tok_fg, wrap_segs,
+};
+use super::syntax;
 use super::theme::theme;
 
-/// Render a unified diff between old and new text with line numbers and
-/// coloured deletions / additions.
+/// Tokenize diff content with syntax colors, falling back for plain text.
+fn tokenize_content(
+    text: &str,
+    profile: &Option<syntax::Profile>,
+    in_block: &mut bool,
+    fallback_fg: Color32,
+    bg: Option<Color32>,
+) -> Vec<Seg> {
+    match profile {
+        Some(p) => syntax::highlight_line(text, p, in_block)
+            .into_iter()
+            .map(|s| Seg {
+                text: s.text,
+                fg: tok_fg(s.kind, fallback_fg),
+                bg,
+            })
+            .collect(),
+        None => vec![Seg {
+            text: text.to_string(),
+            fg: fallback_fg,
+            bg,
+        }],
+    }
+}
+
+/// Render a unified diff between old and new text with line numbers,
+/// tinted change rows, and intra-line highlighting.
 ///
 /// Uses an LCS-based diff algorithm to produce multiple separate hunks
 /// with surrounding context lines, separated by ` [...] ` when non-adjacent.
 ///
 /// `line_offset` is a 0-based offset added to snippet line numbers to produce
 /// actual file line numbers. Pass 0 when the snippet is the full file.
+/// `lang` is the filename or language for syntax colors (falls back plain).
 pub(crate) fn render_unified_diff(
     ui: &mut egui::Ui,
     old: &str,
     new: &str,
     line_offset: usize,
     width: f32,
+    lang: &str,
 ) {
     let old_lines: Vec<&str> = old.lines().collect();
     let new_lines: Vec<&str> = new.lines().collect();
@@ -93,7 +130,41 @@ pub(crate) fn render_unified_diff(
         });
     }
 
-    // -- Build layout job with line numbers and colored text --
+    // -- Pair adjacent -/+ lines for intra-line change highlighting --
+    // Runs break at context lines and hunk separators, so each pair is one
+    // logical change (k-th deletion with k-th addition).
+    let mut partner: HashMap<usize, usize> = HashMap::new();
+    {
+        let is_sep = |dl: &DiffLine| {
+            dl.prefix == ' ' && (dl.text == " [...] " || dl.text == "(no differences)")
+        };
+        let mut i = 0;
+        while i < diff_lines.len() {
+            if is_sep(&diff_lines[i]) || diff_lines[i].prefix == ' ' {
+                i += 1;
+                continue;
+            }
+            let mut dels = Vec::new();
+            let mut adds = Vec::new();
+            let mut j = i;
+            while j < diff_lines.len() && !is_sep(&diff_lines[j]) && diff_lines[j].prefix != ' ' {
+                match diff_lines[j].prefix {
+                    '-' => dels.push(j),
+                    '+' => adds.push(j),
+                    _ => {}
+                }
+                j += 1;
+            }
+            for (a, b) in dels.iter().zip(adds.iter()) {
+                partner.insert(*a, *b);
+                partner.insert(*b, *a);
+            }
+            i = j;
+        }
+    }
+
+    // -- Build styled rows: line number (blank on continuations), prefix,
+    // syntax- or word-highlighted segments, all pre-wrapped at spaces --
     let max_line_num = diff_lines
         .iter()
         .map(|dl| {
@@ -110,20 +181,18 @@ pub(crate) fn render_unified_diff(
     let mono = FontId::monospace(12.0);
 
     let ctx_color = theme().text_secondary;
-    let del_color = theme().diff_del_text;
-    let add_color = theme().diff_add_text;
     let num_color = theme().diff_num;
-
-    // Pre-wrap each line's text at spaces so words are never split
-    // (egui would also break at `-` and punctuation). Continuation rows
-    // leave the line-number column blank.
+    let profile = syntax::profile_for(lang);
     let inner_w = card_inner_width(width);
     let gutter = num_width + 4;
     let text_cols = mono_wrap_cols(ui, &mono, width)
         .saturating_sub(gutter)
         .max(8);
-    let mut rows: Vec<(Option<usize>, char, String)> = Vec::new();
-    for dl in &diff_lines {
+
+    // (line number or blank, prefix, styled segments)
+    let mut rows: Vec<(Option<usize>, char, Vec<Seg>)> = Vec::new();
+    let mut in_block = false;
+    for (idx, dl) in diff_lines.iter().enumerate() {
         let raw_num = if dl.prefix == '-' {
             dl.old_lineno
         } else {
@@ -134,14 +203,60 @@ pub(crate) fn render_unified_diff(
         } else {
             0
         };
-        for (k, sub) in wrap_mono_text(dl.text.trim_end(), text_cols)
-            .iter()
-            .enumerate()
-        {
+        let (base_fg, line_bg) = match dl.prefix {
+            '-' => (theme().diff_del_text, Some(theme().diff_del_bg)),
+            '+' => (theme().diff_add_text, Some(theme().diff_add_bg)),
+            _ => (ctx_color, None),
+        };
+        // Tabs expand so column math matches what is drawn.
+        let text = dl.text.trim_end().replace('\t', "    ");
+        let content: Vec<Seg> = if dl.prefix == ' ' {
+            tokenize_content(&text, &profile, &mut in_block, ctx_color, None)
+        } else if let Some(&p_idx) = partner.get(&idx) {
+            // Paired change: tint the row, strongly tint just the changed
+            // fragments. Fragments can't tokenize reliably (arbitrary
+            // substrings), so they keep the base text color.
+            let theirs = diff_lines[p_idx].text.trim_end().replace('\t', "    ");
+            let (old_t, new_t) = if dl.prefix == '-' {
+                (text.as_str(), theirs.as_str())
+            } else {
+                (theirs.as_str(), text.as_str())
+            };
+            let word_bg = if dl.prefix == '-' {
+                theme().diff_word_del_bg
+            } else {
+                theme().diff_word_add_bg
+            };
+            match syntax::word_diff(old_t, new_t) {
+                Some((old_parts, new_parts)) => {
+                    let mine = if dl.prefix == '-' {
+                        old_parts
+                    } else {
+                        new_parts
+                    };
+                    mine.into_iter()
+                        .map(|p| Seg {
+                            text: p.text,
+                            fg: base_fg,
+                            bg: Some(if p.changed { word_bg } else { line_bg.unwrap() }),
+                        })
+                        .collect()
+                }
+                None => vec![Seg {
+                    text,
+                    fg: base_fg,
+                    bg: line_bg,
+                }],
+            }
+        } else {
+            // Unpaired change: whole-row tint plus full syntax colors.
+            tokenize_content(&text, &profile, &mut in_block, base_fg, line_bg)
+        };
+        for (k, row) in wrap_segs(&content, text_cols).iter().enumerate() {
             rows.push((
                 if k == 0 { Some(line_num) } else { None },
                 dl.prefix,
-                sub.clone(),
+                row.clone(),
             ));
         }
     }
@@ -156,11 +271,11 @@ pub(crate) fn render_unified_diff(
                 ..Default::default()
             };
 
-            for (num, prefix, text) in &rows {
-                let fg = match prefix {
-                    '-' => del_color,
-                    '+' => add_color,
-                    _ => ctx_color,
+            for (num, prefix, segs) in &rows {
+                let (fg, bg) = match prefix {
+                    '-' => (theme().diff_del_text, Some(theme().diff_del_bg)),
+                    '+' => (theme().diff_add_text, Some(theme().diff_add_bg)),
+                    _ => (ctx_color, None),
                 };
 
                 // Line number column (blank on wrapped continuations)
@@ -168,12 +283,16 @@ pub(crate) fn render_unified_diff(
                     Some(n) => format!("{:>width$} ", n, width = num_width),
                     None => " ".repeat(num_width + 1),
                 };
+                // Gutter takes the row tint too so changed rows read as one
+                // full-bleed band.
+                let gutter_bg = bg.unwrap_or(Color32::TRANSPARENT);
                 job.append(
                     &num_str,
                     0.0,
                     TextFormat {
                         font_id: mono.clone(),
                         color: num_color,
+                        background: gutter_bg,
                         ..Default::default()
                     },
                 );
@@ -184,29 +303,34 @@ pub(crate) fn render_unified_diff(
                     TextFormat {
                         font_id: mono.clone(),
                         color: num_color,
+                        background: gutter_bg,
                         ..Default::default()
                     },
                 );
-                // Prefix symbol — coloured only, no background
+                // Prefix symbol
                 job.append(
                     &format!("{} ", prefix),
                     0.0,
                     TextFormat {
                         font_id: mono.clone(),
                         color: fg,
+                        background: gutter_bg,
                         ..Default::default()
                     },
                 );
-                // Content — coloured text, no background
-                job.append(
-                    text,
-                    0.0,
-                    TextFormat {
-                        font_id: mono.clone(),
-                        color: fg,
-                        ..Default::default()
-                    },
-                );
+                // Content segments (syntax- or word-highlighted)
+                for s in segs {
+                    job.append(
+                        &s.text,
+                        0.0,
+                        TextFormat {
+                            font_id: mono.clone(),
+                            color: s.fg,
+                            background: s.bg.unwrap_or(Color32::TRANSPARENT),
+                            ..Default::default()
+                        },
+                    );
+                }
                 // Newline
                 job.append(
                     "\n",

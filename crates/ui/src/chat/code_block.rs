@@ -135,29 +135,13 @@ pub(crate) fn wrap_mono_text(text: &str, max_cols: usize) -> Vec<String> {
                 rows.push(rest.to_owned());
                 break;
             }
-            // Last space within the first max_cols chars (byte index).
-            let mut cut: Option<usize> = None;
-            for (char_idx, (byte_idx, ch)) in rest.char_indices().enumerate() {
-                if char_idx > max_cols {
-                    break;
-                }
-                if ch == ' ' {
-                    cut = Some(byte_idx);
-                }
-            }
-            // A cut at 0 would emit an empty row and eat indentation;
-            // hard-break instead so leading spaces stay with the text.
-            match cut {
-                Some(b) if b > 0 => {
+            match space_cut(rest, max_cols) {
+                Some(b) => {
                     rows.push(rest[..b].to_owned());
                     rest = &rest[b + 1..];
                 }
-                _ => {
-                    let b = rest
-                        .char_indices()
-                        .nth(max_cols)
-                        .map(|(i, _)| i)
-                        .unwrap_or(rest.len());
+                None => {
+                    let b = hard_cut(rest, max_cols);
                     rows.push(rest[..b].to_owned());
                     rest = &rest[b..];
                 }
@@ -172,9 +156,172 @@ pub(crate) fn wrap_mono_text(text: &str, max_cols: usize) -> Vec<String> {
     rows
 }
 
+/// Byte index of the last space within the first `max_cols` chars, or None
+/// when the text should be hard-broken instead (no usable space — including
+/// a space at 0, which would emit an empty row and eat indentation).
+fn space_cut(s: &str, max_cols: usize) -> Option<usize> {
+    let mut cut = None;
+    for (char_idx, (byte_idx, ch)) in s.char_indices().enumerate() {
+        if char_idx > max_cols {
+            break;
+        }
+        if ch == ' ' {
+            cut = Some(byte_idx);
+        }
+    }
+    match cut {
+        Some(b) if b > 0 => Some(b),
+        _ => None,
+    }
+}
+
+/// Byte index `max_cols` chars in (for hard breaks of over-long tokens).
+fn hard_cut(s: &str, max_cols: usize) -> usize {
+    s.char_indices()
+        .nth(max_cols)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len())
+}
+
+/// One styled fragment for the job builder: text plus its colors.
+#[derive(Clone, Debug)]
+pub(crate) struct Seg {
+    pub text: String,
+    pub fg: Color32,
+    pub bg: Option<Color32>,
+}
+
+impl Seg {
+    pub(crate) fn plain(text: String, fg: Color32) -> Self {
+        Self { text, fg, bg: None }
+    }
+}
+
+fn seg_format(font: &FontId, seg: &Seg) -> TextFormat {
+    TextFormat {
+        font_id: font.clone(),
+        color: seg.fg,
+        background: seg.bg.unwrap_or(Color32::TRANSPARENT),
+        ..Default::default()
+    }
+}
+
+/// Wrap styled segments into visual rows of at most `max_cols` chars,
+/// splitting only at spaces so words keep their colors across the break.
+/// Style rides along: a segment split across rows keeps its colors on
+/// both pieces. Input must be tab-expanded (see `wrap_mono_text`).
+pub(crate) fn wrap_segs(segs: &[Seg], max_cols: usize) -> Vec<Vec<Seg>> {
+    let max_cols = max_cols.max(1);
+    // Flatten to styled chars.
+    let mut chars: Vec<(char, Color32, Option<Color32>)> = Vec::new();
+    for s in segs {
+        for c in s.text.chars() {
+            chars.push((c, s.fg, s.bg));
+        }
+    }
+    let collect = |slice: &[(char, Color32, Option<Color32>)]| -> Vec<Seg> {
+        let mut out: Vec<Seg> = Vec::new();
+        for (c, fg, bg) in slice {
+            if let Some(last) = out.last_mut()
+                && last.fg == *fg
+                && last.bg == *bg
+            {
+                last.text.push(*c);
+            } else {
+                out.push(Seg {
+                    text: c.to_string(),
+                    fg: *fg,
+                    bg: *bg,
+                });
+            }
+        }
+        out
+    };
+    let mut rows = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars.len() - i <= max_cols {
+            rows.push(collect(&chars[i..]));
+            break;
+        }
+        let mut cut = None;
+        for k in 0..=max_cols {
+            if chars[i + k].0 == ' ' {
+                cut = Some(k);
+            }
+        }
+        // As in `wrap_mono_text`, a cut at 0 hard-breaks instead.
+        match cut {
+            Some(k) if k > 0 => {
+                rows.push(collect(&chars[i..i + k]));
+                i += k + 1;
+            }
+            _ => {
+                rows.push(collect(&chars[i..i + max_cols]));
+                i += max_cols;
+            }
+        }
+    }
+    if rows.is_empty() {
+        rows.push(Vec::new());
+    }
+    rows
+}
+
 /// Column budget for a card of full `width`, measured with `font`.
 pub(crate) fn mono_wrap_cols(ui: &egui::Ui, font: &FontId, width: f32) -> usize {
     mono_cols(ui, font, card_inner_width(width))
+}
+
+/// Syntax-token color, falling back for plain text.
+pub(crate) fn tok_fg(kind: super::syntax::Tok, fallback: Color32) -> Color32 {
+    match kind {
+        super::syntax::Tok::Keyword => theme().code_keyword,
+        super::syntax::Tok::Str => theme().code_string,
+        super::syntax::Tok::Comment => theme().code_comment,
+        super::syntax::Tok::Number => theme().code_number,
+        super::syntax::Tok::Normal => fallback,
+    }
+}
+
+/// Style one line of a ```diff fenced block: the leading `+`/`-`/`@`
+/// marker keeps its badge color and `+`/`-` rows take the tinted diff
+/// background; the rest tokenizes with the neutral profile (strings and
+/// numbers only — fence content can be any language).
+fn diff_fence_segs(line: &str) -> Vec<Seg> {
+    let (marker, rest) = match line.chars().next() {
+        Some(p @ ('+' | '-' | '@')) => (Some(p), &line[p.len_utf8()..]),
+        _ => (None, line),
+    };
+    let (fg, bg) = match marker {
+        Some('+') => (theme().diff_add_text, Some(theme().diff_add_bg)),
+        Some('-') => (theme().diff_del_text, Some(theme().diff_del_bg)),
+        Some(_) => (theme().diff_num, None),
+        None => (theme().text_code, None),
+    };
+    let mut segs = Vec::new();
+    if let Some(p) = marker {
+        segs.push(Seg {
+            text: p.to_string(),
+            fg,
+            bg,
+        });
+    }
+    let rest = rest.replace('\t', "    ");
+    match super::syntax::profile_for("diff") {
+        Some(p) => {
+            let mut in_block = false;
+            for s in super::syntax::highlight_line(&rest, &p, &mut in_block) {
+                segs.push(Seg {
+                    text: s.text.clone(),
+                    fg: tok_fg(s.kind, fg),
+                    bg,
+                });
+            }
+        }
+        None => segs.push(Seg { text: rest, fg, bg }),
+    }
+    segs
 }
 
 pub(crate) fn render_code_block(ui: &mut egui::Ui, lang: &str, code: &str, width: f32) {
@@ -195,31 +342,44 @@ pub(crate) fn render_code_block(ui: &mut egui::Ui, lang: &str, code: &str, width
     )
     .show(ui, |ui| {
         let inner_w = card_inner_width(width);
+        let mono = FontId::monospace(FONT_BODY - 1.0);
         // Pre-wrap at spaces so egui never splits a word (it would also
         // break at `-` and punctuation). Rows already fit, so the job's
         // own wrap never triggers.
-        let cols = mono_wrap_cols(ui, &FontId::monospace(FONT_BODY - 1.0), width);
+        let cols = mono_wrap_cols(ui, &mono, width);
+        let profile = (!is_diff)
+            .then(|| super::syntax::profile_for(lang))
+            .flatten();
         let mut job = egui::text::LayoutJob {
             wrap: mono_wrap(inner_w),
             ..Default::default()
         };
+        let mut in_block = false;
         let mut first_row = true;
         for line in display_lines.iter() {
-            let color = if is_diff && line.starts_with('+') {
-                theme().diff_add_text
-            } else if is_diff && line.starts_with('-') {
-                theme().diff_del_text
-            } else if is_diff && line.starts_with("@@") {
-                theme().diff_num
+            // Style the whole logical line, then wrap its segments.
+            let segs: Vec<Seg> = if is_diff {
+                diff_fence_segs(line)
+            } else if let Some(p) = &profile {
+                super::syntax::highlight_line(&line.replace('\t', "    "), p, &mut in_block)
+                    .iter()
+                    .map(|s| Seg {
+                        text: s.text.clone(),
+                        fg: tok_fg(s.kind, theme().text_code),
+                        bg: None,
+                    })
+                    .collect()
             } else {
-                theme().text_code
+                vec![Seg::plain(line.replace('\t', "    "), theme().text_code)]
             };
-            for row in wrap_mono_text(line, cols) {
+            for row in wrap_segs(&segs, cols) {
                 if !first_row {
-                    job.append("\n", 0.0, mono_format(color));
+                    job.append("\n", 0.0, mono_format(theme().text_code));
                 }
                 first_row = false;
-                job.append(&row, 0.0, mono_format(color));
+                for s in &row {
+                    job.append(&s.text, 0.0, seg_format(&mono, s));
+                }
             }
         }
         ui.label(job);
@@ -264,7 +424,8 @@ pub(crate) fn render_shell_terminal(ui: &mut egui::Ui, code: &str, width: f32) {
 
 #[cfg(test)]
 mod tests {
-    use super::wrap_mono_text;
+    use super::{Seg, wrap_mono_text, wrap_segs};
+    use egui::Color32;
 
     fn assert_fits(rows: &[String], max_cols: usize) {
         for r in rows {
@@ -308,5 +469,50 @@ mod tests {
         assert_eq!(rows, vec!["a", "", "b"]);
         let rows = wrap_mono_text("\tindented", 20);
         assert_eq!(rows, vec!["    indented"]);
+    }
+
+    fn styled(text: &str, fg: Color32) -> Seg {
+        Seg {
+            text: text.to_string(),
+            fg,
+            bg: None,
+        }
+    }
+
+    fn row_texts(rows: &[Vec<Seg>]) -> Vec<String> {
+        rows.iter()
+            .map(|r| r.iter().map(|s| s.text.as_str()).collect::<String>())
+            .collect()
+    }
+
+    #[test]
+    fn segs_wrap_at_spaces_with_styles_intact() {
+        let segs = vec![
+            styled("let", Color32::RED),
+            styled(" foo_bar = ", Color32::WHITE),
+            styled("\"baz qux quux\"", Color32::GREEN),
+        ];
+        let rows = wrap_segs(&segs, 16);
+        // No row exceeds the budget and reassembly is lossless.
+        for r in &rows {
+            let len: usize = r.iter().map(|s| s.text.chars().count()).sum();
+            assert!(len <= 16, "row exceeds budget: {r:?}");
+        }
+        assert_eq!(row_texts(&rows).join(" "), "let foo_bar = \"baz qux quux\"");
+        // The string span split across rows keeps its color on both pieces.
+        let green: Vec<&str> = rows
+            .iter()
+            .flat_map(|r| r.iter())
+            .filter(|s| s.fg == Color32::GREEN)
+            .map(|s| s.text.as_str())
+            .collect();
+        assert_eq!(green.concat(), "\"baz qux quux\"");
+    }
+
+    #[test]
+    fn segs_keep_empty_row() {
+        let rows = wrap_segs(&[], 10);
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].is_empty());
     }
 }

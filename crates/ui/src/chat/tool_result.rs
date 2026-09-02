@@ -185,6 +185,7 @@ fn render_patch_diff(ui: &mut egui::Ui, meta: &ToolMeta, width: f32) -> bool {
             new_text.unwrap_or(""),
             line_offset,
             width,
+            meta.file_path.as_deref().unwrap_or(""),
         );
         true
     } else {
