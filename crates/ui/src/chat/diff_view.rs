@@ -12,7 +12,8 @@ use egui::{Color32, FontId, Stroke, TextFormat};
 use crate::helpers::{self, DiffLine};
 
 use super::code_block::{
-    FramedCard, Seg, card_inner_width, mono_wrap, mono_wrap_cols, pad_row, tok_fg, wrap_segs,
+    FramedCard, Seg, card_inner_width, fit_cols, mono_wrap, mono_wrap_cols, pad_row, tok_fg,
+    wrap_segs,
 };
 use super::syntax;
 use super::theme::theme;
@@ -185,9 +186,23 @@ pub(crate) fn render_unified_diff(
     let profile = syntax::profile_for(lang);
     let inner_w = card_inner_width(width);
     let gutter = num_width + 4;
-    let text_cols = mono_wrap_cols(ui, &mono, width)
-        .saturating_sub(gutter)
-        .max(8);
+    // Calibrate on the longest full display row (gutter + text) so the
+    // budget accounts for every pixel that will actually render.
+    let sample_text = diff_lines
+        .iter()
+        .map(|dl| dl.text.trim_end())
+        .max_by_key(|t| t.chars().count())
+        .unwrap_or("");
+    let sample_row = format!("{:>width$} |{} {}", 0, ' ', sample_text, width = num_width);
+    let text_cols = fit_cols(
+        ui,
+        &mono,
+        &sample_row,
+        inner_w,
+        mono_wrap_cols(ui, &mono, width),
+    )
+    .saturating_sub(gutter)
+    .max(8);
 
     // (line number or blank, prefix, styled segments)
     let mut rows: Vec<(Option<usize>, char, Vec<Seg>)> = Vec::new();

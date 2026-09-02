@@ -136,9 +136,9 @@ pub(crate) fn wrap_mono_text(text: &str, max_cols: usize) -> Vec<String> {
                 break;
             }
             match space_cut(rest, max_cols) {
-                Some(b) => {
+                Some((b, l)) => {
                     rows.push(rest[..b].to_owned());
-                    rest = &rest[b + 1..];
+                    rest = &rest[b + l..];
                 }
                 None => {
                     let b = hard_cut(rest, max_cols);
@@ -156,21 +156,24 @@ pub(crate) fn wrap_mono_text(text: &str, max_cols: usize) -> Vec<String> {
     rows
 }
 
-/// Byte index of the last space within the first `max_cols` chars, or None
-/// when the text should be hard-broken instead (no usable space — including
-/// a space at 0, which would emit an empty row and eat indentation).
-fn space_cut(s: &str, max_cols: usize) -> Option<usize> {
+/// Last whitespace within the first `max_cols` chars as (byte index, char
+/// byte length), or None when the text should be hard-broken instead (no
+/// usable space — including a space at 0, which would emit an empty row
+/// and eat indentation). Any Unicode whitespace breaks (shell output can
+/// carry tabs — expanded before this runs — or exotic spaces), never just
+/// ASCII space.
+fn space_cut(s: &str, max_cols: usize) -> Option<(usize, usize)> {
     let mut cut = None;
     for (char_idx, (byte_idx, ch)) in s.char_indices().enumerate() {
         if char_idx > max_cols {
             break;
         }
-        if ch == ' ' {
-            cut = Some(byte_idx);
+        if ch.is_whitespace() {
+            cut = Some((byte_idx, ch.len_utf8()));
         }
     }
     match cut {
-        Some(b) if b > 0 => Some(b),
+        Some((b, l)) if b > 0 => Some((b, l)),
         _ => None,
     }
 }
@@ -246,7 +249,7 @@ pub(crate) fn wrap_segs(segs: &[Seg], max_cols: usize) -> Vec<Vec<Seg>> {
         }
         let mut cut = None;
         for k in 0..=max_cols {
-            if chars[i + k].0 == ' ' {
+            if chars[i + k].0.is_whitespace() {
                 cut = Some(k);
             }
         }
@@ -271,6 +274,45 @@ pub(crate) fn wrap_segs(segs: &[Seg], max_cols: usize) -> Vec<Vec<Seg>> {
 /// Column budget for a card of full `width`, measured with `font`.
 pub(crate) fn mono_wrap_cols(ui: &egui::Ui, font: &FontId, width: f32) -> usize {
     mono_cols(ui, font, card_inner_width(width))
+}
+
+/// Pure budget math (no UI needed, unit-tested): reconcile a `guess`
+/// budget against the measured pixel width of the longest line.
+fn proportional_cols(len: usize, measured: f32, max_width: f32, guess: usize) -> usize {
+    if len == 0 || !measured.is_finite() || measured <= 0.0 {
+        return guess.max(8);
+    }
+    if measured <= max_width {
+        // Fits as drawn (e.g. narrow glyphs): never wrap what fits.
+        return len.max(guess).max(8);
+    }
+    ((len as f32 * max_width / measured).floor() as usize).max(8)
+}
+
+/// Reconcile the advance-guessed budget with reality: measure the longest
+/// line in pixels and scale so it truly fits `max_width`. Fixes any drift
+/// between `glyph_width` and actual shaping (fallback fonts, CJK, odd
+/// advances). Costs one extra layout, only for blocks with a long line.
+pub(crate) fn fit_cols(
+    ui: &egui::Ui,
+    font: &FontId,
+    longest: &str,
+    max_width: f32,
+    guess: usize,
+) -> usize {
+    // Tabs expand to 4 spaces everywhere text is drawn, so calibrate on
+    // the expanded form too.
+    let probe = longest.replace('\t', "    ");
+    let w = ui
+        .fonts_mut(|f| f.layout_no_wrap(probe.clone(), font.clone(), Color32::WHITE))
+        .size()
+        .x;
+    proportional_cols(probe.chars().count(), w, max_width, guess)
+}
+
+/// Longest line of `text` by char count (for budget calibration).
+pub(crate) fn longest_line(text: &str) -> &str {
+    text.lines().max_by_key(|l| l.chars().count()).unwrap_or("")
 }
 
 /// Syntax-token color, falling back for plain text.
@@ -365,7 +407,13 @@ pub(crate) fn render_code_block(ui: &mut egui::Ui, lang: &str, code: &str, width
         // Pre-wrap at spaces so egui never splits a word (it would also
         // break at `-` and punctuation). Rows already fit, so the job's
         // own wrap never triggers.
-        let cols = mono_wrap_cols(ui, &mono, width);
+        let guess = mono_wrap_cols(ui, &mono, width);
+        let longest = display_lines
+            .iter()
+            .max_by_key(|l| l.chars().count())
+            .copied()
+            .unwrap_or("");
+        let cols = fit_cols(ui, &mono, longest, inner_w, guess);
         let profile = (!is_diff)
             .then(|| super::syntax::profile_for(lang))
             .flatten();
@@ -455,7 +503,10 @@ pub(crate) fn render_shell_terminal(ui: &mut egui::Ui, code: &str, width: f32) {
         .stroke(Stroke::new(1.0, theme().terminal_border))
         .show(ui, |ui| {
             let inner_w = card_inner_width(width);
-            let cols = mono_wrap_cols(ui, &FontId::monospace(FONT_BODY - 1.0), width);
+            let mono = FontId::monospace(FONT_BODY - 1.0);
+            let guess = mono_wrap_cols(ui, &mono, width);
+            let longest = longest_line(code);
+            let cols = fit_cols(ui, &mono, longest, inner_w, guess);
             let mut job = egui::text::LayoutJob {
                 wrap: mono_wrap(inner_w),
                 ..Default::default()
@@ -558,5 +609,21 @@ mod tests {
         let rows = wrap_segs(&[], 10);
         assert_eq!(rows.len(), 1);
         assert!(rows[0].is_empty());
+    }
+
+    #[test]
+    fn budget_math() {
+        use super::proportional_cols;
+        // Fits: never wrap what fits.
+        assert_eq!(proportional_cols(100, 500.0, 1000.0, 80), 100);
+        assert_eq!(proportional_cols(50, 500.0, 1000.0, 80), 80);
+        // Overflow: scale down proportionally.
+        assert_eq!(proportional_cols(200, 2000.0, 1000.0, 150), 100);
+        // Garbage measurements fall back to the guess.
+        assert_eq!(proportional_cols(200, 0.0, 1000.0, 150), 150);
+        assert_eq!(proportional_cols(200, f32::NAN, 1000.0, 150), 150);
+        assert_eq!(proportional_cols(0, 0.0, 1000.0, 150), 150);
+        // Never degenerate.
+        assert_eq!(proportional_cols(200, 1e9, 1000.0, 150), 8);
     }
 }
