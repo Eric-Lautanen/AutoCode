@@ -35,7 +35,7 @@ pub(crate) fn render_tool_result(
         render_markdown(
             ui,
             &sanitize_display_text(strip_time_stamp(&msg.content)),
-            false,
+            true,
             ctx.width,
         );
         return MessageAction::None;
@@ -452,7 +452,7 @@ fn render_structured(
             render_markdown(
                 ui,
                 &sanitize_display_text(strip_time_stamp(&msg.content)),
-                false,
+                true,
                 width,
             );
         }
@@ -563,7 +563,7 @@ fn render_structured(
                 error_body(ui, msg, width);
             } else {
                 header(ui, ts, &format!("[tool] {}", meta.tool_name));
-                render_markdown(ui, &sanitize_display_text(&body), false, width);
+                render_markdown(ui, &sanitize_display_text(&body), true, width);
             }
         }
         _ => {
@@ -574,7 +574,7 @@ fn render_structured(
                 error_body(ui, msg, width);
             } else {
                 header(ui, ts, &format!("[tool] {}", meta.tool_name));
-                render_markdown(ui, &sanitize_display_text(&body), false, width);
+                render_markdown(ui, &sanitize_display_text(&body), true, width);
             }
         }
     }

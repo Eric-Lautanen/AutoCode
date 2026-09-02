@@ -4,7 +4,7 @@ use egui::{Color32, FontId, Stroke, TextFormat};
 
 use crate::helpers::{self, DiffLine};
 
-use super::code_block::{FramedCard, mono_wrap};
+use super::code_block::{FramedCard, card_inner_width, mono_wrap, mono_wrap_cols, wrap_mono_text};
 use super::theme::theme;
 
 /// Render a unified diff between old and new text with line numbers and
@@ -114,37 +114,62 @@ pub(crate) fn render_unified_diff(
     let add_color = theme().diff_add_text;
     let num_color = theme().diff_num;
 
+    // Pre-wrap each line's text at spaces so words are never split
+    // (egui would also break at `-` and punctuation). Continuation rows
+    // leave the line-number column blank.
+    let inner_w = card_inner_width(width);
+    let gutter = num_width + 4;
+    let text_cols = mono_wrap_cols(ui, &mono, width)
+        .saturating_sub(gutter)
+        .max(8);
+    let mut rows: Vec<(Option<usize>, char, String)> = Vec::new();
+    for dl in &diff_lines {
+        let raw_num = if dl.prefix == '-' {
+            dl.old_lineno
+        } else {
+            dl.new_lineno
+        };
+        let line_num = if raw_num > 0 {
+            raw_num + line_offset
+        } else {
+            0
+        };
+        for (k, sub) in wrap_mono_text(dl.text.trim_end(), text_cols)
+            .iter()
+            .enumerate()
+        {
+            rows.push((
+                if k == 0 { Some(line_num) } else { None },
+                dl.prefix,
+                sub.clone(),
+            ));
+        }
+    }
+
     FramedCard::new("diff", width)
         .fill(theme().diff_frame_bg)
         .stroke(Stroke::new(1.0, theme().border))
         .show(ui, |ui| {
-            ui.set_max_width(width);
+            ui.set_max_width(inner_w);
             let mut job = egui::text::LayoutJob {
-                wrap: mono_wrap(width),
+                wrap: mono_wrap(inner_w),
                 ..Default::default()
             };
 
-            for dl in &diff_lines {
-                let raw_num = if dl.prefix == '-' {
-                    dl.old_lineno
-                } else {
-                    dl.new_lineno
-                };
-                let line_num = if raw_num > 0 {
-                    raw_num + line_offset
-                } else {
-                    0
-                };
-                let fg = match dl.prefix {
+            for (num, prefix, text) in &rows {
+                let fg = match prefix {
                     '-' => del_color,
                     '+' => add_color,
                     _ => ctx_color,
                 };
-                let trimmed = dl.text.trim_end();
 
-                // Line number column
+                // Line number column (blank on wrapped continuations)
+                let num_str = match num {
+                    Some(n) => format!("{:>width$} ", n, width = num_width),
+                    None => " ".repeat(num_width + 1),
+                };
                 job.append(
-                    &format!("{:>width$} ", line_num, width = num_width),
+                    &num_str,
                     0.0,
                     TextFormat {
                         font_id: mono.clone(),
@@ -164,7 +189,7 @@ pub(crate) fn render_unified_diff(
                 );
                 // Prefix symbol — coloured only, no background
                 job.append(
-                    &format!("{} ", dl.prefix),
+                    &format!("{} ", prefix),
                     0.0,
                     TextFormat {
                         font_id: mono.clone(),
@@ -174,7 +199,7 @@ pub(crate) fn render_unified_diff(
                 );
                 // Content — coloured text, no background
                 job.append(
-                    trimmed,
+                    text,
                     0.0,
                     TextFormat {
                         font_id: mono.clone(),

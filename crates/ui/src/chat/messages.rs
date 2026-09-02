@@ -338,7 +338,7 @@ pub(crate) fn show_reasoning_frame(ui: &mut egui::Ui, text: &str, max_width: f32
         .inner_margin(Margin::same(8))
         .show(ui, |ui| {
             ui.set_max_width(max_width);
-            render_markdown(ui, text, false, max_width);
+            render_markdown(ui, text, true, max_width);
         });
 }
 
