@@ -60,8 +60,6 @@ pub struct ChatPanelState {
     pub(crate) input_id: egui::Id,
     /// Unique ID for the input row push_id scope (separate from input_id).
     pub(crate) input_scope_id: egui::Id,
-    /// Unique ID for the input scroll area.
-    pub(crate) input_scroll_id: egui::Id,
     /// Unique base ID for the chat_panel push_id scope.
     pub(crate) chat_panel_id: egui::Id,
     /// Unique base ID for the chat_messages push_id scope.
@@ -99,7 +97,6 @@ impl Default for ChatPanelState {
             actual_input_id: None,
             input_id: next_id(),
             input_scope_id: next_id(),
-            input_scroll_id: next_id(),
             chat_panel_id: next_id(),
             chat_messages_id: next_id(),
             chat_scroll_id: next_id(),

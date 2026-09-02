@@ -102,6 +102,10 @@ pub fn show(
         }
 
         // --- scoped active-runtime block ----------------------------------------
+        // `chat_w` is measured OUTSIDE the scroll area: the one trustworthy width
+        // (the scroll content ui can be stretched far past the screen). Hoisted to
+        // the function scope because `show_input_row` below also needs it.
+        let chat_w = ui.available_width();
         let active_sid_str = state.active_session_id.clone().unwrap_or_default();
         {
             let active_sid = state.active_session_id.clone();
@@ -113,8 +117,12 @@ pub fn show(
                 panel_state.scroll_to_bottom = true;
             }
 
-            let chat_w = ui.available_width();
-            let input_row_h = 92.0;
+            // Reserve what the input row will occupy plus the separator above it
+            // (6 px line + 5 px item spacing either side = 16 px, plus a little
+            // headroom) so the scroll area can never overlap the row. Derived
+            // from the row's own metrics instead of a magic number that drifts
+            // whenever the control height changes.
+            let input_row_h = super::input::input_row_height(ui) + 20.0;
             let scroll_h = (ui.available_height() - input_row_h).max(40.0);
 
             let scroll_resp = ScrollArea::both()
@@ -405,6 +413,6 @@ pub fn show(
         }
 
         ui.separator();
-        show_input_row(ui, state, runtimes, panel_state, &active_sid_str);
+        show_input_row(ui, state, runtimes, panel_state, &active_sid_str, chat_w);
     }); // end push_id("chat_panel", ...)
 }
