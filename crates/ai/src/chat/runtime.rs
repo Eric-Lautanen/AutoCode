@@ -273,6 +273,26 @@ impl ChatRuntime {
             || !self.pending_agents.is_empty()
     }
 
+    /// True when anything renderable by the live-turn view is in flight or
+    /// buffered (stream, tool batch, shell output, pending text/reasoning).
+    /// Single source of truth for the UI's "is streaming" check.
+    pub fn has_visible_stream(&self) -> bool {
+        self.is_busy()
+            || !self.pending_response.is_empty()
+            || !self.reasoning_buf.is_empty()
+            || !self.live_shell_buf.is_empty()
+            || self.live_write_progress.is_some()
+            || self.live_tool_call.is_some()
+    }
+
+    /// True while a tool batch is executing on the background thread (or a
+    /// live shell task is running), with no new call still being streamed.
+    pub fn is_executing_tool(&self) -> bool {
+        self.tool_rx.is_some()
+            || self.live_shell_rx.is_some()
+            || !self.pending_tool_remaining.is_empty()
+    }
+
     /// True while any spawned agent of the current batch is still unresolved.
     pub fn agents_pending(&self) -> bool {
         self.pending_agents.iter().any(|h| h.result.is_none())

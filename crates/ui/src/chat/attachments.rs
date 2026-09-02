@@ -14,6 +14,10 @@ use crate::theme::{Palette, ROUND_SM};
 /// Texture cache bound (audit risk 4: bound growth with many image chips).
 const MAX_CACHED_TEXTURES: usize = 16;
 
+/// Decoded attachment thumbnails keyed by (rel_path, bytes). Shared by the
+/// main panel and agent windows; owned by ChatPanelState.
+pub(crate) type TextureCache = std::collections::HashMap<(String, u64), TextureHandle>;
+
 /// Stage picked/dropped files into the active session and append them to the
 /// pending draft chips. Returns human-readable rejection messages.
 pub(crate) fn stage_paths(
@@ -97,12 +101,12 @@ pub(crate) fn remove_chip(state: &mut AppState, panel_state: &mut ChatPanelState
 
 fn load_texture(
     ctx: &egui::Context,
-    panel_state: &mut ChatPanelState,
+    textures: &mut TextureCache,
     att: &Attachment,
     abs_path: Option<PathBuf>,
 ) -> Option<TextureHandle> {
     let key = (att.rel_path.clone(), att.bytes);
-    if let Some(tex) = panel_state.attachment_textures.get(&key) {
+    if let Some(tex) = textures.get(&key) {
         return Some(tex.clone());
     }
     let abs_path = abs_path?;
@@ -121,14 +125,14 @@ fn load_texture(
         Default::default(),
     );
     // FIFO eviction keeps the cache bounded.
-    while panel_state.attachment_textures.len() >= MAX_CACHED_TEXTURES {
-        let oldest = match panel_state.attachment_textures.keys().next() {
+    while textures.len() >= MAX_CACHED_TEXTURES {
+        let oldest = match textures.keys().next() {
             Some(k) => k.clone(),
             None => break,
         };
-        panel_state.attachment_textures.remove(&oldest);
+        textures.remove(&oldest);
     }
-    panel_state.attachment_textures.insert(key, tex.clone());
+    textures.insert(key, tex.clone());
     Some(tex)
 }
 
@@ -165,7 +169,12 @@ pub(crate) fn show_pending_chips(
                 .show(ui, |ui| {
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         if att.kind == AttachmentKind::Image {
-                            let tex = load_texture(ui.ctx(), panel_state, &att, abs);
+                            let tex = load_texture(
+                                ui.ctx(),
+                                &mut panel_state.attachment_textures,
+                                &att,
+                                abs,
+                            );
                             if let Some(tex) = tex {
                                 ui.image(SizedTexture::new(&tex, Vec2::new(36.0, 36.0)));
                             }
@@ -219,7 +228,7 @@ fn shorten_name(name: &str, max: usize) -> String {
 pub(crate) fn show_bubble_attachments(
     ui: &mut egui::Ui,
     msg: &autocode_core::state::ChatMessage,
-    panel_state: &mut ChatPanelState,
+    textures: &mut TextureCache,
     att_dir: Option<PathBuf>,
 ) {
     if msg.attachments.is_empty() {
@@ -238,7 +247,7 @@ pub(crate) fn show_bubble_attachments(
                 .show(ui, |ui| {
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         if att.kind == AttachmentKind::Image {
-                            let tex = load_texture(ui.ctx(), panel_state, att, abs);
+                            let tex = load_texture(ui.ctx(), textures, att, abs);
                             if let Some(tex) = tex {
                                 ui.image(SizedTexture::new(&tex, Vec2::new(48.0, 48.0)));
                             }

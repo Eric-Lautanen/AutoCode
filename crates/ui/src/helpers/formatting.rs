@@ -1,6 +1,6 @@
 // formatting.rs -- Markdown inline formatting (plain-text strip and rich LayoutJob append).
 
-use egui::{Color32, FontId, TextFormat};
+use egui::{FontId, TextFormat};
 
 use crate::theme::Palette;
 
@@ -117,7 +117,7 @@ pub fn append_rich_inline_to_job(job: &mut egui::text::LayoutJob, text: &str) {
                         TextFormat {
                             font_id: mono_font.clone(),
                             color: Palette::TEXT_CODE,
-                            background: Color32::from_rgb(30, 35, 45),
+                            background: Palette::INLINE_CODE_BG,
                             ..Default::default()
                         },
                     );
@@ -158,7 +158,7 @@ pub fn append_rich_inline_to_job(job: &mut egui::text::LayoutJob, text: &str) {
                             0.0,
                             TextFormat {
                                 font_id: body_font.clone(),
-                                color: Color32::WHITE,
+                                color: Palette::TEXT_PRIMARY,
                                 ..Default::default()
                             },
                         );

@@ -284,6 +284,10 @@ pub fn fetch_models(provider: &ApiProvider) -> Vec<String> {
         Ok(p) => p,
         Err(_) => return Vec::new(),
     };
+    eprintln!(
+        "DEBUG fetch_models: url={}, host={}, path={}, port={}, use_tls={}",
+        url, host, path, port, use_tls
+    );
 
     let result = (|| -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
         let addr = format!("{}:{}", host, port);
@@ -302,9 +306,14 @@ pub fn fetch_models(provider: &ApiProvider) -> Vec<String> {
         let request = format!(
             "GET {path} HTTP/1.1\r\n\
              Host: {host}\r\n\
+             User-Agent: autocode-app\r\n\
+             Accept: application/json\r\n\
+             Accept-Language: en-US,en;q=0.9\r\n\
              {auth}\r\n\
              Connection: close\r\n\
              \r\n",
+            path = path,
+            host = host,
             auth = auth_header,
         );
 
@@ -360,6 +369,12 @@ pub fn fetch_models(provider: &ApiProvider) -> Vec<String> {
                 .unwrap_or(0);
             (start, is_chunked)
         };
+        eprintln!(
+            "DEBUG fetch_models: buffer_len={}, header_end={}, is_chunked={}",
+            buffer.len(),
+            header_end,
+            is_chunked
+        );
         let body = if header_end > 0 && header_end < buffer.len() {
             if is_chunked {
                 decode_chunked(&buffer[header_end..])
@@ -374,10 +389,16 @@ pub fn fetch_models(provider: &ApiProvider) -> Vec<String> {
 
     match result {
         Ok(text) => {
+            eprintln!(
+                "DEBUG fetch_models: parsed_text={}, len={}",
+                text.chars().take(200).collect::<String>(),
+                text.len()
+            );
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
                 v["data"]
                     .as_array()
                     .map(|arr| {
+                        eprintln!("DEBUG fetch_models: data_array_len={}", arr.len());
                         arr.iter()
                             .filter_map(|m| m["id"].as_str().map(|s| s.to_string()))
                             .collect()
@@ -387,7 +408,10 @@ pub fn fetch_models(provider: &ApiProvider) -> Vec<String> {
                 Vec::new()
             }
         }
-        Err(_) => Vec::new(),
+        Err(_) => {
+            eprintln!("DEBUG fetch_models: result was Err");
+            Vec::new()
+        }
     }
 }
 

@@ -1,14 +1,33 @@
-// state.rs -- Chat panel state.
+// state.rs -- Chat panel state + per-surface live-reveal pacing.
+
+use std::collections::HashMap;
 
 use autocode_core::state::ChatMessage;
 
 use crate::helpers::next_id;
 
+/// Paced-reveal state for one streaming surface (one session viewed in one
+/// place). Owned per (session, viewer) pair — the main panel and each open
+/// agent window keep their own so simultaneous streams never fight over
+/// shared pointers.
+#[derive(Default)]
+pub(crate) struct LiveRevealState {
+    /// Chars of the live response shown so far.
+    pub(super) reveal: usize,
+    /// Length of the live response last frame (detects a fresh response).
+    pub(super) prev_len: usize,
+    /// Paced-reveal pointer into the currently streaming tool-call JSON.
+    pub(super) tool_reveal: usize,
+    /// (tool name, args length) of the last revealed call, used to detect a
+    /// fresh tool call so the reveal restarts instead of continuing.
+    pub(super) tool_prev: Option<(String, usize)>,
+}
+
 pub struct ChatPanelState {
     pub input: String,
     pub scroll_to_bottom: bool,
     pub(crate) prev_session_id: Option<String>,
-    pub(crate) scroll_offsets: std::collections::HashMap<String, f32>,
+    pub(crate) scroll_offsets: HashMap<String, f32>,
     pub(crate) scroll_area_id: Option<egui::Id>,
 
     /// Messages currently rendered in the chat scroll area.
@@ -25,21 +44,9 @@ pub struct ChatPanelState {
     /// 0 = no history on disk, or not yet checked.
     pub(crate) oldest_disk_id: u64,
 
-    /// Paced-reveal pointer into the current live response (chars shown).
-    pub(crate) live_reveal: usize,
-    /// Length of the live response last frame (used to detect a fresh response).
-    pub(crate) live_prev_len: usize,
-    /// Per-frame reveal budget (chars) for smooth streaming.
-    pub(crate) live_reveal_budget: usize,
-
-    /// Paced-reveal pointer into the currently streaming tool-call JSON.
-    pub(crate) live_tool_reveal: usize,
-    /// (tool name, args length) of the last revealed call, used to detect a
-    /// fresh tool call so the reveal restarts instead of continuing.
-    pub(crate) live_tool_prev: Option<(String, usize)>,
-    /// Slower per-frame budget for tool-call JSON so a call that arrives in
-    /// one chunk still visibly "types out" instead of popping in.
-    pub(crate) live_tool_reveal_budget: usize,
+    /// Live-reveal pacing keyed by session id. The active panel session and
+    /// every open agent window get their own entry.
+    pub(crate) live_reveals: HashMap<String, LiveRevealState>,
 
     /// Set to true to request keyboard focus on the input TextEdit next frame.
     pub(crate) wants_input_focus: bool,
@@ -79,7 +86,7 @@ impl Default for ChatPanelState {
             input: String::new(),
             scroll_to_bottom: true,
             prev_session_id: None,
-            scroll_offsets: std::collections::HashMap::new(),
+            scroll_offsets: HashMap::new(),
             scroll_area_id: None,
             display_buffer: Vec::new(),
             loaded_min_id: 0,
@@ -87,12 +94,7 @@ impl Default for ChatPanelState {
             prev_message_count: 0,
             user_scrolled_up: false,
             oldest_disk_id: 0,
-            live_reveal: 0,
-            live_prev_len: 0,
-            live_reveal_budget: 120,
-            live_tool_reveal: 0,
-            live_tool_prev: None,
-            live_tool_reveal_budget: 40,
+            live_reveals: HashMap::new(),
             wants_input_focus: false,
             actual_input_id: None,
             input_id: next_id(),
@@ -104,7 +106,20 @@ impl Default for ChatPanelState {
             tabs_scroll_id: next_id(),
             agent_windows: std::collections::HashSet::new(),
             pending_attachments: Vec::new(),
-            attachment_textures: std::collections::HashMap::new(),
+            attachment_textures: HashMap::new(),
         }
+    }
+}
+
+impl ChatPanelState {
+    /// Mutable reveal state for one surface, creating it on first use.
+    pub(crate) fn live_reveal(&mut self, sid: &str) -> &mut LiveRevealState {
+        self.live_reveals.entry(sid.to_owned()).or_default()
+    }
+
+    /// Drop reveal state for sessions that no longer exist so the map stays
+    /// bounded as sessions come and go.
+    pub(crate) fn prune_live_reveals(&mut self, valid_ids: &std::collections::HashSet<String>) {
+        self.live_reveals.retain(|id, _| valid_ids.contains(id));
     }
 }

@@ -16,6 +16,9 @@ It's not trying to be clever. It's trying to be durable. Transient errors retry 
 | Category | What it does |
 |----------|-------------|
 | **AI Coding** | Read, write, edit (7-strategy fuzzy patching), search, and execute code via 25 built-in tools |
+| **Sub-Agents** | `spawn_agent` runs autonomous child agents in their own session/context (nested under the parent); multiple run concurrently (cap 4) with cancel + lifecycle handling |
+| **Context Attachments** | "+" button and drag-drop attach files/images to a message; vision models receive `image_url` content-parts, others get labeled text blocks |
+| **Parallel Tools** | Non-shell tool batches run concurrently on scoped threads; provider requests gated by a hand-rolled permit semaphore (cap 16) |
 | **Multi-Provider** | Built-in configs for popular providers + add any OpenAI-compatible provider via Settings |
 | **Streaming** | Real-time SSE with auto-recovery, exponential backoff, auto-continue on drop |
 | **Sessions** | Named sessions per project (up to 50), JSONL history, lazy-load display buffer, per-project tab colors |
@@ -70,6 +73,9 @@ Built in **Rust 2024** with **egui 0.34** / **eframe 0.34**. Zero async — all 
 - **7-strategy fuzzy patching** — exact → CRLF-normalized → whitespace-normalized → tabs-normalized → anchored line → Myers DP alignment → single-line fuzzy
 - **Transient/permanent error classification** — rate limits/timeouts/5xx retry forever (5s→180s cap); auth/quota/filter surface immediately
 - **LRU looping window** — scoring-based pruning when crossing configurable context thresholds. One group removed per trigger (constant across all levels); the three levels differ only in the context-usage trigger threshold (65/75/85%) and the recency-floor size (20/30/40% of recent groups protected). `FileAccessLog` tracks the working set. Breadcrumb markers replace removed content. 3 aggressiveness levels (Conservative / Balanced / Aggressive).
+- **Sub-agents** — `spawn_agent` creates full child `Session`s + `ChatRuntime`s nested under the parent session directory; the tool call is split out before the file-tool dispatcher, the parent pauses until the last agent settles, and rejection-at-cap / cancel / lifecycle handling keep everything on the disk-truth model.
+- **Parallel tool dispatch** — non-shell tool batches are partitioned into path-conflict groups and executed concurrently on `std::thread::scope` workers (`chat/tools/parallel.rs`), then committed in request order; provider requests pass through a hand-rolled permit gate (`provider/permits.rs`, cap 16, cancel-aware).
+- **Context attachments** — staged file/image bytes copy into the session `attachments/` dir (same lifecycle as messages); at send time they assemble into OpenAI content-parts — `image_url` for vision-capable models, labeled text blocks otherwise. Model vision support flows through `ModelManifest.supports_vision` → `provider_file::ModelEntry` → `merge_manifest`.
 
 ### Data Flow
 
@@ -77,6 +83,8 @@ Built in **Rust 2024** with **egui 0.34** / **eframe 0.34**. Zero async — all 
 2. **User input** — typed in chat panel; toolbar selects project/session/provider
 3. **Chat orchestration** — loads history from disk, builds API POST with tool definitions, parses SSE stream, dispatches tool calls
 4. **Tool execution** — 25 handlers run autonomously (filesystem, shell, search, web, skills, tasks, session mgmt); `accessed_paths` recorded into `FileAccessLog`
+4b. **Sub-agent spawn** — `spawn_agent` tool calls are split out, spawn child sessions nested under the parent, and settle as ToolResults when finished (the parent pauses until the last agent completes; agents cannot spawn further agents or hand off)
+4c. **Attachments** — staged files/images copy into the session `attachments/` dir; at send time they assemble into message content-parts (vision model → `image_url`, otherwise a labeled text block)
 5. **LRU pruning** — on every frame + before each completion, `apply_looping_window()` scores message groups by working set membership, error count, superseded references, and recency floor; removes the lowest-scored group, writes breadcrumb marker
 6. **Session persistence** — atomic JSON metadata writes (temp + rename), append-mode JSONL history, rate-limited
 7. **Auto-continuation** — near context limit → generates RESUME.md → handoff to new session (suppressed when LRU is active)
@@ -160,15 +168,15 @@ AutoCode ships with built-in configs for popular providers. You can also add any
 
 ## Project Structure
 
-**~30,186 lines across 139 source files (5 crates).** See [`structure.md`](structure.md) for the full file-by-file breakdown.
+**~33,561 lines of Rust across 138 source files (5 crates).** See [`structure.md`](structure.md) for the full file-by-file breakdown.
 
 | Crate | Files | Lines | Role |
 |-------|-------|-------|------|
-| `autocode` (bin) | 4 | 27 | Entry point, icon embedding |
-| `autocode-core` (lib) | 34 | 7,983 | State types, storage, helpers, sysinfo, HTML extraction, `FileAccessLog` |
-| `autocode-ai` (lib) | 35 | 11,371 | Chat loop, HTTP/SSE client, tool dispatch, retry/backoff, web scraping, LRU looping window |
-| `autocode-fs` (lib) | 18 | 2,680 | Shell executor, file explorer, git status, skill loader |
-| `autocode-ui` (lib) | 48 | 8,125 | egui panels — chat, settings, explorer, toolbar, todo windows, LRU toggle |
+| `autocode` (bin) | 4 | 13 | Entry point, icon embedding (2 Rust files + manifests) |
+| `autocode-core` (lib) | 34 | 8,473 | State types, storage, helpers, sysinfo, HTML extraction, `FileAccessLog`, attachments |
+| `autocode-ai` (lib) | 37 | 13,108 | Chat loop, HTTP/SSE client, tool dispatch (parallel), agents, retry/backoff, web scraping, LRU looping window |
+| `autocode-fs` (lib) | 17 | 2,697 | Shell executor, file explorer, git status, skill loader |
+| `autocode-ui` (lib) | 48 | 9,270 | egui panels — chat, settings, explorer, toolbar, agent windows, attachments, todo windows |
 
 ---
 

@@ -1,16 +1,17 @@
 // agents/ -- Sub-agent UI: live cards in the parent chat and per-agent
-// windows rendering the agent's committed transcript plus its live tail.
+// windows rendering the agent's transcript through the SAME pipeline as the
+// main chat panel (render_message + show_live_turn), just with
+// interactive=false and its own live-reveal pacing state.
 
 use std::collections::HashMap;
 
-use egui::{Color32, CornerRadius, Frame, Margin, RichText, ScrollArea, Stroke, Vec2};
+use egui::{Color32, CornerRadius, Frame, Margin, RichText, Vec2};
 
 use autocode_ai::chat::ChatRuntime;
-use autocode_core::state::{AgentStatus, AppState, Role};
+use autocode_core::state::{AgentStatus, AppState};
 
-use crate::chat::{
-    ChatPanelState, show_assistant_content, show_live_turn, show_user_bubble, theme,
-};
+use crate::chat::{ChatPanelState, LiveRevealState, MessageAction, TranscriptCtx};
+use crate::chat::{render_message, show_live_turn, theme};
 use crate::theme::{Palette, ROUND_SM};
 
 /// Render one framed card per pending agent of the parent's current batch
@@ -51,7 +52,7 @@ pub(crate) fn show_agent_cards(
         let card = Frame::NONE
             .fill(theme().live_tool_bg)
             .corner_radius(ROUND_SM)
-            .stroke(Stroke::new(1.0, theme().border))
+            .stroke(egui::Stroke::new(1.0, theme().border))
             .inner_margin(Margin::symmetric(10, 8))
             .show(ui, |ui| {
                 ui.set_max_width(ui.available_width());
@@ -78,7 +79,7 @@ pub(crate) fn show_agent_cards(
                                         .color(Palette::TEXT_MUTED),
                                 )
                                 .fill(Color32::TRANSPARENT)
-                                .stroke(Stroke::NONE)
+                                .stroke(egui::Stroke::NONE)
                                 .min_size(Vec2::new(46.0, 18.0)),
                             )
                             .clicked()
@@ -95,7 +96,7 @@ pub(crate) fn show_agent_cards(
                                     RichText::new("Open").size(10.5).color(Palette::ACCENT),
                                 )
                                 .fill(Color32::TRANSPARENT)
-                                .stroke(Stroke::NONE)
+                                .stroke(egui::Stroke::NONE)
                                 .min_size(Vec2::new(38.0, 18.0)),
                             )
                             .clicked()
@@ -138,8 +139,9 @@ fn shorten(s: &str, max: usize) -> String {
 // -- Window -------------------------------------------------------------------
 
 /// One borderless window per open agent id (settings-window pattern). The
-/// committed history renders from the agent session's RAM display buffer; the
-/// live tail streams straight off its runtime buffers.
+/// committed transcript renders through `render_message` (tool cards and
+/// error cards included); the live tail streams straight off the runtime
+/// buffers with the window's own reveal pacing.
 pub fn show_windows(
     ctx: &egui::Context,
     state: &mut AppState,
@@ -185,7 +187,7 @@ pub fn show_windows(
                 Frame::NONE
                     .fill(Palette::BG_BASE)
                     .corner_radius(CornerRadius::ZERO)
-                    .stroke(Stroke::new(1.0, Palette::BORDER))
+                    .stroke(egui::Stroke::new(1.0, Palette::BORDER))
                     .inner_margin(Margin::same(0)),
             )
             .show(ctx, |ui| {
@@ -202,7 +204,12 @@ pub fn show_windows(
                     .show(ui, |ui| {
                         ui.set_min_width(ui.available_width());
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new("[a]").size(14.0).color(Palette::ACCENT));
+                            ui.label(
+                                RichText::new("[agent]")
+                                    .size(12.0)
+                                    .strong()
+                                    .color(Palette::ACCENT),
+                            );
                             ui.label(
                                 RichText::new(&title)
                                     .size(13.0)
@@ -222,7 +229,7 @@ pub fn show_windows(
                                                         .color(Palette::TEXT_MUTED),
                                                 )
                                                 .fill(Color32::TRANSPARENT)
-                                                .stroke(Stroke::NONE)
+                                                .stroke(egui::Stroke::NONE)
                                                 .min_size(Vec2::new(52.0, 20.0)),
                                             )
                                             .clicked()
@@ -251,42 +258,51 @@ pub fn show_windows(
                         }
                     });
 
-                ScrollArea::vertical()
+                egui::ScrollArea::vertical()
                     .auto_shrink([false; 2])
+                    .stick_to_bottom(true)
                     .show(ui, |ui| {
                         Frame::NONE.inner_margin(Margin::same(12)).show(ui, |ui| {
-                            let msgs: Vec<autocode_core::state::ChatMessage> =
-                                match state.sessions.iter().find(|s| s.id == agent_sid) {
-                                    Some(s) => s.messages.clone(),
-                                    None => Vec::new(),
-                                };
-                            for (i, msg) in msgs.iter().enumerate() {
-                                match msg.role {
-                                    Role::User => {
-                                        show_user_bubble(
-                                            ui,
-                                            msg,
-                                            ui.available_width(),
-                                            panel_state,
-                                            None,
-                                        );
-                                    }
-                                    Role::Assistant => {
-                                        show_assistant_content(ui, msg, i, false);
-                                    }
-                                    _ => {}
+                            let tx = TranscriptCtx {
+                                width: ui.available_width(),
+                                show_reasoning: state.show_reasoning_inline,
+                                att_dir: None,
+                                interactive: false,
+                                state,
+                            };
+                            let msgs = state
+                                .sessions
+                                .iter()
+                                .find(|s| s.id == agent_sid)
+                                .map(|s| s.messages.as_slice())
+                                .unwrap_or(&[]);
+                            for msg in msgs {
+                                let action = render_message(
+                                    ui,
+                                    msg,
+                                    &tx,
+                                    &mut panel_state.attachment_textures,
+                                );
+                                if let MessageAction::OpenAgent(nested) = action {
+                                    panel_state.agent_windows.insert(nested);
                                 }
                                 ui.add_space(8.0);
                             }
-                            // Live tail straight from the runtime buffers.
+                            // Live tail straight from the runtime buffers, with
+                            // this window's own reveal pacing state.
                             if let Some(rt) = runtimes.get(&agent_sid) {
-                                show_live_turn(ui, rt, panel_state, false);
-                                ui.add_space(4.0);
-                                ui.label(
-                                    RichText::new(&rt.status)
-                                        .size(11.0)
-                                        .color(theme().text_secondary),
-                                );
+                                let live: &mut LiveRevealState =
+                                    panel_state.live_reveal(&agent_sid);
+                                let rendered =
+                                    show_live_turn(ui, rt, live, state.show_reasoning_inline);
+                                if rt.retry_after.is_some() || (!rendered && rt.is_busy()) {
+                                    ui.add_space(4.0);
+                                    ui.label(
+                                        RichText::new(&rt.status)
+                                            .size(11.0)
+                                            .color(theme().text_secondary),
+                                    );
+                                }
                             }
                         });
                     });

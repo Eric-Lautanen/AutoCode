@@ -36,6 +36,9 @@ impl Palette {
     pub const WARNING: Color32 = Color32::from_rgb(210, 160, 60);
     pub const ERROR: Color32 = Color32::from_rgb(210, 80, 80);
     pub const PURPLE: Color32 = Color32::from_rgb(160, 120, 220);
+
+    pub const INLINE_CODE_BG: Color32 = Color32::from_rgb(30, 35, 45);
+    pub const ERROR_BG: Color32 = Color32::from_rgb(46, 24, 26);
 }
 
 /// Generate a deterministic accent color for a project, derived from its ID.

@@ -1,121 +1,107 @@
-// tool_result.rs -- Tool result parsing helpers.
+// tool_result.rs -- Tool result body extraction + legacy ToolMeta normalization.
 
-use autocode_core::state::ChatMessage;
+use autocode_core::state::{ChatMessage, ToolMeta};
 
-pub fn extract_tool_summary(content: &str) -> Option<String> {
-    if let Some(rest) = content.strip_prefix("Tool `read_file` result:\n") {
-        let (filename, body) = parse_path_header(rest);
-        let total_lines = body
-            .lines()
-            .find(|l| l.starts_with("total_lines:"))
-            .and_then(|l| l.strip_prefix("total_lines:"))
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or_else(|| body.lines().count());
-        let total_bytes = body
-            .lines()
-            .find(|l| l.starts_with("total_bytes:"))
-            .and_then(|l| l.strip_prefix("total_bytes:"))
-            .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(body.len());
-        Some(format!(
-            "[File] read {} — {} lines, {} bytes",
-            filename, total_lines, total_bytes
-        ))
-    } else if let Some(rest) = content.strip_prefix("Tool `read_files` result:\n") {
-        let total_lines: usize = rest
-            .lines()
-            .filter_map(|l| {
-                l.strip_prefix("-- ")
-                    .and_then(|l| l.split_once(" lines"))
-                    .and_then(|(n, _)| n.parse::<usize>().ok())
-            })
-            .sum();
-        let total_bytes: usize = rest
-            .lines()
-            .filter_map(|l| {
-                l.strip_prefix("-- ")
-                    .and_then(|l| {
-                        l.split_once(" lines, ")
-                            .and_then(|(_, rest)| rest.strip_suffix(" bytes --"))
-                    })
-                    .and_then(|b| b.parse::<usize>().ok())
-            })
-            .sum();
-        Some(format!(
-            "[File] read_files — {} lines, {} bytes",
-            total_lines, total_bytes
-        ))
-    } else if content.starts_with("Tool `write_file` result:\n") {
-        let rest = content
-            .strip_prefix("Tool `write_file` result:\n")
-            .unwrap_or("");
-        Some(format!("[File] Written: {}", rest.trim()))
-    } else if content.starts_with("Tool `patch_file` result:\n") {
-        let rest = content
-            .strip_prefix("Tool `patch_file` result:\n")
-            .unwrap_or("");
-        Some(format!("[File] Patched: {}", rest.trim()))
-    } else if content.starts_with("Tool `run_shell` result:\n") {
-        let rest = content
-            .strip_prefix("Tool `run_shell` result:\n")
-            .unwrap_or("");
-        let exit_code = rest
-            .lines()
-            .last()
-            .and_then(|l| l.strip_prefix("Exit code: "))
-            .or_else(|| {
-                rest.lines()
-                    .last()
-                    .and_then(|l| l.strip_prefix("exit_code: "))
-            })
-            .and_then(|c| c.parse::<i32>().ok())
-            .unwrap_or(-1);
-        if exit_code == 0 {
-            Some("[OK] Shell exited 0".to_string())
-        } else {
-            Some(format!("[FAIL] Shell exited {}", exit_code))
-        }
-    } else if content.starts_with("Tool `todo_list` result:\n") {
-        let rest = content
-            .strip_prefix("Tool `todo_list` result:\n")
-            .unwrap_or("");
-        Some(format!("[todo] {}", rest.trim()))
-    } else if content.starts_with("Tool `list_dir` result:\n") {
-        let rest = content
-            .strip_prefix("Tool `list_dir` result:\n")
-            .unwrap_or("");
-        let count = rest.lines().count();
-        Some(format!("[File] List directory — {} entries", count))
-    } else if content.starts_with("Tool `delete_file` result:\n") {
-        let rest = content
-            .strip_prefix("Tool `delete_file` result:\n")
-            .unwrap_or("");
-        Some(format!("[File] Deleted: {}", rest.trim()))
-    } else if content.starts_with("Tool `rename_file` result:\n") {
-        let rest = content
-            .strip_prefix("Tool `rename_file` result:\n")
-            .unwrap_or("");
-        Some(format!("[File] Renamed: {}", rest.trim()))
-    } else if content.starts_with("Tool `create_dir` result:\n") {
-        let rest = content
-            .strip_prefix("Tool `create_dir` result:\n")
-            .unwrap_or("");
-        Some(format!("[File] Created directory: {}", rest.trim()))
-    } else if content.starts_with("Tool `get_skill` result:\n") {
-        let rest = content
-            .strip_prefix("Tool `get_skill` result:\n")
-            .unwrap_or("");
-        Some(format!("[skill] {} bytes", rest.len()))
-    } else {
-        None
+/// Split legacy `Tool \`name\` result:\n...` content into (tool name, body).
+/// Legacy sessions predate structured `ToolMeta`; parsing happens once here so
+/// the renderer has a single structured code path.
+fn split_legacy(content: &str) -> Option<(&str, &str)> {
+    if !content.starts_with("Tool `") {
+        return None;
     }
+    let name_start = 6;
+    let name_end = content[name_start..].find('`')? + name_start;
+    let name = &content[name_start..name_end];
+    let body = content.get(name_end + 1..)?.strip_prefix(" result:\n")?;
+    Some((name, body))
+}
+
+/// Parse `-- N lines, B bytes --` / `total_lines:` / `total_bytes:` headers.
+/// Multiple `-- N lines, B bytes --` headers (read_files sections) sum up.
+fn parse_counts(body: &str) -> (Option<usize>, Option<usize>) {
+    let mut lines = 0usize;
+    let mut bytes = 0usize;
+    let mut found = false;
+    for l in body.lines() {
+        if let Some(rest) = l.strip_prefix("-- ")
+            && let Some((n, rest)) = rest.split_once(" lines")
+            && let Ok(n) = n.trim().parse::<usize>()
+        {
+            found = true;
+            lines += n;
+            if let Some(b) = rest
+                .split_once(", ")
+                .and_then(|(_, b)| b.strip_suffix(" bytes --"))
+            {
+                bytes += b.trim().parse::<usize>().ok().unwrap_or(0);
+            }
+            continue;
+        }
+        if let Some(v) = l.strip_prefix("total_lines:") {
+            found = true;
+            lines += v.trim().parse().ok().unwrap_or(0);
+        }
+        if let Some(v) = l.strip_prefix("total_bytes:") {
+            found = true;
+            bytes += v.trim().parse().ok().unwrap_or(0);
+        }
+    }
+    (found.then_some(lines), found.then_some(bytes))
+}
+
+fn non_empty(s: String) -> Option<String> {
+    if s.is_empty() { None } else { Some(s) }
+}
+
+/// Normalize a legacy text-encoded tool result into structured metadata so
+/// rendering goes through the single structured path. Returns None when the
+/// content is not a legacy tool result (plain markdown / assistant text).
+pub fn legacy_tool_meta(msg: &ChatMessage) -> Option<ToolMeta> {
+    let (name, body) = split_legacy(&msg.content)?;
+    let mut meta = ToolMeta {
+        tool_name: name.to_string(),
+        ..Default::default()
+    };
+    match name {
+        "read_file" | "read_entire_file" => {
+            // Counts must be parsed before parse_path_header strips the header.
+            let (lines, bytes) = parse_counts(body);
+            let (path, _) = parse_path_header(body);
+            meta.file_path = non_empty(path);
+            meta.line_count = lines;
+            meta.byte_count = bytes;
+        }
+        "read_files" => {
+            let (lines, bytes) = parse_counts(body);
+            meta.line_count = lines;
+            meta.byte_count = bytes;
+        }
+        "run_shell" => {
+            let exit_code = body
+                .lines()
+                .rev()
+                .find_map(|l| {
+                    l.strip_prefix("Exit code: ")
+                        .or_else(|| l.strip_prefix("exit_code: "))
+                        .and_then(|c| c.trim().parse::<i32>().ok())
+                })
+                .unwrap_or(-1);
+            meta.exit_code = Some(exit_code);
+            meta.is_error = exit_code != 0;
+        }
+        "list_dir" | "delete_file" | "rename_file" | "create_dir" | "get_skill" | "todo_list"
+        | "patch_file" | "write_file" => {
+            // Body-only legacy formats: path/counts unavailable; the renderer
+            // falls back to showing the body.
+        }
+        _ => return None,
+    }
+    Some(meta)
 }
 
 pub fn extract_tool_body(content: &str) -> String {
-    if let Some(idx) = content.find(" result:\n")
-        && content.starts_with("Tool `")
-    {
-        return content[idx + " result:\n".len()..].to_string();
+    if let Some((_, body)) = split_legacy(content) {
+        return body.to_string();
     }
     content.to_string()
 }

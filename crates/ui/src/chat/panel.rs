@@ -9,14 +9,13 @@ use autocode_core::state::{AppState, Role};
 
 use super::input::show_input_row;
 use super::live::show_live_turn;
-use super::messages::{empty_state, show_assistant_content};
+use super::messages::{MessageAction, TranscriptCtx, empty_state, render_message};
 use super::session::{
     handle_purge_on_missing, load_new_session, restore_scroll_offset, save_old_session,
 };
 use super::state::ChatPanelState;
 use super::tabs::show_session_tabs;
-use super::theme::theme;
-use super::tool_result::render_tool_result;
+use super::theme::{FONT_LABEL, SPACE_M, theme};
 use crate::helpers;
 
 pub fn show(
@@ -40,6 +39,10 @@ pub fn show(
             panel_state.oldest_disk_id = 0;
             restore_scroll_offset(ui, state, panel_state);
             panel_state.prev_session_id = state.active_session_id.clone();
+            // Drop reveal pacing for sessions that no longer exist.
+            let valid_ids: std::collections::HashSet<String> =
+                state.sessions.iter().map(|s| s.id.clone()).collect();
+            panel_state.prune_live_reveals(&valid_ids);
         }
 
         // Handle "Load full history" — load all messages from disk.
@@ -104,15 +107,8 @@ pub fn show(
             let active_sid = state.active_session_id.clone();
             let runtime = active_sid.as_ref().and_then(|sid| runtimes.get_mut(sid));
             let is_live_session = active_sid.is_some() && runtime.is_some();
-            let streaming = is_live_session
-                && runtime.as_ref().is_some_and(|r| {
-                    r.is_busy()
-                        || !r.pending_response.is_empty()
-                        || !r.reasoning_buf.is_empty()
-                        || !r.live_shell_buf.is_empty()
-                        || r.live_write_progress.is_some()
-                        || r.live_tool_call.is_some()
-                });
+            let streaming =
+                is_live_session && runtime.as_deref().is_some_and(ChatRuntime::has_visible_stream);
             if streaming {
                 panel_state.scroll_to_bottom = true;
             }
@@ -155,8 +151,6 @@ pub fn show(
                                     active_sid.as_deref().unwrap_or(""),
                                 ),
                                 |ui| {
-                                    let show_reasoning = state.show_reasoning_inline;
-                                    let sid = active_sid.as_deref().unwrap_or("");
                                     // Staged-attachment dir for bubble thumbnails.
                                     let att_dir: Option<std::path::PathBuf> = state
                                         .active_session()
@@ -169,45 +163,31 @@ pub fn show(
                                                 )
                                             })
                                         });
-                                    let buffer = std::mem::take(&mut panel_state.display_buffer);
-                                    for (i, msg) in buffer.iter().enumerate() {
-                                        match msg.role {
-                                            Role::User => {
-                                                if super::messages::show_user_bubble(
-                                                    ui,
-                                                    msg,
-                                                    chat_w,
-                                                    panel_state,
-                                                    att_dir.clone(),
-                                                ) {
-                                                    helpers::set_temp(
-                                                        ui.ctx(),
-                                                        helpers::data::REPLAY_ACTION,
-                                                        Some((sid.to_string(), msg.id)),
-                                                    );
-                                                }
-                                            }
-                                            Role::Assistant => {
-                                                show_assistant_content(ui, msg, i, show_reasoning);
-                                            }
-                                            Role::Tool => {
-                                                ui.push_id(msg.id, |ui| {
-                                                    render_tool_result(ui, msg, i, sid);
-                                                });
-                                            }
-                                            Role::System => {}
-                                            Role::Error => {
-                                                ui.add_space(4.0);
-                                                ui.label(
-                                                    RichText::new(msg.content.as_str())
-                                                        .size(11.0)
-                                                        .color(theme().error),
+                                    let ctx = TranscriptCtx {
+                                        width: chat_w,
+                                        show_reasoning: state.show_reasoning_inline,
+                                        att_dir,
+                                        interactive: true,
+                                        state,
+                                    };
+                                    for msg in panel_state.display_buffer.iter() {
+                                        let action =
+                                            render_message(ui, msg, &ctx, &mut panel_state.attachment_textures);
+                                        match action {
+                                            MessageAction::Replay(msg_id) => {
+                                                helpers::set_temp(
+                                                    ui.ctx(),
+                                                    helpers::data::REPLAY_ACTION,
+                                                    Some((active_sid_str.clone(), msg_id)),
                                                 );
                                             }
+                                            MessageAction::OpenAgent(agent_sid) => {
+                                                panel_state.agent_windows.insert(agent_sid);
+                                            }
+                                            MessageAction::None => {}
                                         }
-                                        ui.add_space(8.0);
+                                        ui.add_space(SPACE_M);
                                     }
-                                    panel_state.display_buffer = buffer;
                                 },
                             ); // end push_id("chat_messages", ...)
                         } else {
@@ -220,26 +200,28 @@ pub fn show(
                                 None => return,
                             };
                             if r.retry_after.is_some() {
-                                ui.add_space(8.0);
+                                ui.add_space(SPACE_M);
                                 ui.label(
                                     RichText::new(&r.status)
-                                        .size(12.0)
+                                        .size(FONT_LABEL)
                                         .color(theme().text_muted),
                                 );
-                                ui.add_space(8.0);
+                                ui.add_space(SPACE_M);
                             } else {
+                                // Live reveal pacing is scoped to this surface.
+                                let live = panel_state.live_reveal(&active_sid_str);
                                 let rendered =
-                                    show_live_turn(ui, r, panel_state, state.show_reasoning_inline);
+                                    show_live_turn(ui, r, live, state.show_reasoning_inline);
                                 if !rendered && r.is_busy() {
                                     // Busy with nothing to stream yet (e.g. waiting
                                     // for the first delta) -- show the status line.
-                                    ui.add_space(8.0);
+                                    ui.add_space(SPACE_M);
                                     ui.label(
                                         RichText::new(&r.status)
-                                            .size(12.0)
+                                            .size(FONT_LABEL)
                                             .color(theme().text_muted),
                                     );
-                                    ui.add_space(8.0);
+                                    ui.add_space(SPACE_M);
                                 }
                             }
                             // Live sub-agent cards (D8): rendered while any
