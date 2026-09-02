@@ -82,6 +82,39 @@ fn btn_w(ui: &mut egui::Ui, label: &str, size: f32, min: f32) -> f32 {
     (glyph_w + 2.0 * ui.spacing().button_padding.x).max(min)
 }
 
+/// Paint our own text caret when the input has widget focus but egui
+/// believes the OS viewport is unfocused — egui hides its caret in that
+/// case, so without this nothing is drawn even though typing works.
+///
+/// Background: egui only learns viewport focus from winit focus-transition
+/// events (`egui_input.focused` starts false). A window born active can
+/// miss the initial transition, leaving the flag stuck at false until the
+/// first real deactivate/reactivate cycle — exactly the "no cursor on
+/// first launch, typing still works" symptom. This fallback keys off
+/// widget focus (which comes from clicks and is always accurate) and
+/// stands down the moment the viewport flag goes true.
+fn paint_fallback_caret(ui: &mut egui::Ui, out: &egui::widgets::text_edit::TextEditOutput) {
+    if ui.input(|i| i.focused) {
+        return; // Viewport flag healthy — egui paints its own caret.
+    }
+    if !ui.ctx().memory(|m| m.has_focus(out.response.id)) {
+        return;
+    }
+    let Some(range) = out.cursor_range.as_ref() else {
+        return;
+    };
+    let body_font = egui::TextStyle::Body.resolve(ui.style());
+    let row_h = ui.fonts_mut(|f| f.row_height(&body_font));
+    let rect =
+        egui::text_selection::text_cursor_state::cursor_rect(&out.galley, &range.primary, row_h)
+            .translate(out.galley_pos.to_vec2() - egui::vec2(out.galley.rect.left(), 0.0));
+    // Wall-clock blink phase (egui's own painter schedules the repaint
+    // for the next toggle). Slightly simpler than tracking interaction
+    // time, and unambiguous either way.
+    let now = ui.input(|i| i.time);
+    egui::text_selection::visuals::paint_text_cursor(ui, ui.painter(), rect, now);
+}
+
 /// `"high" -> "High"`, for the reasoning-effort button label.
 fn capitalize(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -267,7 +300,7 @@ pub(crate) fn show_input_row(
                     // (64 px) would override a smaller `max_height` and blow the
                     // cap. The scroll bar stays hidden so the input's width
                     // doesn't jump by a bar's width once the text overflows.
-                    let resp = ScrollArea::vertical()
+                    let out = ScrollArea::vertical()
                         .id_salt(("input_scroll", panel_state.input_id))
                         .max_height(control_h)
                         .min_scrolled_height(control_h)
@@ -277,17 +310,21 @@ pub(crate) fn show_input_row(
                             egui::containers::scroll_area::ScrollBarVisibility::AlwaysHidden,
                         )
                         .show(ui, |ui: &mut egui::Ui| {
-                            ui.add(
-                                TextEdit::multiline(&mut panel_state.input)
-                                    .id_salt(panel_state.input_id)
-                                    .hint_text("Describe a task... Shift+Enter for newline")
-                                    .desired_width(input_w)
-                                    .desired_rows(INPUT_ROWS)
-                                    .font(egui::TextStyle::Body)
-                                    .text_color(theme().text_primary),
-                            )
+                            // `.show()` instead of `ui.add(...)` to also get
+                            // the galley + cursor range for the fallback caret
+                            // below; behavior is otherwise identical.
+                            TextEdit::multiline(&mut panel_state.input)
+                                .id_salt(panel_state.input_id)
+                                .hint_text("Describe a task... Shift+Enter for newline")
+                                .desired_width(input_w)
+                                .desired_rows(INPUT_ROWS)
+                                .font(egui::TextStyle::Body)
+                                .text_color(theme().text_primary)
+                                .show(ui)
                         })
                         .inner;
+                    // Derefs to the inner `Response`.
+                    let resp = &out.response;
 
                     // Remember the actual widget Id so other code can request
                     // focus on it (the final Id depends on the push_id scope).
@@ -314,6 +351,7 @@ pub(crate) fn show_input_row(
                             mem.request_focus(resp.id);
                         });
                     }
+                    paint_fallback_caret(ui, &out);
 
                     // All right-side controls (Send/Stop, TH, Effort, todo
                     // toggles) sit in the SAME outer layout as the attach
