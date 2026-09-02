@@ -681,6 +681,7 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
             // only continue if the model hadn't already produced text.
             if normal_calls.is_empty() && spawn_agent_calls.is_empty() {
                 runtime.live_tool_call = None;
+                runtime.live_batch.clear();
                 runtime.tool_batch_start = None;
                 let already_responded = state
                     .sessions
@@ -746,15 +747,16 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
             // Agents-only batch: nothing else to execute; the settlement pass
             // commits results and resumes the parent when children finish.
             if normal_calls.is_empty() {
+                runtime.live_tool_call = None;
                 return true;
             }
 
-            // Record the batch start and prime the live tool card for display
-            // while the batch executes (cleared when results commit / drain).
+            // Record the batch start and post every call in the batch to the
+            // chat as one card per call while the batch executes (cleared when
+            // results commit / drain). The streaming-args card is retired —
+            // the batch cards take over the moment execution begins.
             runtime.tool_batch_start = Some(std::time::Instant::now());
-            if let Some(tc) = normal_calls.first() {
-                runtime.live_tool_call = Some((tc.name.clone(), tc.arguments.clone()));
-            }
+            runtime.live_batch = normal_calls.iter().map(|tc| tc.name.clone()).collect();
 
             // Step 6: existing shell / other split for normal_calls.
             let mut shell_calls: Vec<ToolCall> = Vec::new();

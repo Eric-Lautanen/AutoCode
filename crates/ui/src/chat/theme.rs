@@ -1,4 +1,4 @@
-// theme.rs -- Theme colors, badge palette, and spacing/type scale for chat.
+// theme.rs -- Theme colors and spacing/type scale for chat.
 
 use egui::Color32;
 
@@ -82,48 +82,3 @@ pub(crate) const FONT_BODY: f32 = 13.0;
 pub(crate) const FONT_H3: f32 = 13.5;
 pub(crate) const FONT_H2: f32 = 14.5;
 pub(crate) const FONT_H1: f32 = 16.0;
-
-// -- Badge palette ---------------------------------------------------------------
-
-/// Semantic card/badge kinds. One source of truth for tool-card colors so
-/// every card speaks the same visual language.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BadgeKind {
-    /// File operations: read / list / write / delete / rename.
-    File,
-    /// Successful outcome (shell exit 0, write confirmed).
-    Ok,
-    /// Failed outcome.
-    Fail,
-    /// Generic tool activity (live cards, tool args).
-    Tool,
-    /// Sub-agent activity.
-    Agent,
-    /// Search hits (grep / glob).
-    Search,
-    /// Web search / fetch.
-    Web,
-    /// Session-state actions (todo list, name, project tasks).
-    Session,
-    /// Skill loads.
-    Skill,
-    /// Handoff notices.
-    Handoff,
-}
-
-impl BadgeKind {
-    pub(crate) fn color(self) -> Color32 {
-        match self {
-            Self::File => Palette::PURPLE,
-            Self::Ok => Palette::SUCCESS,
-            Self::Fail => Palette::ERROR,
-            Self::Tool => Palette::WARNING,
-            Self::Agent => Palette::ACCENT,
-            Self::Search => Color32::from_rgb(212, 122, 92),
-            Self::Web => Color32::from_rgb(128, 181, 214),
-            Self::Session => Color32::from_rgb(196, 168, 106),
-            Self::Skill => Color32::from_rgb(128, 181, 214),
-            Self::Handoff => Color32::from_rgb(212, 135, 176),
-        }
-    }
-}

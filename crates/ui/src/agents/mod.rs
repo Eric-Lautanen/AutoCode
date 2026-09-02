@@ -293,8 +293,13 @@ pub fn show_windows(
                             if let Some(rt) = runtimes.get(&agent_sid) {
                                 let live: &mut LiveRevealState =
                                     panel_state.live_reveal(&agent_sid);
-                                let rendered =
-                                    show_live_turn(ui, rt, live, state.show_reasoning_inline);
+                                let rendered = show_live_turn(
+                                    ui,
+                                    rt,
+                                    live,
+                                    state.show_reasoning_inline,
+                                    tx.width,
+                                );
                                 if rt.retry_after.is_some() || (!rendered && rt.is_busy()) {
                                     ui.add_space(4.0);
                                     ui.label(

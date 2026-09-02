@@ -211,7 +211,7 @@ pub fn show(
                                 // Live reveal pacing is scoped to this surface.
                                 let live = panel_state.live_reveal(&active_sid_str);
                                 let rendered =
-                                    show_live_turn(ui, r, live, state.show_reasoning_inline);
+                                    show_live_turn(ui, r, live, state.show_reasoning_inline, chat_w);
                                 if !rendered && r.is_busy() {
                                     // Busy with nothing to stream yet (e.g. waiting
                                     // for the first delta) -- show the status line.

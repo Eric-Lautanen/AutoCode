@@ -99,11 +99,24 @@ pub fn legacy_tool_meta(msg: &ChatMessage) -> Option<ToolMeta> {
     Some(meta)
 }
 
+/// Strip the push-time `\nTime: ... UTC` stamp that push_to_session appends
+/// to user/assistant/tool content for model context. Display-only: the
+/// stored content is untouched so the model keeps its ordering anchor.
+pub fn strip_time_stamp(content: &str) -> &str {
+    if let Some(pos) = content.rfind("\nTime: ") {
+        let line = &content[pos + 1..];
+        if line.starts_with("Time: ") && line.ends_with(" UTC") && !line.contains('\n') {
+            return &content[..pos];
+        }
+    }
+    content
+}
+
 pub fn extract_tool_body(content: &str) -> String {
     if let Some((_, body)) = split_legacy(content) {
-        return body.to_string();
+        return strip_time_stamp(body).to_string();
     }
-    content.to_string()
+    strip_time_stamp(content).to_string()
 }
 
 pub fn get_tool_body(msg: &ChatMessage) -> String {

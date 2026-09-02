@@ -15,7 +15,13 @@ use super::theme::theme;
 ///
 /// `line_offset` is a 0-based offset added to snippet line numbers to produce
 /// actual file line numbers. Pass 0 when the snippet is the full file.
-pub(crate) fn render_unified_diff(ui: &mut egui::Ui, old: &str, new: &str, line_offset: usize) {
+pub(crate) fn render_unified_diff(
+    ui: &mut egui::Ui,
+    old: &str,
+    new: &str,
+    line_offset: usize,
+    width: f32,
+) {
     let old_lines: Vec<&str> = old.lines().collect();
     let new_lines: Vec<&str> = new.lines().collect();
 
@@ -87,12 +93,6 @@ pub(crate) fn render_unified_diff(ui: &mut egui::Ui, old: &str, new: &str, line_
         });
     }
 
-    // Copy payload: reconstruct a standard unified diff text.
-    let copy_text: String = diff_lines
-        .iter()
-        .map(|dl| format!("{}{}\n", dl.prefix, dl.text.trim_end()))
-        .collect();
-
     // -- Build layout job with line numbers and colored text --
     let max_line_num = diff_lines
         .iter()
@@ -114,14 +114,13 @@ pub(crate) fn render_unified_diff(ui: &mut egui::Ui, old: &str, new: &str, line_
     let add_color = theme().diff_add_text;
     let num_color = theme().diff_num;
 
-    FramedCard::new("diff")
+    FramedCard::new("diff", width)
         .fill(theme().diff_frame_bg)
         .stroke(Stroke::new(1.0, theme().border))
-        .copy(copy_text, "Copy diff to clipboard")
         .show(ui, |ui| {
-            ui.set_max_width(ui.available_width());
+            ui.set_max_width(width);
             let mut job = egui::text::LayoutJob {
-                wrap: mono_wrap(ui.available_width()),
+                wrap: mono_wrap(width),
                 ..Default::default()
             };
 

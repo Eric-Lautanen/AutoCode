@@ -28,6 +28,7 @@ pub(super) fn poll_tool_results(state: &mut AppState, runtime: &mut ChatRuntime)
                 runtime.path_cache.merge_from(cache);
             }
             runtime.live_tool_call = None;
+            runtime.live_batch.clear();
             runtime.tool_batch_start = None;
             runtime.live_write_progress = None;
 
@@ -147,6 +148,7 @@ pub(super) fn commit_tool_results(state: &mut AppState, runtime: &mut ChatRuntim
         push_tool_results_to_state(state, runtime, &runtime.pending_tool_results);
         runtime.pending_tool_results.clear();
         runtime.live_tool_call = None;
+        runtime.live_batch.clear();
         runtime.tool_batch_start = None;
         runtime.live_write_progress = None;
         runtime.status = format!("{} tool(s) complete.", count);

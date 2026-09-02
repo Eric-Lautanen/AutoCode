@@ -8,8 +8,8 @@ use crate::theme::ROUND_SM;
 use super::code_block::render_code_block;
 use super::theme::{FONT_BODY, FONT_H1, FONT_H2, FONT_H3, FONT_SMALL, SPACE_S, SPACE_XS, theme};
 
-pub(crate) fn render_markdown(ui: &mut egui::Ui, text: &str, word_wrap: bool) {
-    ui.set_max_width(ui.available_width());
+pub(crate) fn render_markdown(ui: &mut egui::Ui, text: &str, word_wrap: bool, width: f32) {
+    ui.set_max_width(width);
     let mut in_code = false;
     let mut code_lang = String::new();
     let mut code_buf = String::new();
@@ -27,7 +27,7 @@ pub(crate) fn render_markdown(ui: &mut egui::Ui, text: &str, word_wrap: bool) {
         }
         if in_code {
             if line.trim() == "```" {
-                render_code_block(ui, &code_lang, &code_buf);
+                render_code_block(ui, &code_lang, &code_buf, width);
                 in_code = false;
                 code_buf.clear();
             } else {
@@ -50,7 +50,7 @@ pub(crate) fn render_markdown(ui: &mut egui::Ui, text: &str, word_wrap: bool) {
 
     flush_quote(ui, &mut quote_buf);
     if in_code && !code_buf.is_empty() {
-        render_code_block(ui, &code_lang, &code_buf);
+        render_code_block(ui, &code_lang, &code_buf, width);
     }
 }
 

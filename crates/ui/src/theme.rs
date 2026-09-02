@@ -41,6 +41,27 @@ impl Palette {
     pub const ERROR_BG: Color32 = Color32::from_rgb(46, 24, 26);
 }
 
+/// Distinct header color per tool so tool-result cards are scannable at a
+/// glance. Unknown tools fall back to muted secondary text.
+pub fn tool_color(tool: &str) -> Color32 {
+    match tool {
+        "read_file" | "read_entire_file" | "read_files" => Palette::ACCENT,
+        "list_dir" | "project_tree" => Color32::from_rgb(90, 170, 220),
+        "write_file" => Palette::SUCCESS,
+        "patch_file" | "patch_lines" => Color32::from_rgb(220, 170, 80),
+        "run_shell" => Color32::from_rgb(120, 200, 160),
+        "delete_file" | "create_dir" | "rename_file" => Palette::WARNING,
+        "grep" | "glob" => Color32::from_rgb(140, 190, 120),
+        "web_search" | "fetch_url" | "search_literature" => Color32::from_rgb(110, 160, 230),
+        "todo_list" | "project_task_list" => Palette::PURPLE,
+        "handoff" | "name_session" => Color32::from_rgb(200, 140, 200),
+        "get_skill" | "explore_theorem" => Color32::from_rgb(80, 190, 190),
+        "spawn_agent" => Color32::from_rgb(230, 130, 170),
+        "verify_proof" => Color32::from_rgb(150, 200, 90),
+        _ => Palette::TEXT_SECONDARY,
+    }
+}
+
 /// Generate a deterministic accent color for a project, derived from its ID.
 pub fn project_accent(project_id: &str) -> Color32 {
     let hash: u64 = {

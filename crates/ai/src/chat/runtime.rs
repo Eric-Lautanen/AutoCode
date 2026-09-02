@@ -172,6 +172,10 @@ pub struct ChatRuntime {
     /// drives execution. Populated by `ToolCallDelta` events and cleared when
     /// the batch is dispatched, results commit, or the runtime drains.
     pub live_tool_call: Option<(String, String)>,
+    /// Names of every tool call in the currently executing batch, posted to
+    /// the chat as one card per call while the batch runs. Cleared alongside
+    /// `live_tool_call`. Display-only.
+    pub live_batch: Vec<String>,
     /// When the current tool-call batch started executing, for the UI's live
     /// elapsed timer. Cleared alongside `live_tool_call`.
     pub tool_batch_start: Option<std::time::Instant>,
@@ -252,6 +256,7 @@ impl Default for ChatRuntime {
             pending_start: 0,
             live_write_progress: None,
             live_tool_call: None,
+            live_batch: Vec::new(),
             tool_batch_start: None,
             last_tool_batch_signature: None,
             repeat_batch_count: 0,
@@ -281,6 +286,7 @@ impl ChatRuntime {
             || !self.pending_response.is_empty()
             || !self.reasoning_buf.is_empty()
             || !self.live_shell_buf.is_empty()
+            || !self.live_batch.is_empty()
             || self.live_write_progress.is_some()
             || self.live_tool_call.is_some()
     }
@@ -343,6 +349,7 @@ impl ChatRuntime {
         self.next_completion_allowed = None;
         self.live_write_progress = None;
         self.live_tool_call = None;
+        self.live_batch.clear();
         self.tool_batch_start = None;
         // Loop-detection state is transient — clear on drain/stop so a fresh
         // user action or session reset doesn't carry a stale warning forward.

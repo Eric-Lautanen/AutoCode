@@ -8,13 +8,13 @@ use egui::{Frame, Margin, RichText, Stroke};
 
 use autocode_ai::chat::ChatRuntime;
 
-use crate::theme::{ROUND_MD, ROUND_SM};
+use crate::theme::{Palette, ROUND_MD, ROUND_SM};
 
 use super::code_block::{render_code_block, render_shell_terminal};
 use super::markdown::render_markdown;
-use super::messages::show_reasoning_frame;
+use super::messages::{show_reasoning_frame, turn_header};
 use super::state::LiveRevealState;
-use super::theme::{BadgeKind, FONT_SMALL, SPACE_M, SPACE_S, SPACE_XS, theme};
+use super::theme::{FONT_LABEL, FONT_SMALL, SPACE_M, SPACE_S, SPACE_XS, theme};
 
 /// Per-frame reveal budget (chars) for smooth text streaming.
 const LIVE_REVEAL_BUDGET: usize = 120;
@@ -36,6 +36,7 @@ pub(crate) fn show_live_turn(
     r: &ChatRuntime,
     live: &mut LiveRevealState,
     show_reasoning_inline: bool,
+    width: f32,
 ) -> bool {
     let mut rendered = false;
 
@@ -47,7 +48,8 @@ pub(crate) fn show_live_turn(
 
     // 1. Reasoning streams into the framed slot it occupies once committed.
     if show_reasoning_inline && !r.reasoning_buf.is_empty() {
-        show_reasoning_frame(ui, &r.reasoning_buf);
+        turn_header(ui, "reasoning", Palette::PURPLE, 0, false, false, &[]);
+        show_reasoning_frame(ui, &r.reasoning_buf, width - 16.0);
         ui.add_space(SPACE_S);
         rendered = true;
     } else if !show_reasoning_inline
@@ -81,7 +83,8 @@ pub(crate) fn show_live_turn(
                 ui.set_max_width(ui.available_width());
                 let mut display = commit[..reveal].to_string();
                 display.push('|');
-                render_markdown(ui, &display, true);
+                ui.set_max_width(width - 24.0);
+                render_markdown(ui, &display, true, width - 24.0);
             });
         rendered = true;
     }
@@ -95,40 +98,51 @@ pub(crate) fn show_live_turn(
                 .color(theme().success)
                 .strong(),
         );
-        render_code_block(ui, path, content);
+        render_code_block(ui, path, content, width);
         rendered = true;
     }
 
     // 4. Live shell output.
     if !r.live_shell_buf.is_empty() {
-        render_shell_terminal(ui, &r.live_shell_buf);
+        render_shell_terminal(ui, &r.live_shell_buf, width);
         rendered = true;
     }
 
-    // 5. Tool card: the raw call JSON streams while the model writes it, then
-    //    a running card (spinner + timer) shows once the JSON is fully shown
-    //    and the call is executing. File writes are shown by the preview above
-    //    instead of a duplicate args card.
+    // 5. Tool calls. While the model is typing a call, its card streams the
+    //    raw JSON. The moment the batch is dispatched, one card per call is
+    //    posted — styled exactly like committed tool cards so the committed
+    //    results simply replace them when the batch completes.
     if r.live_write_progress.is_none() {
-        if let Some((ref name, ref args)) = r.live_tool_call {
+        if r.tool_batch_start.is_some() && !r.live_batch.is_empty() {
+            for name in &r.live_batch {
+                render_tool_card(ui, name, None, width);
+            }
+            if let Some(start) = r.tool_batch_start {
+                let secs = start.elapsed().as_secs();
+                ui.label(
+                    RichText::new(format!(
+                        "running \u{00B7} {:02}:{:02}",
+                        secs / 60,
+                        secs % 60
+                    ))
+                    .size(FONT_LABEL)
+                    .color(theme().text_muted),
+                );
+            }
+            rendered = true;
+        } else if let Some((ref name, ref args)) = r.live_tool_call {
             let fully_revealed = args.is_empty() || live.tool_fully_revealed(name, args);
             if fully_revealed {
-                let elapsed = r
-                    .tool_batch_start
-                    .map(|t| t.elapsed().as_secs())
-                    .unwrap_or(0);
-                render_tool_card(ui, name, None, Some(elapsed));
+                render_tool_card(ui, name, None, width);
             } else {
                 let reveal = live.next_tool_reveal(name, args);
-                render_tool_card(ui, name, Some(&args[..reveal]), None);
+                render_tool_card(ui, name, Some(&args[..reveal]), width);
             }
             rendered = true;
         } else if r.is_executing_tool() {
-            let elapsed = r
-                .tool_batch_start
-                .map(|t| t.elapsed().as_secs())
-                .unwrap_or(0);
-            render_tool_card(ui, &executing_tool_name(r), None, Some(elapsed));
+            // Defensive fallback: a batch executing without a recorded call
+            // list still gets its card.
+            render_tool_card(ui, &executing_tool_name(r), None, width);
             rendered = true;
         }
     }
@@ -148,11 +162,10 @@ fn executing_tool_name(r: &ChatRuntime) -> String {
 }
 
 /// Framed tool card, styled like committed tool cards so the live → committed
-/// transition is a status swap rather than a visual jump. With `args` the
-/// model is still typing the call and the raw JSON streams inside the card
-/// (paced reveal); with `elapsed` the call is running and a spinner + timer
-/// replace the args.
-fn render_tool_card(ui: &mut egui::Ui, name: &str, args: Option<&str>, elapsed: Option<u64>) {
+/// transition is a body swap rather than a visual jump. With `args` the model
+/// is still typing the call and the raw JSON streams inside the card (paced
+/// reveal); without, the card is a posted batch call awaiting its result.
+fn render_tool_card(ui: &mut egui::Ui, name: &str, args: Option<&str>, width: f32) {
     ui.add_space(SPACE_M);
     Frame::NONE
         .fill(theme().live_tool_bg)
@@ -161,32 +174,20 @@ fn render_tool_card(ui: &mut egui::Ui, name: &str, args: Option<&str>, elapsed: 
         .inner_margin(Margin::symmetric(10, 8))
         .show(ui, |ui| {
             ui.set_max_width(ui.available_width());
-            ui.horizontal(|ui| {
-                ui.add(egui::Spinner::new().size(12.0));
-                let label = match elapsed {
-                    Some(secs) => format!(
-                        "[tool] {} \u{2026} {:02}:{:02}",
-                        tool_label(name),
-                        secs / 60,
-                        secs % 60
-                    ),
-                    None => format!("[tool] {}", tool_label(name)),
-                };
-                ui.label(
-                    RichText::new(label)
-                        .size(FONT_SMALL)
-                        .color(BadgeKind::Tool.color())
-                        .strong(),
-                );
-            });
+            ui.label(
+                RichText::new(format!("[tool] {}", tool_label(name)))
+                    .size(FONT_SMALL)
+                    .color(crate::theme::tool_color(name))
+                    .strong(),
+            );
             if let Some(args) = args.filter(|a| !a.is_empty()) {
                 egui::ScrollArea::vertical()
                     .id_salt(ui.auto_id_with("tool_args"))
                     .max_height(160.0)
                     .min_scrolled_height(0.0)
-                    .max_width(ui.available_width())
+                    .max_width(width - 20.0)
                     .show(ui, |ui| {
-                        ui.set_max_width(ui.available_width());
+                        ui.set_max_width(width - 20.0);
                         ui.label(
                             RichText::new(args)
                                 .size(11.0)
