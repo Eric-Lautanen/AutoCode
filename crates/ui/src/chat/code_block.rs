@@ -27,6 +27,23 @@ pub(crate) struct FramedCard {
     pub width: f32,
 }
 
+/// Shorten an over-long card header for display, keeping a trailing
+/// `" | …"` counts suffix (e.g. `" | 18 lines"`) intact when present.
+/// Card headers render on one unwrapped line, so a 200-char terminal
+/// command used as a label would stretch the whole card off-screen.
+fn truncate_label(label: &str) -> String {
+    const MAX: usize = 64;
+    if label.chars().count() <= MAX {
+        return label.to_string();
+    }
+    if let Some((head, tail)) = label.rsplit_once(" | ") {
+        let keep = MAX.saturating_sub(tail.chars().count() + 4).max(8);
+        let head: String = head.chars().take(keep).collect();
+        return format!("{head}… | {tail}");
+    }
+    format!("{}…", label.chars().take(MAX - 1).collect::<String>())
+}
+
 impl FramedCard {
     pub(crate) fn new(label: impl Into<String>, width: f32) -> Self {
         Self {
@@ -67,7 +84,7 @@ impl FramedCard {
                     ui.set_max_width(self.width);
                     ui.horizontal(|ui| {
                         ui.label(
-                            RichText::new(&self.label)
+                            RichText::new(truncate_label(&self.label))
                                 .size(FONT_META)
                                 .color(self.label_color)
                                 .monospace(),
@@ -635,6 +652,25 @@ mod tests {
                 assert!(i == j || a != b, "token colors {i} and {j} collide");
             }
         }
+    }
+
+    #[test]
+    fn header_labels_truncate_with_counts_kept() {
+        use super::truncate_label;
+        assert_eq!(truncate_label("rust | 42 lines"), "rust | 42 lines");
+        assert_eq!(truncate_label("diff"), "diff");
+        let long = format!("{} | 18 lines", "x".repeat(200));
+        let got = truncate_label(&long);
+        assert!(got.ends_with(" | 18 lines"), "{got}");
+        assert!(got.contains('…'));
+        assert!(got.chars().count() <= 64);
+        // No counts suffix: plain cut.
+        let got = truncate_label(&"y".repeat(100));
+        assert_eq!(got.chars().count(), 64);
+        assert!(got.ends_with('…'));
+        // Unicode-safe (chars, not bytes).
+        let got = truncate_label(&format!("{} | 3 lines", "é".repeat(100)));
+        assert!(got.ends_with(" | 3 lines"));
     }
 
     #[test]
