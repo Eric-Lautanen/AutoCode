@@ -198,9 +198,10 @@ impl AutocodeApp {
     }
 
     /// Loop diagnostic (env `AUTOCODE_DEBUG_LOOP=1`): one line per ~5s to
-    /// %TEMP%/autocode_loop.log with what keeps the frame loop alive.
-    /// Proves whether constant CPU comes from stuck liveness (agents, tool
-    /// batches, shells, retries that never settle) or heavy-but-idle work.
+    /// `AutoCode_data/autocode_loop.log` next to the executable with what
+    /// keeps the frame loop alive. Proves whether constant CPU comes from
+    /// stuck liveness (agents, tool batches, shells, retries that never
+    /// settle) or heavy-but-idle work.
     fn log_loop_state(&self, needs_repaint: bool, any_live: bool) {
         if std::env::var_os("AUTOCODE_DEBUG_LOOP").is_none() {
             return;
@@ -280,10 +281,13 @@ impl AutocodeApp {
             rts.join(" "),
             msgs
         );
+        static LOG_PATH: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+        let path =
+            LOG_PATH.get_or_init(|| autocode_core::utils::fsutil::exe_dir().join("AutoCode_data"));
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(std::env::temp_dir().join("autocode_loop.log"))
+            .open(path.join("autocode_loop.log"))
         {
             use std::io::Write as _;
             let _ = f.write_all(line.as_bytes());
