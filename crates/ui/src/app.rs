@@ -197,17 +197,16 @@ impl AutocodeApp {
             .unwrap_or_else(|| "AutoCode -- Autonomous AI Coder".into())
     }
 
-    /// Loop diagnostic (env `AUTOCODE_DEBUG_LOOP=1`): one line per ~5s to
+    /// Loop diagnostic: one line per ~5s to
     /// `AutoCode_data/autocode_loop.log` next to the executable with what
-    /// keeps the frame loop alive. Proves whether constant CPU comes from
-    /// stuck liveness (agents, tool batches, shells, retries that never
-    /// settle) or heavy-but-idle work.
+    /// keeps the frame loop alive. Always on (one tiny write per 5s) so no
+    /// env setup can go wrong; the file is capped. Proves whether constant
+    /// CPU comes from stuck liveness (agents, tool batches, shells, retries
+    /// that never settle) or heavy-but-idle work.
     fn log_loop_state(&self, needs_repaint: bool, any_live: bool) {
-        if std::env::var_os("AUTOCODE_DEBUG_LOOP").is_none() {
-            return;
-        }
         static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         static FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         let frames = FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         let now = autocode_core::helpers::unix_now();
         let prev = LAST.swap(now, std::sync::atomic::Ordering::SeqCst);
@@ -284,12 +283,22 @@ impl AutocodeApp {
         static LOG_PATH: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
         let path =
             LOG_PATH.get_or_init(|| autocode_core::utils::fsutil::exe_dir().join("AutoCode_data"));
+        let log_file = path.join("autocode_loop.log");
+        // Cap the file so an always-on diagnostic can't grow without bound.
+        let truncate = std::fs::metadata(&log_file)
+            .map(|m| m.len() > 262_144)
+            .unwrap_or(false);
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
-            .append(true)
-            .open(path.join("autocode_loop.log"))
+            .append(!truncate)
+            .write(true)
+            .truncate(truncate)
+            .open(&log_file)
         {
             use std::io::Write as _;
+            if !STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                let _ = f.write_all(format!("--- launch {now} ---\n").as_bytes());
+            }
             let _ = f.write_all(line.as_bytes());
         }
     }
