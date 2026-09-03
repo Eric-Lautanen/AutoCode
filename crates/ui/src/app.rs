@@ -203,7 +203,7 @@ impl AutocodeApp {
     /// env setup can go wrong; the file is capped. Proves whether constant
     /// CPU comes from stuck liveness (agents, tool batches, shells, retries
     /// that never settle) or heavy-but-idle work.
-    fn log_loop_state(&self, needs_repaint: bool, any_live: bool) {
+    fn log_loop_state(&self, needs_repaint: bool, any_live: bool, waiting: bool) {
         static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         static FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -272,11 +272,12 @@ impl AutocodeApp {
             .map(|s| s.messages.len())
             .unwrap_or(0);
         let line = format!(
-            "{} fps={:.1} live={} repaint={} runtimes={} msgs={}\n",
+            "{} fps={:.1} live={} repaint={} waiting={} runtimes={} msgs={}\n",
             now,
             fps,
             any_live,
             needs_repaint,
+            waiting,
             rts.join(" "),
             msgs
         );
@@ -420,6 +421,9 @@ impl eframe::App for AutocodeApp {
         });
         let visible = ctx.input(|i| i.viewport().visible()).unwrap_or(true);
 
+        // Placed before the launch early-return below so even a stuck
+        // sysinfo wait still leaves a trace in the log.
+        self.log_loop_state(needs_repaint, any_live, waiting_sysinfo);
         if waiting_sysinfo && !needs_repaint {
             ctx.request_repaint_after(if visible {
                 std::time::Duration::from_millis(50)
@@ -521,8 +525,6 @@ impl eframe::App for AutocodeApp {
             }
             ctx.request_repaint();
         }
-
-        self.log_loop_state(needs_repaint, any_live);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
