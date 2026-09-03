@@ -115,6 +115,49 @@ fn paint_fallback_caret(ui: &mut egui::Ui, out: &egui::widgets::text_edit::TextE
     egui::text_selection::visuals::paint_text_cursor(ui, ui.painter(), rect, now);
 }
 
+/// Focus-transition diagnostics, env-gated (`AUTOCODE_DEBUG_FOCUS=1`).
+/// Appends one line to %TEMP%/autocode_focus.log whenever the focused
+/// widget id, the input widget id, or the viewport-focus flag changes.
+/// Proves whether focus loss comes from widget churn (ids changing),
+/// a stale viewport flag, or something outside the app (no log lines
+/// while the ring flaps = external thief).
+fn log_focus_state(ui: &egui::Ui, input_id: egui::Id) {
+    if std::env::var_os("AUTOCODE_DEBUG_FOCUS").is_none() {
+        return;
+    }
+    static LAST: std::sync::Mutex<(Option<u64>, Option<u64>, bool)> =
+        std::sync::Mutex::new((None, None, false));
+    let focused = ui.ctx().memory(|m| m.focused());
+    let viewport = ui.input(|i| i.focused);
+    let cur = (
+        focused.map(|id| id.value()),
+        Some(input_id.value()),
+        viewport,
+    );
+    let mut last = match LAST.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+    if *last != cur {
+        *last = cur;
+        let line = format!(
+            "{} focused={:?} input_id={:?} viewport={}\n",
+            autocode_core::helpers::unix_now(),
+            cur.0,
+            cur.1,
+            cur.2
+        );
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(std::env::temp_dir().join("autocode_focus.log"))
+        {
+            use std::io::Write as _;
+            let _ = f.write_all(line.as_bytes());
+        }
+    }
+}
+
 /// `"high" -> "High"`, for the reasoning-effort button label.
 fn capitalize(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -352,6 +395,7 @@ pub(crate) fn show_input_row(
                         });
                     }
                     paint_fallback_caret(ui, &out);
+                    log_focus_state(ui, panel_state.input_id);
 
                     // All right-side controls (Send/Stop, TH, Effort, todo
                     // toggles) sit in the SAME outer layout as the attach
