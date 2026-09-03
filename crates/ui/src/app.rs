@@ -325,18 +325,22 @@ impl eframe::App for AutocodeApp {
 
         if needs_repaint {
             self.repaint_scheduled = false;
+            // Live turns repaint at ~30fps (reveal budgets are sized for
+            // it); input events repaint instantly regardless, so the idle
+            // ceiling only stretches passive timers that don't matter when
+            // nothing is streaming.
             let delay = if !visible {
                 std::time::Duration::from_millis(2000)
             } else if any_live {
-                std::time::Duration::from_millis(16)
+                std::time::Duration::from_millis(33)
             } else {
-                std::time::Duration::from_millis(100)
+                std::time::Duration::from_millis(1000)
             };
             ctx.request_repaint_after(delay);
         } else if any_live && !self.repaint_scheduled {
             self.repaint_scheduled = true;
             ctx.request_repaint_after(if visible {
-                std::time::Duration::from_millis(16)
+                std::time::Duration::from_millis(33)
             } else {
                 std::time::Duration::from_millis(2000)
             });

@@ -32,9 +32,17 @@ pub(crate) enum MessageAction {
 }
 
 /// An always-visible action button on a turn's header line.
+#[derive(Clone)]
 pub(crate) enum TurnAction {
     /// Copy the given text to the clipboard.
     Copy(String),
+    /// Copy a patch diff, formatting it on click instead of every frame
+    /// (the LCS is far too hot to run per-frame for every patch card).
+    CopyDiff {
+        old: String,
+        new: String,
+        line_offset: usize,
+    },
     /// Edit and resend this user message.
     Replay(u64),
 }
@@ -279,6 +287,7 @@ fn draw_action(ui: &mut egui::Ui, a: &TurnAction, out: &mut MessageAction) {
         .on_hover_cursor(CursorIcon::PointingHand)
         .on_hover_text(match a {
             TurnAction::Copy(_) => "Copy this turn's content",
+            TurnAction::CopyDiff { .. } => "Copy the diff shown",
             TurnAction::Replay(_) => "Edit and resend from this message",
         });
     let color = if resp.hovered() {
@@ -291,7 +300,7 @@ fn draw_action(ui: &mut egui::Ui, a: &TurnAction, out: &mut MessageAction) {
             .rect_filled(slot, ROUND_SM, Color32::from_black_alpha(80));
     }
     match a {
-        TurnAction::Copy(_) => {
+        TurnAction::Copy(_) | TurnAction::CopyDiff { .. } => {
             paint_copy_icon(ui.painter(), slot.center(), color);
         }
         TurnAction::Replay(_) => {
@@ -307,6 +316,14 @@ fn draw_action(ui: &mut egui::Ui, a: &TurnAction, out: &mut MessageAction) {
     if resp.clicked() {
         match a {
             TurnAction::Copy(text) => ui.ctx().copy_text(text.clone()),
+            TurnAction::CopyDiff {
+                old,
+                new,
+                line_offset,
+            } => {
+                let text = crate::helpers::format_unified_diff(old, new, *line_offset);
+                ui.ctx().copy_text(text);
+            }
             TurnAction::Replay(id) => *out = MessageAction::Replay(*id),
         }
     }

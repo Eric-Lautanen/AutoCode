@@ -147,13 +147,19 @@ pub(crate) fn wrap_mono_text(text: &str, max_cols: usize) -> Vec<String> {
     for line in text.lines() {
         let line = line.replace('\t', "    ");
         let mut rest = line.as_str();
+        // Counted once up front: recounting the remainder every iteration
+        // is O(n²) on giant single-line output (minified code, base64).
+        // Both cut helpers scan at most `max_cols` chars, so the loop as
+        // a whole stays linear.
+        let mut remaining = rest.chars().count();
         loop {
-            if rest.chars().count() <= max_cols {
+            if remaining <= max_cols {
                 rows.push(rest.to_owned());
                 break;
             }
             match space_cut(rest, max_cols) {
                 Some((b, l)) => {
+                    remaining -= rest[..b].chars().count() + 1;
                     rows.push(rest[..b].to_owned());
                     rest = &rest[b + l..];
                 }
@@ -161,6 +167,7 @@ pub(crate) fn wrap_mono_text(text: &str, max_cols: usize) -> Vec<String> {
                     let b = hard_cut(rest, max_cols);
                     rows.push(rest[..b].to_owned());
                     rest = &rest[b..];
+                    remaining -= max_cols;
                 }
             }
         }

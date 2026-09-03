@@ -124,14 +124,30 @@ fn fallback_card(
     body_block(ui, "fallback_body", "output", body, false, width);
 }
 
+/// Copy action for a tool turn. Patches carry a lazy diff recipe so the
+/// O(n·m) LCS runs once on click instead of every frame; everything else
+/// copies its (cheap) display text directly. Legacy patches without
+/// structured texts fall back to the raw body via `copy_text_for`.
+fn copy_action_for(meta: &ToolMeta, body: &str) -> TurnAction {
+    if matches!(meta.tool_name.as_str(), "patch_file" | "patch_lines")
+        && let Some((old, new, line_offset)) = patch_diff_source(meta)
+    {
+        return TurnAction::CopyDiff {
+            old: old.to_owned(),
+            new: new.to_owned(),
+            line_offset,
+        };
+    }
+    TurnAction::Copy(copy_text_for(meta, body))
+}
+
 /// What the copy button should place on the clipboard for a tool turn.
-/// Defaults to the raw result body; patches copy the unified diff shown in
-/// chat, reads copy the displayed file content (no path header), and shell
-/// copies the terminal output (no `Exit code:` trailer) so the clipboard
-/// matches what the user sees.
+/// Defaults to the raw result body; reads copy the displayed file content
+/// (no path header), and shell copies the terminal output (no `Exit code:`
+/// trailer) so the clipboard matches what the user sees. (Patch diffs go
+/// through `copy_action_for` instead — see above.)
 fn copy_text_for(meta: &ToolMeta, body: &str) -> String {
     match meta.tool_name.as_str() {
-        "patch_file" | "patch_lines" => patch_diff_text(meta).unwrap_or_else(|| body.to_string()),
         "read_file" | "read_entire_file" => {
             let (_, content) = helpers::parse_path_header(body);
             content.to_string()
@@ -155,21 +171,17 @@ fn copy_text_for(meta: &ToolMeta, body: &str) -> String {
     }
 }
 
-/// Unified diff text for a patch card, matching `render_unified_diff`
-/// (same hunks, context, and file line numbers). None when the old/new texts
-/// are unavailable (legacy sessions fall back to the raw body).
-fn patch_diff_text(meta: &ToolMeta) -> Option<String> {
-    let (old_text, new_text) = (meta.old_text.as_deref(), meta.new_text.as_deref());
-    if old_text.is_some_and(|t| !t.is_empty()) || new_text.is_some_and(|t| !t.is_empty()) {
-        let line_offset = meta.edit_line.map(|l| l.saturating_sub(1)).unwrap_or(0);
-        Some(helpers::format_unified_diff(
-            old_text.unwrap_or(""),
-            new_text.unwrap_or(""),
-            line_offset,
-        ))
-    } else {
-        None
+/// Old/new texts plus line offset behind a patch card's diff, if present.
+/// Legacy sessions without structured texts yield None (callers fall back
+/// to the raw body).
+fn patch_diff_source(meta: &ToolMeta) -> Option<(&str, &str, usize)> {
+    let old_text = meta.old_text.as_deref().unwrap_or("");
+    let new_text = meta.new_text.as_deref().unwrap_or("");
+    if old_text.is_empty() && new_text.is_empty() {
+        return None;
     }
+    let line_offset = meta.edit_line.map(|l| l.saturating_sub(1)).unwrap_or(0);
+    Some((old_text, new_text, line_offset))
 }
 
 /// Render the unified diff for a patch card when old/new texts are available.
@@ -206,7 +218,7 @@ fn render_structured(
     // The per-turn header line: tool-unique color, timestamp, copy button.
     let tool = meta.tool_name.clone();
     let failed = meta.is_error;
-    let copy = copy_text_for(meta, &body);
+    let copy_action = copy_action_for(meta, &body);
     let header = |ui: &mut egui::Ui, h_ts: u64, title: &str| {
         turn_header(
             ui,
@@ -215,7 +227,7 @@ fn render_structured(
             h_ts,
             h_ts != 0,
             false,
-            &[TurnAction::Copy(copy.clone())],
+            std::slice::from_ref(&copy_action),
         );
     };
     let mut action = MessageAction::None;

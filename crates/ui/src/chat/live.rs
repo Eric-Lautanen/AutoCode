@@ -16,11 +16,13 @@ use super::messages::{show_reasoning_frame, turn_header};
 use super::state::LiveRevealState;
 use super::theme::{FONT_LABEL, FONT_SMALL, SPACE_M, SPACE_S, SPACE_XS, theme};
 
-/// Per-frame reveal budget (chars) for smooth text streaming.
-const LIVE_REVEAL_BUDGET: usize = 120;
+/// Per-frame reveal budget (chars) for smooth text streaming. Sized for a
+/// ~30fps live loop: same visible type-out speed as before, half the
+/// full-UI rebuilds while streaming.
+const LIVE_REVEAL_BUDGET: usize = 240;
 /// Slower budget for tool-call JSON so a call that arrives in one chunk still
 /// visibly "types out" instead of popping in.
-const TOOL_REVEAL_BUDGET: usize = 40;
+const TOOL_REVEAL_BUDGET: usize = 80;
 
 /// Renders everything the active runtime is currently streaming (text,
 /// reasoning, tool-call JSON, tool execution, file writes, shell output) as a
