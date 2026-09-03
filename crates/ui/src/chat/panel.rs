@@ -186,8 +186,13 @@ pub fn show(
                                         state,
                                     };
                                     for msg in panel_state.display_buffer.iter() {
-                                        let action =
-                                            render_message(ui, msg, &ctx, &mut panel_state.attachment_textures);
+                                        let action = render_message(
+                                            ui,
+                                            msg,
+                                            &ctx,
+                                            &mut panel_state.attachment_textures,
+                                            &mut panel_state.diff_cache,
+                                        );
                                         match action {
                                             MessageAction::Replay(msg_id) => {
                                                 helpers::set_temp(

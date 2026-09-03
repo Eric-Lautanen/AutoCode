@@ -197,6 +197,88 @@ impl AutocodeApp {
             .unwrap_or_else(|| "AutoCode -- Autonomous AI Coder".into())
     }
 
+    /// Loop diagnostic (env `AUTOCODE_DEBUG_LOOP=1`): one line per ~5s to
+    /// %TEMP%/autocode_loop.log with what keeps the frame loop alive.
+    /// Proves whether constant CPU comes from stuck liveness (agents, tool
+    /// batches, shells, retries that never settle) or heavy-but-idle work.
+    fn log_loop_state(&self, needs_repaint: bool, any_live: bool) {
+        if std::env::var_os("AUTOCODE_DEBUG_LOOP").is_none() {
+            return;
+        }
+        static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let now = autocode_core::helpers::unix_now();
+        if now.saturating_sub(LAST.swap(now, std::sync::atomic::Ordering::SeqCst)) < 5 {
+            return;
+        }
+        let mut rts = Vec::new();
+        for (sid, r) in &self.runtimes {
+            let mut parts = Vec::new();
+            if r.stream_rx.is_some() {
+                parts.push("stream".to_string());
+            }
+            if r.tool_rx.is_some() {
+                parts.push("tools".to_string());
+            }
+            if r.live_shell_rx.is_some() {
+                parts.push("shell".to_string());
+            }
+            if !r.pending_agents.is_empty() {
+                parts.push(format!("agents={}", r.pending_agents.len()));
+            }
+            if r.live_tool_call.is_some() {
+                parts.push("toolcall".to_string());
+            }
+            if !r.live_batch.is_empty() {
+                parts.push(format!("batch={}", r.live_batch.len()));
+            }
+            if !r.pending_response.is_empty()
+                || !r.reasoning_buf.is_empty()
+                || !r.live_shell_buf.is_empty()
+            {
+                parts.push("buf".to_string());
+            }
+            if !r.pending_tool_remaining.is_empty() {
+                parts.push("toolqueue".to_string());
+            }
+            if r.retry_after.is_some() {
+                parts.push("retry".to_string());
+            }
+            if r.live_write_progress.is_some() {
+                parts.push("write".to_string());
+            }
+            rts.push(format!(
+                "{}:{}",
+                sid.chars().take(8).collect::<String>(),
+                if parts.is_empty() {
+                    "idle".to_string()
+                } else {
+                    parts.join("+")
+                }
+            ));
+        }
+        let msgs = self
+            .state
+            .active_session()
+            .map(|s| s.messages.len())
+            .unwrap_or(0);
+        let line = format!(
+            "{} live={} repaint={} runtimes={} msgs={}\n",
+            now,
+            any_live,
+            needs_repaint,
+            rts.join(" "),
+            msgs
+        );
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(std::env::temp_dir().join("autocode_loop.log"))
+        {
+            use std::io::Write as _;
+            let _ = f.write_all(line.as_bytes());
+        }
+    }
+
     fn prune_shell_tasks(&mut self) {
         if self.state.shell_tasks.len() > 200 {
             let excess = self.state.shell_tasks.len() - 200;
@@ -415,6 +497,8 @@ impl eframe::App for AutocodeApp {
             }
             ctx.request_repaint();
         }
+
+        self.log_loop_state(needs_repaint, any_live);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {

@@ -14,7 +14,7 @@ use crate::helpers::{self, get_tool_body, strip_time_stamp};
 use crate::theme::Palette;
 
 use super::code_block::{FramedCard, render_code_block, render_shell_terminal};
-use super::diff_view::render_unified_diff;
+use super::diff_view::{DiffCache, render_unified_diff};
 use super::markdown::render_markdown;
 use super::messages::{MessageAction, TranscriptCtx, TurnAction, turn_header};
 use super::theme::{FONT_LABEL, FONT_META, FONT_SMALL, theme};
@@ -25,6 +25,7 @@ pub(crate) fn render_tool_result(
     ui: &mut egui::Ui,
     msg: &ChatMessage,
     ctx: &TranscriptCtx<'_>,
+    diff_cache: &mut DiffCache,
 ) -> MessageAction {
     let meta = msg
         .tool_meta
@@ -40,7 +41,7 @@ pub(crate) fn render_tool_result(
         );
         return MessageAction::None;
     };
-    render_structured(ui, msg, ctx, &meta)
+    render_structured(ui, msg, ctx, &meta, diff_cache)
 }
 
 /// The badge header line for a tool turn (the turn's one header + timestamp +
@@ -187,7 +188,12 @@ fn patch_diff_source(meta: &ToolMeta) -> Option<(&str, &str, usize)> {
 /// Render the unified diff for a patch card when old/new texts are available.
 /// Returns true when a diff was rendered (caller falls back to the raw body
 /// otherwise, e.g. legacy sessions without structured texts).
-fn render_patch_diff(ui: &mut egui::Ui, meta: &ToolMeta, width: f32) -> bool {
+fn render_patch_diff(
+    ui: &mut egui::Ui,
+    meta: &ToolMeta,
+    width: f32,
+    diff_cache: &mut DiffCache,
+) -> bool {
     let (old_text, new_text) = (meta.old_text.as_deref(), meta.new_text.as_deref());
     if old_text.is_some_and(|t| !t.is_empty()) || new_text.is_some_and(|t| !t.is_empty()) {
         let line_offset = meta.edit_line.map(|l| l.saturating_sub(1)).unwrap_or(0);
@@ -198,6 +204,7 @@ fn render_patch_diff(ui: &mut egui::Ui, meta: &ToolMeta, width: f32) -> bool {
             line_offset,
             width,
             meta.file_path.as_deref().unwrap_or(""),
+            diff_cache,
         );
         true
     } else {
@@ -210,6 +217,7 @@ fn render_structured(
     msg: &ChatMessage,
     ctx: &TranscriptCtx<'_>,
     meta: &ToolMeta,
+    diff_cache: &mut DiffCache,
 ) -> MessageAction {
     let ts = msg.timestamp;
     let width = ctx.width;
@@ -332,7 +340,7 @@ fn render_structured(
                 error_body(ui, msg, width);
             } else if meta.file_path.is_some() {
                 header(ui, ts, &format!("[patch] {}", path));
-                if !render_patch_diff(ui, meta, width) {
+                if !render_patch_diff(ui, meta, width, diff_cache) {
                     body_block(ui, "patch_body", "output", &body, false, width);
                 }
             } else {
@@ -353,7 +361,7 @@ fn render_structured(
                 );
                 // Same unified diff as `patch_file`; legacy sessions without
                 // structured texts fall back to the raw body.
-                if !render_patch_diff(ui, meta, width) && !body.trim().is_empty() {
+                if !render_patch_diff(ui, meta, width, diff_cache) && !body.trim().is_empty() {
                     body_block(ui, "patch_lines_body", "output", &body, false, width);
                 }
             } else {

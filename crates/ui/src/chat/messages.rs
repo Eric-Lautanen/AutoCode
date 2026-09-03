@@ -17,6 +17,7 @@ use crate::helpers::strip_time_stamp;
 use crate::theme::{Palette, ROUND_SM};
 
 use super::attachments::{TextureCache, show_bubble_attachments};
+use super::diff_view::DiffCache;
 use super::markdown::render_markdown;
 use super::theme::{FONT_LABEL, FONT_SMALL, SPACE_M, SPACE_XS, theme};
 use super::tool_result::render_tool_result;
@@ -73,6 +74,7 @@ pub(crate) fn render_message(
     msg: &ChatMessage,
     ctx: &TranscriptCtx<'_>,
     textures: &mut TextureCache,
+    diff_cache: &mut DiffCache,
 ) -> MessageAction {
     match msg.role {
         ChatRole::User => show_user_bubble(ui, msg, ctx, textures),
@@ -81,7 +83,7 @@ pub(crate) fn render_message(
             MessageAction::None
         }
         ChatRole::Tool => {
-            ui.push_id(msg.id, |ui| render_tool_result(ui, msg, ctx));
+            ui.push_id(msg.id, |ui| render_tool_result(ui, msg, ctx, diff_cache));
             MessageAction::None
         }
         ChatRole::System => MessageAction::None,

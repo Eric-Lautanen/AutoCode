@@ -43,23 +43,51 @@ fn tokenize_content(
     }
 }
 
-/// Render a unified diff between old and new text with line numbers,
-/// tinted change rows, and intra-line highlighting.
-///
-/// Uses an LCS-based diff algorithm to produce multiple separate hunks
-/// with surrounding context lines, separated by ` [...] ` when non-adjacent.
-///
-/// `line_offset` is a 0-based offset added to snippet line numbers to produce
-/// actual file line numbers. Pass 0 when the snippet is the full file.
-/// `lang` is the filename or language for syntax colors (falls back plain).
-pub(crate) fn render_unified_diff(
-    ui: &mut egui::Ui,
-    old: &str,
-    new: &str,
-    line_offset: usize,
-    width: f32,
-    lang: &str,
-) {
+/// Styled diff rows cached across frames: everything expensive (line LCS,
+/// pairing, tokenizing, word LCS) runs once per content, not per frame.
+/// Only wrapping (width-dependent) and job building repeat per frame.
+/// Lives in `ChatPanelState` next to the texture cache (same pattern).
+#[derive(Clone, Debug, Default)]
+pub struct CachedDiff {
+    num_width: usize,
+    /// (raw line number, prefix, full-line styled segments, unwrapped)
+    rows: Vec<(usize, char, Vec<Seg>)>,
+}
+
+/// Content-addressed render cache for diffs, shared by the main transcript
+/// and agent windows. Capped with a clear-all so it can't grow without
+/// bound; entries are keyed by content hash so identical diffs share rows.
+#[derive(Default)]
+pub struct DiffCache {
+    map: HashMap<u64, CachedDiff>,
+}
+
+impl DiffCache {
+    pub fn get(&mut self, old: &str, new: &str, line_offset: usize, lang: &str) -> &CachedDiff {
+        let key = content_hash(old, new, line_offset, lang);
+        if !self.map.contains_key(&key) {
+            let built = build_cached_rows(old, new, line_offset, lang);
+            if self.map.len() > 64 {
+                self.map.clear();
+            }
+            self.map.insert(key, built);
+        }
+        &self.map[&key]
+    }
+}
+
+fn content_hash(old: &str, new: &str, line_offset: usize, lang: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    old.hash(&mut h);
+    new.hash(&mut h);
+    line_offset.hash(&mut h);
+    lang.hash(&mut h);
+    h.finish()
+}
+
+/// Build the cached styled rows for one diff content (see `CachedDiff`).
+fn build_cached_rows(old: &str, new: &str, line_offset: usize, lang: &str) -> CachedDiff {
     let old_lines: Vec<&str> = old.lines().collect();
     let new_lines: Vec<&str> = new.lines().collect();
 
@@ -179,34 +207,12 @@ pub(crate) fn render_unified_diff(
         .max()
         .unwrap_or(0);
     let num_width = max_line_num.to_string().len().max(2);
-    let mono = FontId::monospace(12.0);
 
     let ctx_color = theme().text_secondary;
-    let num_color = theme().diff_num;
     let profile = syntax::profile_for(lang);
-    let inner_w = card_inner_width(width);
-    let gutter = num_width + 4;
-    // Calibrate on the longest full display row (gutter + text) so the
-    // budget accounts for every pixel that will actually render.
-    let sample_text = diff_lines
-        .iter()
-        .map(|dl| dl.text.trim_end())
-        .max_by_key(|t| t.chars().count())
-        .unwrap_or("");
-    let sample_row = format!("{:>width$} |{} {}", 0, ' ', sample_text, width = num_width);
-    let text_cols = fit_cols(
-        ui,
-        &mono,
-        &sample_row,
-        inner_w,
-        mono_wrap_cols(ui, &mono, width),
-    )
-    .saturating_sub(gutter)
-    .max(8);
-
-    // (line number or blank, prefix, styled segments)
-    let mut rows: Vec<(Option<usize>, char, Vec<Seg>)> = Vec::new();
     let mut in_block = false;
+    // (raw line number, prefix, full-line styled segments, unwrapped)
+    let mut rows: Vec<(usize, char, Vec<Seg>)> = Vec::new();
     for (idx, dl) in diff_lines.iter().enumerate() {
         let raw_num = if dl.prefix == '-' {
             dl.old_lineno
@@ -267,10 +273,78 @@ pub(crate) fn render_unified_diff(
             // Unpaired change: whole-row tint plus full syntax colors.
             tokenize_content(&text, &profile, &mut in_block, base_fg, line_bg)
         };
-        for (k, row) in wrap_segs(&content, text_cols).iter().enumerate() {
+        rows.push((line_num, dl.prefix, content));
+    }
+    CachedDiff { num_width, rows }
+}
+
+/// Render a unified diff between old and new text with line numbers,
+/// tinted change rows, and intra-line highlighting.
+///
+/// `line_offset` is a 0-based offset added to snippet line numbers to produce
+/// actual file line numbers. Pass 0 when the snippet is the full file.
+/// `lang` is the filename or language for syntax colors (falls back plain).
+pub(crate) fn render_unified_diff(
+    ui: &mut egui::Ui,
+    old: &str,
+    new: &str,
+    line_offset: usize,
+    width: f32,
+    lang: &str,
+    cache: &mut DiffCache,
+) {
+    // Content-addressed hits skip every expensive step.
+    let cached = cache.get(old, new, line_offset, lang);
+
+    let mono = FontId::monospace(12.0);
+    let num_color = theme().diff_num;
+    let ctx_color = theme().text_secondary;
+    let inner_w = card_inner_width(width);
+    let num_width = cached.num_width;
+    let gutter = num_width + 4;
+    // Calibrate on the longest cached row (gutter + text) so the budget
+    // accounts for every pixel that will actually render.
+    let mut sample_num = 0;
+    let mut sample_prefix = ' ';
+    let mut sample_text = String::new();
+    let mut sample_len = 0;
+    for (n, p, segs) in &cached.rows {
+        let len: usize = segs.iter().map(|s| s.text.chars().count()).sum();
+        if len > sample_len {
+            sample_len = len;
+            sample_num = *n;
+            sample_prefix = *p;
+            sample_text = segs
+                .iter()
+                .map(|s| s.text.as_str())
+                .collect::<Vec<_>>()
+                .join("");
+        }
+    }
+    let sample_row = format!(
+        "{:>width$} |{} {}",
+        sample_num,
+        sample_prefix,
+        sample_text,
+        width = num_width
+    );
+    let text_cols = fit_cols(
+        ui,
+        &mono,
+        &sample_row,
+        inner_w,
+        mono_wrap_cols(ui, &mono, width),
+    )
+    .saturating_sub(gutter)
+    .max(8);
+
+    // Wrap per frame (width-dependent); continuations leave the number blank.
+    let mut rows: Vec<(Option<usize>, char, Vec<Seg>)> = Vec::new();
+    for (line_num, prefix, content) in &cached.rows {
+        for (k, row) in wrap_segs(content, text_cols).iter().enumerate() {
             rows.push((
-                if k == 0 { Some(line_num) } else { None },
-                dl.prefix,
+                if k == 0 { Some(*line_num) } else { None },
+                *prefix,
                 row.clone(),
             ));
         }

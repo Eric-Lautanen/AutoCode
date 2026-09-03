@@ -283,6 +283,7 @@ pub fn show_windows(
                                     msg,
                                     &tx,
                                     &mut panel_state.attachment_textures,
+                                    &mut panel_state.diff_cache,
                                 );
                                 if let MessageAction::OpenAgent(nested) = action {
                                     panel_state.agent_windows.insert(nested);

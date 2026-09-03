@@ -76,6 +76,10 @@ pub struct ChatPanelState {
     pub pending_attachments: Vec<autocode_core::state::Attachment>,
     /// Decoded thumbnail textures keyed by (rel_path, bytes).
     pub attachment_textures: std::collections::HashMap<(String, u64), egui::TextureHandle>,
+    /// Styled diff rows cached by content hash, so patch cards skip their
+    /// LCS/tokenize/word-diff work on every frame. Shared by the main
+    /// transcript and agent windows; capped internally.
+    pub diff_cache: super::diff_view::DiffCache,
 }
 
 impl Default for ChatPanelState {
@@ -104,6 +108,7 @@ impl Default for ChatPanelState {
             agent_windows: std::collections::HashSet::new(),
             pending_attachments: Vec::new(),
             attachment_textures: HashMap::new(),
+            diff_cache: Default::default(),
         }
     }
 }
