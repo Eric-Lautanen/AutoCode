@@ -206,10 +206,20 @@ impl AutocodeApp {
             return;
         }
         static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        static FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let frames = FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         let now = autocode_core::helpers::unix_now();
-        if now.saturating_sub(LAST.swap(now, std::sync::atomic::Ordering::SeqCst)) < 5 {
+        let prev = LAST.swap(now, std::sync::atomic::Ordering::SeqCst);
+        static LOGGED_FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let base_frames = LOGGED_FRAMES.swap(frames, std::sync::atomic::Ordering::SeqCst);
+        // Skip the very first line (no baseline yet) and anything sooner
+        // than ~5s after the previous line.
+        if prev == 0 || now.saturating_sub(prev) < 5 {
             return;
         }
+        // Effective repaint rate since the last line: distinguishes a fast
+        // loop (driver scheduling constantly) from heavy-but-rare frames.
+        let fps = (frames - base_frames) as f64 / now.saturating_sub(prev).max(1) as f64;
         let mut rts = Vec::new();
         for (sid, r) in &self.runtimes {
             let mut parts = Vec::new();
@@ -262,8 +272,9 @@ impl AutocodeApp {
             .map(|s| s.messages.len())
             .unwrap_or(0);
         let line = format!(
-            "{} live={} repaint={} runtimes={} msgs={}\n",
+            "{} fps={:.1} live={} repaint={} runtimes={} msgs={}\n",
             now,
+            fps,
             any_live,
             needs_repaint,
             rts.join(" "),
