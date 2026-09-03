@@ -156,13 +156,38 @@ impl Session {
     }
 
     /// Context size in tokens as last reported by the provider
-    /// (`usage.prompt_tokens` of the most recent request). Zero until the
-    /// first response arrives. This is the ONLY token figure used anywhere:
-    /// display, handoff, preflight, looping trigger, model-facing context
-    /// line. Between requests the figure lags reality by exactly the
-    /// messages appended since that response — inherent to actual counts.
+    /// (`usage.prompt_tokens` of the most recent request). This is the ONLY
+    /// token figure used anywhere: display, handoff, preflight, looping
+    /// trigger, model-facing context line. Between requests the figure lags
+    /// reality by exactly the messages appended since that response —
+    /// inherent to actual counts.
+    ///
+    /// When no provider figure exists yet (fresh restore, replayed session,
+    /// or a provider that omits usage) but history exists, falls back to a
+    /// rough chars/4 estimate instead of 0 — presenting 0 alongside a long
+    /// history makes the model conclude the session state is corrupt.
+    /// Truly empty sessions still report 0. The next provider response
+    /// replaces any estimate with an exact count.
     pub fn context_tokens(&self) -> usize {
-        self.actual_tokens_used
+        if self.actual_tokens_used > 0 {
+            self.actual_tokens_used
+        } else {
+            self.estimate_tokens()
+        }
+    }
+
+    /// Rough token estimate over the stored history (message text plus
+    /// reasoning), ~4 chars per token. Only a stand-in until the provider
+    /// reports a real count; intentionally ignores tool-call argument JSON
+    /// (kept cheap and allocation-free for per-frame meter reads — tool
+    /// *result* bodies are message content and are included).
+    pub fn estimate_tokens(&self) -> usize {
+        let bytes: usize = self
+            .messages
+            .iter()
+            .map(|m| m.content.len() + m.reasoning_content.as_deref().map(|r| r.len()).unwrap_or(0))
+            .sum();
+        bytes / 4
     }
 
     pub fn record_actual_usage(&mut self, prompt: usize, _completion: usize) {

@@ -113,7 +113,11 @@ pub fn replay_to_message(
         // and matches what session load derives from disk. Without this, replay
         // leaves turn_count at its pre-truncation high value.
         sess.turn_count = sess.messages.iter().map(|m| m.turn).max().unwrap_or(0);
-        sess.actual_tokens_used = 0;
+        // Recompute (don't zero) the usage figure for the truncated history:
+        // persisting 0 alongside remaining messages makes a relaunched
+        // session look corrupt to the model. The next response overwrites
+        // this estimate with an exact provider count.
+        sess.actual_tokens_used = sess.estimate_tokens();
     }
 
     // Truncate disk and save meta (separate borrow from the RAM truncation above).

@@ -631,3 +631,54 @@ fn test_draft_attachments_survive_restart() {
     assert_eq!(back[0].attachments.len(), 1);
     assert_eq!(back[0].attachments[0].rel_path, "attachments/a2_log.txt");
 }
+
+// ── Context usage estimate fallback ─────────────────────────────────────────
+// A session whose provider never reported usage (or was just replayed)
+// must never present 0 alongside a real history — the model reads that
+// as corrupt state. `context_tokens` falls back to a chars/4 estimate;
+// truly empty sessions still report 0.
+
+fn text_msg(id: u64, content: &str) -> ChatMessage {
+    ChatMessage {
+        id,
+        role: Role::User,
+        content: content.to_string(),
+        timestamp: 0,
+        tool_call_id: None,
+        tool_calls: None,
+        tool_meta: None,
+        reasoning_content: None,
+        turn: 0,
+        is_prune_marker: false,
+        attachments: Vec::new(),
+    }
+}
+
+#[test]
+fn effective_tokens_prefers_provider_figure() {
+    let mut sess = Session::new(None, String::new(), String::new());
+    sess.messages.push(text_msg(1, &"x".repeat(4000)));
+    sess.actual_tokens_used = 161_897;
+    assert_eq!(sess.context_tokens(), 161_897);
+}
+
+#[test]
+fn effective_tokens_estimates_when_missing() {
+    let mut sess = Session::new(None, String::new(), String::new());
+    assert_eq!(sess.context_tokens(), 0, "empty history stays 0");
+    sess.messages.push(text_msg(1, &"x".repeat(4000)));
+    sess.messages.push(text_msg(2, &"y".repeat(4000)));
+    // 8000 chars / 4, never 0 alongside history.
+    assert_eq!(sess.context_tokens(), 2000);
+    assert!(sess.context_tokens() > 0);
+}
+
+#[test]
+fn effective_tokens_counts_reasoning() {
+    let mut sess = Session::new(None, String::new(), String::new());
+    let mut msg = text_msg(1, "hi");
+    msg.reasoning_content = Some("r".repeat(400));
+    sess.messages.push(msg);
+    // (2 + 400) chars / 4.
+    assert_eq!(sess.context_tokens(), 100);
+}
