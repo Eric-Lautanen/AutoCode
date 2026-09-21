@@ -64,6 +64,13 @@ pub struct AutocodeApp {
 
 impl AutocodeApp {
     pub fn new(cc: &CreationContext) -> Self {
+        // Startup marker: proves this exact build runs and that app stderr
+        // reaches the `cargo run` shell. If this line never appears, the
+        // running binary predates the code on disk.
+        eprintln!(
+            "[diag] AutocodeApp::new ts={}",
+            autocode_core::helpers::unix_now()
+        );
         let mut state = if let Some(storage) = cc.storage {
             AppState::load(&EframeStorage(storage))
         } else {
@@ -207,29 +214,20 @@ impl AutocodeApp {
             .unwrap_or_else(|| "AutoCode -- Autonomous AI Coder".into())
     }
 
-    /// Loop diagnostic: one line per ~5s to
-    /// `AutoCode_data/autocode_loop.log` next to the executable with what
-    /// keeps the frame loop alive. Always on (one tiny write per 5s) so no
-    /// env setup can go wrong; the file is capped. Proves whether constant
-    /// CPU comes from stuck liveness (agents, tool batches, shells, retries
-    /// that never settle) or heavy-but-idle work.
-    fn log_loop_state(&self, needs_repaint: bool, any_live: bool, waiting: bool) {
-        static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        static FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        let frames = FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        let now = autocode_core::helpers::unix_now();
-        let prev = LAST.swap(now, std::sync::atomic::Ordering::SeqCst);
-        static LOGGED_FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let base_frames = LOGGED_FRAMES.swap(frames, std::sync::atomic::Ordering::SeqCst);
-        // Skip the very first line (no baseline yet) and anything sooner
-        // than ~5s after the previous line.
-        if prev == 0 || now.saturating_sub(prev) < 5 {
-            return;
-        }
-        // Effective repaint rate since the last line: distinguishes a fast
-        // loop (driver scheduling constantly) from heavy-but-rare frames.
-        let fps = (frames - base_frames) as f64 / now.saturating_sub(prev).max(1) as f64;
+    /// Loop diagnostic: one line per measurement window reporting the effective
+    /// frame rate, whether anything in the app is asking for frames, and every
+    /// call site that asked egui to repaint during that window.
+    ///
+    /// Proves whether constant CPU comes from stuck liveness (agents, tool
+    /// batches, shells, retries that never settle), heavy-but-idle work, or a
+    /// component that is quietly re-arming the render loop every frame.
+    fn log_loop_state(
+        &self,
+        ctx: &egui::Context,
+        needs_repaint: bool,
+        any_live: bool,
+        waiting: bool,
+    ) {
         let mut rts = Vec::new();
         for (sid, r) in &self.runtimes {
             let mut parts = Vec::new();
@@ -266,6 +264,17 @@ impl AutocodeApp {
             if r.live_write_progress.is_some() {
                 parts.push("write".to_string());
             }
+            // Queued follow-ups are the one piece of runtime state with no
+            // other on-screen trace, and a queue that is held open by a marker
+            // the user can't see is exactly how the auto-delivery looked like
+            // it was broken. Report the depth, and name the reason it is still
+            // waiting, so it is never a mystery again.
+            if !r.queued_messages.is_empty() {
+                match r.unsettled_reason() {
+                    Some(why) => parts.push(format!("queued={}@{why}", r.queued_messages.len())),
+                    None => parts.push(format!("queued={}", r.queued_messages.len())),
+                }
+            }
             rts.push(format!(
                 "{}:{}",
                 sid.chars().take(8).collect::<String>(),
@@ -281,37 +290,42 @@ impl AutocodeApp {
             .active_session()
             .map(|s| s.messages.len())
             .unwrap_or(0);
-        let line = format!(
-            "{} fps={:.1} live={} repaint={} waiting={} runtimes={} msgs={}\n",
-            now,
-            fps,
-            any_live,
-            needs_repaint,
-            waiting,
-            rts.join(" "),
-            msgs
+        // The floating task windows call `ui.scroll_to_cursor` on their
+        // current item, so they can hold a scroll animation open
+        // indefinitely. Report them so a hot loop can be attributed to them.
+        let task_windows = {
+            let f = |open: bool, items: &[autocode_core::state::TodoItem]| {
+                if !open {
+                    return "off".to_string();
+                }
+                let cur = helpers::find_current_task_index(items)
+                    .map(|i| i.to_string())
+                    .unwrap_or_else(|| "-".to_string());
+                format!("{cur}@{}", items.len())
+            };
+            let s = self.state.todo_list();
+            let p = self.state.project_task_list();
+            format!(
+                "todo={} ptasks={}",
+                f(self.state.show_todo, &s.items),
+                f(self.state.show_project_tasks, &p.items)
+            )
+        };
+        loop_diag::report(
+            ctx,
+            &format!(
+                "live={} repaint={} waiting={} msgs={} {task_windows} runtimes={}",
+                any_live,
+                needs_repaint,
+                waiting,
+                msgs,
+                if rts.is_empty() {
+                    "-".to_string()
+                } else {
+                    rts.join(" ")
+                }
+            ),
         );
-        static LOG_PATH: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
-        let path =
-            LOG_PATH.get_or_init(|| autocode_core::utils::fsutil::exe_dir().join("AutoCode_data"));
-        let log_file = path.join("autocode_loop.log");
-        // Cap the file so an always-on diagnostic can't grow without bound.
-        let truncate = std::fs::metadata(&log_file)
-            .map(|m| m.len() > 262_144)
-            .unwrap_or(false);
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(!truncate)
-            .write(true)
-            .truncate(truncate)
-            .open(&log_file)
-        {
-            use std::io::Write as _;
-            if !STARTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
-                let _ = f.write_all(format!("--- launch {now} ---\n").as_bytes());
-            }
-            let _ = f.write_all(line.as_bytes());
-        }
     }
 
     fn prune_shell_tasks(&mut self) {
@@ -439,7 +453,7 @@ impl eframe::App for AutocodeApp {
 
         // Placed before the launch early-return below so even a stuck
         // sysinfo wait still leaves a trace in the log.
-        self.log_loop_state(needs_repaint, any_live, waiting_sysinfo);
+        self.log_loop_state(ctx, needs_repaint, any_live, waiting_sysinfo);
         if waiting_sysinfo && !needs_repaint {
             ctx.request_repaint_after(if visible {
                 std::time::Duration::from_millis(50)
@@ -693,5 +707,137 @@ impl eframe::App for AutocodeApp {
         std::thread::yield_now();
 
         Self::cleanup_temp_files();
+    }
+}
+
+/// Frame-loop diagnostics.
+///
+/// egui only redraws when something asks it to, so a single component that
+/// requests a repaint every frame pins the whole render loop at full speed
+/// even while the app sits idle. `Context::repaint_causes()` records the call
+/// site of every request, which turns "the loop is hot" into "the loop is hot
+/// *because of this line*".
+///
+/// Self-contained so it can be deleted once the loop is quiet: `report` is the
+/// only entry point.
+mod loop_diag {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    use egui::Context;
+
+    /// Report interval. Every line covers exactly this much wall time, so the
+    /// frame rate is a true average over the window rather than one gap.
+    const WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
+
+    static FRAMES: AtomicU64 = AtomicU64::new(0);
+    static FRAMES_AT_REPORT: AtomicU64 = AtomicU64::new(0);
+    /// Milliseconds on a shared monotonic clock; 0 means "window not started".
+    static WINDOW_START_MS: AtomicU64 = AtomicU64::new(0);
+    static EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    static LOG_PATH: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    static ANNOUNCED: AtomicU64 = AtomicU64::new(0);
+
+    /// Monotonic milliseconds since the first call. `Instant` cannot be stored
+    /// in a `static` directly, so keep one origin and measure offsets from it.
+    /// `unix_now()` is second-resolution, which is too coarse for a frame rate.
+    fn now_ms() -> u64 {
+        EPOCH
+            .get_or_init(std::time::Instant::now)
+            .elapsed()
+            .as_millis() as u64
+    }
+
+    /// Write to stderr *and* to a log file next to the app data.
+    ///
+    /// The Windows build is a `windows` subsystem binary, so stderr goes
+    /// nowhere unless the process was launched from a console. The file makes
+    /// the diagnostic readable however the app was started.
+    fn emit(line: &str) {
+        eprintln!("{line}");
+        use std::io::Write;
+        let path = LOG_PATH.get_or_init(|| {
+            autocode_core::utils::fsutil::exe_dir()
+                .join("AutoCode_data")
+                .join("loop-diag.log")
+        });
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let _ = writeln!(file, "{line}");
+        }
+    }
+
+    /// Advance the frame counter and, once a full window has elapsed, return
+    /// the frames drawn during it. The baseline moves only when a line is
+    /// emitted, so no frames are ever counted twice.
+    fn close_window() -> Option<(u64, f64)> {
+        let frames = FRAMES.fetch_add(1, Ordering::Relaxed) + 1;
+        let now = now_ms();
+        let start = WINDOW_START_MS.load(Ordering::SeqCst);
+        if start == 0 {
+            WINDOW_START_MS.store(now, Ordering::SeqCst);
+            FRAMES_AT_REPORT.store(frames, Ordering::SeqCst);
+            return None;
+        }
+        let elapsed = now.saturating_sub(start).max(1);
+        if elapsed < WINDOW.as_millis() as u64 {
+            return None;
+        }
+        let drawn = frames - FRAMES_AT_REPORT.swap(frames, Ordering::SeqCst);
+        WINDOW_START_MS.store(now, Ordering::SeqCst);
+        Some((drawn, drawn as f64 * 1000.0 / elapsed as f64))
+    }
+
+    /// Collapse egui's per-pass repaint causes into `file:line (reason) xN`,
+    /// keeping the last two path components so egui's own sources stay short.
+    fn summarize_causes(ctx: &Context) -> String {
+        let mut counts: Vec<(String, usize)> = Vec::new();
+        for cause in ctx.repaint_causes() {
+            let tail: Vec<&str> = cause.file.rsplit(['/', '\\']).take(2).collect();
+            let short = tail.iter().rev().copied().collect::<Vec<_>>().join("/");
+            let key = if cause.reason.is_empty() {
+                format!("{short}:{}", cause.line)
+            } else {
+                format!("{short}:{} ({})", cause.line, cause.reason)
+            };
+            match counts.iter_mut().find(|(k, _)| *k == key) {
+                Some((_, n)) => *n += 1,
+                None => counts.push((key, 1)),
+            }
+        }
+        // Busiest cause first. `sort_by_key` over `Reverse` rather than a
+        // comparator, which is what clippy asks for here.
+        counts.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+        counts.truncate(4);
+        counts
+            .into_iter()
+            .map(|(k, n)| if n > 1 { format!("{k} x{n}") } else { k })
+            .collect::<Vec<_>>()
+            .join(" | ")
+    }
+
+    /// Emit one diagnostic line per window. `detail` is app-specific context
+    /// appended verbatim after the loop metrics.
+    pub fn report(ctx: &Context, detail: &str) {
+        let Some((drawn, fps)) = close_window() else {
+            return;
+        };
+        if ANNOUNCED.fetch_add(1, Ordering::SeqCst) == 0 {
+            emit("[loop] diagnostic active (stderr + AutoCode_data/loop-diag.log)");
+        }
+        let (visible, occluded, focused) = ctx.input(|i| {
+            let vp = i.viewport();
+            (
+                vp.visible().unwrap_or(true),
+                vp.occluded.unwrap_or(false),
+                i.focused,
+            )
+        });
+        emit(&format!(
+            "[loop] frames={drawn} fps={fps:.1} visible={visible} occluded={occluded} focused={focused} {detail} causes=[{}]",
+            summarize_causes(ctx)
+        ));
     }
 }
