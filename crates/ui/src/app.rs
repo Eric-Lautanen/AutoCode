@@ -50,6 +50,15 @@ pub struct AutocodeApp {
     repaint_scheduled: bool,
     sysinfo_rx: Option<std::sync::mpsc::Receiver<autocode_core::utils::sysinfo::SysInfo>>,
     prev_session_id: Option<String>,
+    /// Last window title handed to the viewport, so the title command is only
+    /// sent when it actually changes.
+    ///
+    /// `Context::send_viewport_cmd` calls `request_repaint_of` unconditionally
+    /// (egui 0.34 `context.rs:4039`), and a zero-delay repaint request is
+    /// granted twice ("outstanding = 1"). Sending it every frame therefore
+    /// re-arms an immediate repaint every frame, which pins the render loop at
+    /// full speed and drowns out every `request_repaint_after` throttle below.
+    sent_window_title: Option<String>,
     persistence: PersistenceThread,
 }
 
@@ -91,6 +100,7 @@ impl AutocodeApp {
             repaint_scheduled: false,
             sysinfo_rx,
             prev_session_id: None,
+            sent_window_title: None,
             persistence,
         }
     }
@@ -344,8 +354,14 @@ impl AutocodeApp {
 
 impl eframe::App for AutocodeApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Only push the title when it changed: `send_viewport_cmd` requests an
+        // immediate repaint every time it is called, so issuing it every frame
+        // would keep the loop running at full speed even while idle.
         let title = self.window_title();
-        ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
+        if self.sent_window_title.as_deref() != Some(title.as_str()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.sent_window_title = Some(title);
+        }
 
         if let Some(rx) = &self.sysinfo_rx {
             if let Ok(info) = rx.try_recv() {
@@ -433,16 +449,21 @@ impl eframe::App for AutocodeApp {
             return;
         }
 
+        // Two live tiers: an open provider stream can deliver text at any
+        // moment, so it keeps ~30fps for smooth reveal pacing; tool/shell
+        // execution, retries, and buffered output only move second-scale
+        // indicators (elapsed timers, spinners, terminal tails), so 10fps
+        // renders them identically for a third of the full-UI rebuilds.
+        // Input events repaint instantly regardless of tier.
+        let streaming_text = self.runtimes.values().any(|r| r.stream_rx.is_some());
         if needs_repaint {
             self.repaint_scheduled = false;
-            // Live turns repaint at ~30fps (reveal budgets are sized for
-            // it); input events repaint instantly regardless, so the idle
-            // ceiling only stretches passive timers that don't matter when
-            // nothing is streaming.
             let delay = if !visible {
                 std::time::Duration::from_millis(2000)
-            } else if any_live {
+            } else if streaming_text {
                 std::time::Duration::from_millis(33)
+            } else if any_live {
+                std::time::Duration::from_millis(100)
             } else {
                 std::time::Duration::from_millis(1000)
             };
@@ -450,7 +471,11 @@ impl eframe::App for AutocodeApp {
         } else if any_live && !self.repaint_scheduled {
             self.repaint_scheduled = true;
             ctx.request_repaint_after(if visible {
-                std::time::Duration::from_millis(33)
+                if streaming_text {
+                    std::time::Duration::from_millis(33)
+                } else {
+                    std::time::Duration::from_millis(100)
+                }
             } else {
                 std::time::Duration::from_millis(2000)
             });
