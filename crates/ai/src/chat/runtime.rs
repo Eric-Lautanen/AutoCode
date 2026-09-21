@@ -1,7 +1,16 @@
 use std::sync::mpsc::Receiver;
 
 use crate::provider::{CompletionStream, ToolCall};
-use autocode_core::state::{TodoItem, ToolMeta};
+use autocode_core::state::{Attachment, TodoItem, ToolMeta};
+
+/// A user message held until the runtime's current turn finishes (see
+/// `queued_messages`). Stored on the runtime so it survives across frames and
+/// is scoped to the session the turn belongs to, exactly like the turn itself.
+#[derive(Clone, Debug)]
+pub struct QueuedMessage {
+    pub text: String,
+    pub attachments: Vec<Attachment>,
+}
 
 /// Semantic blink state for `NetworkStatus::blink_dot()`.
 /// The UI crate maps each variant to a color.
@@ -209,6 +218,25 @@ pub struct ChatRuntime {
     /// (i.e. the reported count lags by almost nothing), the counting-endpoint
     /// round-trip is skipped entirely. Cleared on drain.
     pub usage_watermark: Option<u64>,
+    /// User messages typed while a turn was in flight. The front of the queue
+    /// is delivered as the next user turn once the runtime settles (or
+    /// immediately on "inject now"). Deliberately NOT cleared by `drain()`:
+    /// stopping a turn still delivers what the user already queued.
+    pub queued_messages: Vec<QueuedMessage>,
+    /// Set the moment a message is delivered (`deliver_message`) and cleared the
+    /// moment the request carrying it is actually handed to the provider
+    /// (`start_completion`). While it is set, no *further* queued message may go
+    /// out: the delivered one's turn has to run first.
+    ///
+    /// This is what keeps a rate-limited provider from swallowing the whole
+    /// queue. A scheduled wait (`retry_after`) deliberately does not block a
+    /// queued delivery — otherwise the queue starves for the minutes a slow
+    /// provider spends in backoff — but the request a delivery arms can itself
+    /// be parked on that same timer. Without this marker the guard would read
+    /// that parked request as "another settled turn" and deliver the next
+    /// message too, and the next, so the model would receive several user
+    /// messages in a row with no reply between them.
+    pub delivery_undispatched: bool,
 }
 
 /// How many appended messages beyond the last Done's watermark still count as
@@ -264,11 +292,16 @@ impl Default for ChatRuntime {
             got_response_this_turn: false,
             pending_agents: Vec::new(),
             usage_watermark: None,
+            queued_messages: Vec::new(),
+            delivery_undispatched: false,
         }
     }
 }
 
 impl ChatRuntime {
+    /// In-flight work, or a retry/rate-limit wait before the next request.
+    /// This is what "the AI is still working on something" means to the user,
+    /// so it drives the Stop button and the live-turn indicators.
     pub fn is_busy(&self) -> bool {
         self.stream_rx.is_some()
             || self.tool_rx.is_some()
@@ -276,6 +309,89 @@ impl ChatRuntime {
             || self.live_write_progress.is_some()
             || self.retry_after.is_some()
             || !self.pending_agents.is_empty()
+    }
+
+    /// Why this runtime cannot yet be handed a queued user message, if it
+    /// cannot: the first thing still standing between it and "the turn is
+    /// over". `None` means the turn has fully settled — nothing is streaming,
+    /// no tool batch or sub-agent is running, no result is waiting to be
+    /// committed, nothing is buffered and no deferred start is armed.
+    ///
+    /// Every window where a user message would land in the middle of the
+    /// assistant's own turn has a name here, because injecting a user message
+    /// inside one of them corrupts the conversation: the tool-batch gap (an
+    /// assistant `tool_calls` message committed with its results still pending)
+    /// is the one that bites hardest, since the stream is momentarily idle
+    /// there and it looks settled from the outside.
+    ///
+    /// `retry_after` is deliberately NOT one of these. A backoff or rate-limit
+    /// timer is a request that is *scheduled*, not running, and a queued message
+    /// legitimately pre-empts it — `deliver_message` cancels the timer, and the
+    /// provider's rate limiter re-imposes its wait when the injected message
+    /// actually starts a request, so nothing is hammered. Counting it as busy
+    /// pinned the queue open for minutes at a time on a rate-limited provider,
+    /// which is exactly the "it never injects" a user sees.
+    ///
+    /// Single source of truth for the queued-message delivery guard: the polling
+    /// loop asks this to decide, and the loop diagnostic prints it, so the two
+    /// can never drift apart.
+    pub fn unsettled_reason(&self) -> Option<&'static str> {
+        // Running work.
+        if self.stream_rx.is_some() {
+            return Some("streaming");
+        }
+        if self.tool_rx.is_some() {
+            return Some("tool-batch");
+        }
+        if self.live_shell_rx.is_some() {
+            return Some("shell");
+        }
+        if self.live_write_progress.is_some() {
+            return Some("write-preview");
+        }
+        if !self.pending_agents.is_empty() {
+            return Some("sub-agent");
+        }
+        // Work the runtime has committed to but not finished.
+        if !self.pending_tool_calls.is_empty() {
+            return Some("tool-calls-buffered");
+        }
+        if self.assistant_tool_calls_json.is_some() {
+            return Some("tool-calls-unanswered");
+        }
+        if !self.pending_tool_results.is_empty() {
+            return Some("tool-results-uncommitted");
+        }
+        if !self.pending_tool_remaining.is_empty() {
+            return Some("shell-calls-buffered");
+        }
+        if !self.pending_response.is_empty() || !self.reasoning_buf.is_empty() {
+            return Some("reply-buffered");
+        }
+        // Display-only batch cards: the batch they describe is still running.
+        if !self.live_batch.is_empty() {
+            return Some("tool-batch");
+        }
+        if self.live_tool_call.is_some() {
+            return Some("tool-call-streaming");
+        }
+        if self.handoff_in_progress {
+            return Some("handoff");
+        }
+        if self.pending_start > 0 {
+            return Some("deferred-start");
+        }
+        // A message has been delivered but its request has not left the ground
+        // yet — the only remaining reason a queue cannot advance.
+        if self.delivery_undispatched {
+            return Some("delivery-unsent");
+        }
+        None
+    }
+
+    /// True once a turn has fully settled — see `unsettled_reason`.
+    pub fn turn_settled(&self) -> bool {
+        self.unsettled_reason().is_none()
     }
 
     /// True when anything renderable by the live-turn view is in flight or
@@ -358,6 +474,10 @@ impl ChatRuntime {
         self.pending_loop_warning = false;
         self.got_response_this_turn = false;
         self.usage_watermark = None;
+        // A stop abandons the turn a delivery was waiting on, so the queue is
+        // free to advance again — the user's queued follow-ups should still go
+        // out rather than wait for a request that will now never run.
+        self.delivery_undispatched = false;
         // Sub-agent handles are settled by the caller (settle_pending_agents
         // needs AppState to cancel children and push error results); drain
         // only guarantees the runtime stops waiting on them.
@@ -370,5 +490,171 @@ impl ChatRuntime {
         self.reasoning_buf.shrink_to(0);
         self.live_shell_buf.clear();
         self.live_shell_buf.shrink_to(0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn agent_handle() -> AgentHandle {
+        AgentHandle {
+            tool_call_id: "call_agent".into(),
+            agent_session_id: "agent-session".into(),
+            started: std::time::Instant::now(),
+            result: None,
+        }
+    }
+
+    fn tool_call() -> ToolCall {
+        ToolCall {
+            id: "call_1".into(),
+            name: "read_file".into(),
+            arguments: "{}".into(),
+        }
+    }
+
+    /// Configure one runtime and assert it reports `reason` and nothing else.
+    fn check(reason: &'static str, configure: impl FnOnce(&mut ChatRuntime)) {
+        let mut rt = ChatRuntime::default();
+        configure(&mut rt);
+        assert_eq!(rt.unsettled_reason(), Some(reason));
+        assert!(!rt.turn_settled());
+    }
+
+    #[test]
+    fn a_fresh_runtime_has_fully_settled() {
+        let rt = ChatRuntime::default();
+        assert_eq!(rt.unsettled_reason(), None);
+        assert!(rt.turn_settled());
+        assert!(!rt.is_busy());
+    }
+
+    /// The regression that starved the queued-message delivery: a rate-limit or
+    /// backoff timer is a request that is *scheduled*, not running. It still
+    /// counts as busy — the Stop button and every live indicator key off that —
+    /// but it must never hold a queued follow-up back. Treating it as busy kept
+    /// the queue pinned for the minutes at a time a rate-limited provider spends
+    /// in backoff, which looks exactly like "it never injects".
+    #[test]
+    fn a_scheduled_retry_is_busy_but_not_unsettled() {
+        let rt = ChatRuntime {
+            retry_after: Some(std::time::Instant::now() + std::time::Duration::from_secs(60)),
+            ..Default::default()
+        };
+        assert!(rt.is_busy(), "the user still sees the AI working");
+        assert_eq!(rt.unsettled_reason(), None);
+        assert!(rt.turn_settled());
+    }
+
+    /// Every window in which a user message would land inside the assistant's
+    /// own turn reports itself by name, and the queued-message guard asks for
+    /// exactly these. The names are what the loop diagnostic prints, so a queue
+    /// held open is never an invisible mystery again.
+    #[test]
+    fn each_in_flight_marker_names_itself() {
+        check("streaming", |r| {
+            let (_tx, rx) = std::sync::mpsc::channel();
+            r.stream_rx = Some(crate::provider::CompletionStream::new(
+                rx,
+                std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            ));
+        });
+        check("tool-batch", |r| {
+            let (_tx, rx) = std::sync::mpsc::channel();
+            r.tool_rx = Some(rx);
+        });
+        check("shell", |r| {
+            let (_tx, rx) = std::sync::mpsc::channel();
+            r.live_shell_rx = Some(rx);
+        });
+        check("write-preview", |r| {
+            r.live_write_progress = Some(("a.txt".into(), "contents".into()));
+        });
+        check("sub-agent", |r| r.pending_agents.push(agent_handle()));
+        check("tool-calls-buffered", |r| {
+            r.pending_tool_calls.push(tool_call())
+        });
+        check("tool-calls-unanswered", |r| {
+            r.assistant_tool_calls_json = Some(serde_json::json!([]));
+        });
+        check("tool-results-uncommitted", |r| {
+            r.pending_tool_results.push(ToolResult {
+                tool_call: tool_call(),
+                content: "ok".into(),
+                meta: Default::default(),
+                accessed_paths: Vec::new(),
+                todo_update: None,
+                project_todo_update: None,
+            });
+        });
+        check("shell-calls-buffered", |r| {
+            r.pending_tool_remaining.push(tool_call());
+        });
+        check("reply-buffered", |r| {
+            r.pending_response = "half an answer".into()
+        });
+        check("reply-buffered", |r| {
+            r.reasoning_buf = "still thinking".into()
+        });
+        check("tool-batch", |r| r.live_batch = vec!["read_file".into()]);
+        check("tool-call-streaming", |r| {
+            r.live_tool_call = Some(("read_file".into(), "{}".into()));
+        });
+        check("handoff", |r| r.handoff_in_progress = true);
+        check("deferred-start", |r| r.pending_start = 2);
+        check("delivery-unsent", |r| r.delivery_undispatched = true);
+    }
+
+    /// A delivery hands the runtime's next turn to that message, and the marker
+    /// that enforces it is cleared only when the request actually reaches the
+    /// provider — or when the turn is torn down, so a Stop doesn't strand the
+    /// rest of the queue behind a request that will now never run.
+    #[test]
+    fn a_delivery_holds_the_queue_until_it_is_dispatched_or_stopped() {
+        let mut rt = ChatRuntime::default();
+        assert!(!rt.delivery_undispatched, "nothing delivered yet");
+
+        rt.delivery_undispatched = true;
+        assert_eq!(rt.unsettled_reason(), Some("delivery-unsent"));
+
+        rt.drain();
+        assert!(!rt.delivery_undispatched);
+        assert!(rt.turn_settled(), "and the queue is free to advance again");
+    }
+
+    /// A stopped turn settles immediately, so the follow-up the user queued
+    /// while the AI was working still goes out. The queue is deliberately not
+    /// cleared by `drain`.
+    #[test]
+    fn stopping_a_turn_does_not_hold_the_queue() {
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let mut rt = ChatRuntime {
+            stream_rx: Some(crate::provider::CompletionStream::new(
+                rx,
+                std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            )),
+            ..Default::default()
+        };
+        rt.pending_tool_results.push(ToolResult {
+            tool_call: tool_call(),
+            content: "ok".into(),
+            meta: Default::default(),
+            accessed_paths: Vec::new(),
+            todo_update: None,
+            project_todo_update: None,
+        });
+        rt.pending_agents.push(agent_handle());
+        rt.queued_messages.push(QueuedMessage {
+            text: "after you stop".into(),
+            attachments: Vec::new(),
+        });
+        assert!(rt.is_busy());
+
+        rt.stopped_by_user = true;
+        rt.drain();
+
+        assert_eq!(rt.unsettled_reason(), None, "a stopped turn is settled");
+        assert_eq!(rt.queued_messages.len(), 1, "the queue survives the stop");
     }
 }
