@@ -69,6 +69,14 @@ pub struct ChatPanelState {
     /// Unique ID for the session tabs scroll area.
     pub(crate) tabs_scroll_id: egui::Id,
 
+    /// Screen y of the divider line between the transcript and the input row,
+    /// re-measured every frame and `None` on the very first one. The floating
+    /// composer overlays (queued messages, pending attachment chips) are
+    /// bottom-anchored to this line rather than to a hardcoded offset from the
+    /// bottom of the panel, so they stay glued to the composer no matter how
+    /// tall the input row renders at the current font size and DPI scale.
+    pub(crate) composer_divider_y: Option<f32>,
+
     /// Agent windows currently open (agent session ids).
     pub agent_windows: std::collections::HashSet<String>,
 
@@ -105,6 +113,7 @@ impl Default for ChatPanelState {
             chat_messages_id: next_id(),
             chat_scroll_id: next_id(),
             tabs_scroll_id: next_id(),
+            composer_divider_y: None,
             agent_windows: std::collections::HashSet::new(),
             pending_attachments: Vec::new(),
             attachment_textures: HashMap::new(),

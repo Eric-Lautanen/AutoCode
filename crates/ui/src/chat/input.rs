@@ -29,6 +29,54 @@ const TEXT_EDIT_MARGIN_Y: f32 = 4.0;
 /// Horizontal gap between every control in the row.
 const BTN_GAP: f32 = 6.0;
 
+/// What the single right-hand "primary action" slot does this frame.
+///
+/// One button, three jobs. While the AI is working the slot offers **Stop**,
+/// so the running turn stays one click away; the moment the user types
+/// something it becomes **Send**, which QUEUES the text for delivery the
+/// instant that turn completes (a user message can never be wedged into a
+/// request that is already streaming). Clearing the box — or sending — turns it
+/// straight back into Stop. Idle, it is an ordinary **Send**.
+///
+/// A second button was only ever needed because Stop and queueing could be
+/// wanted at the same time; they cannot, since typing is what reveals the
+/// queue action and emptying the box is what hides it. Keeping one slot means
+/// the two actions never compete for space or attention, and the input field
+/// never resizes when the label swaps.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PrimaryAction {
+    Stop,
+    Queue,
+    Send,
+}
+
+fn primary_action(busy: bool, has_text: bool) -> PrimaryAction {
+    match (busy, has_text) {
+        (true, true) => PrimaryAction::Queue,
+        (true, false) => PrimaryAction::Stop,
+        (false, _) => PrimaryAction::Send,
+    }
+}
+
+/// Stop the active session's turn exactly like the Stop button: settle any
+/// sub-agents first so their results land before the parent drains, then tear
+/// the request down. Shared by the button and the Escape shortcut.
+fn stop_active_turn(
+    state: &mut AppState,
+    runtimes: &mut HashMap<String, ChatRuntime>,
+    active_sid: Option<&String>,
+) {
+    let Some(sid) = active_sid.cloned() else {
+        return;
+    };
+    chat::settle_agents_on_stop(state, runtimes, &sid);
+    if let Some(r) = runtimes.get_mut(&sid) {
+        r.stopped_by_user = true;
+        r.drain();
+        r.status = "Stopped.".into();
+    }
+}
+
 // --- Button widths ----------------------------------------------------------
 // Floors for each control's width. The *actual* width is measured from the
 // rendered label at layout time (see `btn_w` below) because `crate::theme`
@@ -166,11 +214,12 @@ pub(crate) fn show_input_row(
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = BTN_GAP;
                     let active_sid = state.active_session_id.clone();
-                    let busy = active_sid.as_ref().is_some_and(|sid| {
-                        runtimes
-                            .get(sid)
-                            .is_some_and(|r| r.is_busy() || r.retry_after.is_some())
-                    });
+                    // `is_busy()` already counts a retry/rate-limit wait, which is
+                    // deliberate: while a request is scheduled the turn is not
+                    // over, so the slot must still offer Stop.
+                    let busy = active_sid
+                        .as_ref()
+                        .is_some_and(|sid| runtimes.get(sid).is_some_and(|r| r.is_busy()));
 
                     // Resolved before the input is laid out: the reasoning-effort
                     // label feeds into the width budget below.
@@ -241,9 +290,13 @@ pub(crate) fn show_input_row(
                     // Measure every button instead of trusting the constants:
                     // the input field takes whatever width is left over, so any
                     // error here would land on the buttons rather than being
-                    // absorbed. 7 controls in the row means 6 gaps.
+                    // absorbed. 6 controls in the row means 5 gaps.
                     let attach_w = btn_w(ui, "+", 12.0, ATTACH_W);
-                    let send_w = btn_w(ui, if busy { "Stop" } else { "Send" }, 12.5, SEND_W);
+                    // The primary slot carries both labels over its life, so
+                    // measure the wider of the two: the field must not resize
+                    // when "Stop" swaps to "Send".
+                    let send_w =
+                        btn_w(ui, "Stop", 12.5, SEND_W).max(btn_w(ui, "Send", 12.5, SEND_W));
                     let think_w = btn_w(ui, "TH", 12.5, THINK_W);
                     // Widest effort label wins, so the row doesn't shift when
                     // the user picks a different effort.
@@ -255,21 +308,33 @@ pub(crate) fn show_input_row(
                     let proj_todo_w = btn_w(ui, PROJ_TODO_ICON, 12.0, PROJ_TODO_W);
 
                     // The input field absorbs whatever is left, so the row adds
-                    // up to exactly `row_inner_w` and the buttons stay put.
+                    // up to exactly `row_inner_w` and the buttons stay put. The
+                    // primary slot is a fixed reservation — one button that
+                    // changes label, not two that appear and vanish — so the
+                    // field keeps its width as the user starts typing mid-turn.
                     let reserved_w = attach_w
                         + send_w
                         + think_w
                         + effort_w
                         + todo_w
                         + proj_todo_w
-                        + BTN_GAP * 6.0;
+                        + BTN_GAP * 5.0;
                     // Measure the live rect rather than trusting `row_w`: this
                     // is the space the layout will actually hand out, and it is
                     // clamped to the viewport so the row can never run past the
                     // window's right edge.
                     let row_inner_w = ui.available_width().min(viewport_w - 18.0);
                     let input_w = (row_inner_w - reserved_w).max(100.0);
-                    let send_enabled = !panel_state.input.trim().is_empty() && !busy;
+                    let has_text = !panel_state.input.trim().is_empty();
+                    let send_enabled = has_text && !busy;
+                    let primary = primary_action(busy, has_text);
+                    // How many follow-ups are already waiting on this session,
+                    // so the queue action can say so instead of silently
+                    // stacking a second (and third, ...) one.
+                    let queued_depth = active_sid
+                        .as_ref()
+                        .and_then(|sid| runtimes.get(sid))
+                        .map_or(0, |r| r.queued_messages.len());
 
                     // Attach button — leftmost in the input row, same
                     // frame as the thinking / task-list toggles.
@@ -335,7 +400,9 @@ pub(crate) fn show_input_row(
                     let enter_pressed = ui.input(|i| {
                         i.key_pressed(Key::Enter) && !i.modifiers.shift && !i.modifiers.ctrl
                     });
-                    let send_shortcut = enter_pressed && send_enabled && !busy;
+                    // Enter sends normally; while a turn is running it queues
+                    // the same text instead (see the busy branch below).
+                    let send_shortcut = enter_pressed && has_text;
 
                     // Focus management: request focus when an external caller
                     // (e.g. replay action) sets the flag, or when the user
@@ -359,53 +426,85 @@ pub(crate) fn show_input_row(
                     // gets the same allocated height and lines up vertically
                     // instead of the nested layout clipping them shorter.
 
-                    // Send / Stop button
-                    if busy {
-                        let stop_btn = egui::Button::new(
-                            RichText::new("Stop").size(12.5).color(Color32::WHITE),
-                        )
-                        .fill(theme().error)
-                        .stroke(Stroke::NONE)
-                        .min_size(Vec2::new(send_w, control_h));
+                    // The primary action slot — Stop, Queue or Send, decided by
+                    // `primary_action` above. While a turn is running, typing
+                    // turns Stop into a Send that QUEUES the text for delivery
+                    // the moment that turn completes, so nothing is dropped and
+                    // nothing is wedged into the running request.
+                    match primary {
+                        PrimaryAction::Queue => {
+                            let queue_btn = egui::Button::new(
+                                RichText::new("Send").size(12.5).color(Color32::WHITE),
+                            )
+                            .fill(theme().accent)
+                            .stroke(Stroke::NONE)
+                            .min_size(Vec2::new(send_w, control_h));
 
-                        if ui.add(stop_btn).clicked()
-                            && let Some(sid) = active_sid.clone()
-                        {
-                            // Cancel any running sub-agents first so their
-                            // results land before the runtime drains.
-                            chat::settle_agents_on_stop(state, runtimes, &sid);
-                            if let Some(r) = runtimes.get_mut(&sid) {
-                                r.stopped_by_user = true;
-                                r.drain();
-                                r.status = "Stopped.".into();
-                            }
-                        }
-                    } else {
-                        let send_btn = egui::Button::new(RichText::new("Send").size(12.5).color(
-                            if send_enabled {
-                                Color32::WHITE
+                            let hint = if queued_depth == 0 {
+                                "Queue this message -- it is sent when the AI finishes its turn"
+                                    .to_string()
                             } else {
-                                theme().text_muted
-                            },
-                        ))
-                        .fill(if send_enabled {
-                            theme().accent
-                        } else {
-                            theme().bg_surface
-                        })
-                        .stroke(Stroke::NONE)
-                        .min_size(Vec2::new(send_w, control_h));
-
-                        if ui.add_enabled(send_enabled, send_btn).clicked() || send_shortcut {
-                            if send_shortcut && panel_state.input.ends_with('\n') {
-                                panel_state.input.pop();
+                                format!("Queue this message -- {queued_depth} already waiting")
+                            };
+                            let queue_resp = ui.add(queue_btn).on_hover_text(hint);
+                            if queue_resp.clicked() || send_shortcut {
+                                if send_shortcut && panel_state.input.ends_with('\n') {
+                                    panel_state.input.pop();
+                                }
+                                let text = std::mem::take(&mut panel_state.input);
+                                let atts = std::mem::take(&mut panel_state.pending_attachments);
+                                chat::queue_message(state, runtimes, text, atts);
                             }
-                            let text = std::mem::take(&mut panel_state.input);
-                            let atts = std::mem::take(&mut panel_state.pending_attachments);
-                            chat::send_message(state, runtimes, text, atts);
-                            panel_state.scroll_to_bottom = true;
-                            panel_state.user_scrolled_up = false;
                         }
+                        PrimaryAction::Stop => {
+                            let stop_btn = egui::Button::new(
+                                RichText::new("Stop").size(12.5).color(Color32::WHITE),
+                            )
+                            .fill(theme().error)
+                            .stroke(Stroke::NONE)
+                            .min_size(Vec2::new(send_w, control_h));
+
+                            if ui.add(stop_btn).clicked() {
+                                stop_active_turn(state, runtimes, active_sid.as_ref());
+                            }
+                        }
+                        PrimaryAction::Send => {
+                            let send_btn = egui::Button::new(
+                                RichText::new("Send").size(12.5).color(if send_enabled {
+                                    Color32::WHITE
+                                } else {
+                                    theme().text_muted
+                                }),
+                            )
+                            .fill(if send_enabled {
+                                theme().accent
+                            } else {
+                                theme().bg_surface
+                            })
+                            .stroke(Stroke::NONE)
+                            .min_size(Vec2::new(send_w, control_h));
+
+                            if ui.add_enabled(send_enabled, send_btn).clicked() || send_shortcut {
+                                if send_shortcut && panel_state.input.ends_with('\n') {
+                                    panel_state.input.pop();
+                                }
+                                let text = std::mem::take(&mut panel_state.input);
+                                let atts = std::mem::take(&mut panel_state.pending_attachments);
+                                chat::send_message(state, runtimes, text, atts);
+                                panel_state.scroll_to_bottom = true;
+                                panel_state.user_scrolled_up = false;
+                            }
+                        }
+                    }
+
+                    // Escape stops a running turn. Stop only has a button while
+                    // the input is empty -- the moment the user types, that
+                    // slot becomes the queue Send -- so Escape is how a
+                    // runaway turn is stopped without throwing the draft away.
+                    // Armed only where the button is not, so it never competes
+                    // with the visible control.
+                    if primary == PrimaryAction::Queue && ui.input(|i| i.key_pressed(Key::Escape)) {
+                        stop_active_turn(state, runtimes, active_sid.as_ref());
                     }
 
                     // Pending project-meta sync (thinking default + effort) so the
@@ -588,5 +687,35 @@ pub(crate) fn show_input_row(
     );
     if right_band.width() > 0.0 {
         ui.painter().rect_filled(right_band, 0.0, theme().bg_base);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PrimaryAction, primary_action};
+
+    /// The whole point of the single slot: typing is what reveals queueing, and
+    /// emptying the box is what hides it again — so Stop is never competing with
+    /// a Send button, and the queue action is never dead weight when there is
+    /// nothing to queue.
+    #[test]
+    fn the_primary_slot_follows_the_input() {
+        assert_eq!(primary_action(false, false), PrimaryAction::Send);
+        assert_eq!(primary_action(false, true), PrimaryAction::Send);
+        assert_eq!(primary_action(true, false), PrimaryAction::Stop);
+        assert_eq!(primary_action(true, true), PrimaryAction::Queue);
+    }
+
+    /// Sending a queued message clears the box, which must hand the slot back to
+    /// Stop rather than leaving a Send button with nothing to send. This is what
+    /// lets several follow-ups be queued back to back mid-turn.
+    #[test]
+    fn queueing_hands_the_slot_back_to_stop() {
+        let typing = primary_action(true, true);
+        assert_eq!(typing, PrimaryAction::Queue);
+        // After the queue action the input is empty, so the next frame is Stop
+        // …until the user types the following message, which is Queue again.
+        assert_eq!(primary_action(true, false), PrimaryAction::Stop);
+        assert_eq!(primary_action(true, true), PrimaryAction::Queue);
     }
 }
