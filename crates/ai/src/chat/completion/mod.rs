@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use crate::{helpers, provider::ProviderClient};
 use autocode_core::state::{AppState, Attachment, ChatMessage, Role, TodoStatus, ToolMeta};
 
-use super::runtime::ChatRuntime;
+use super::runtime::{ChatRuntime, QueuedMessage};
 use super::session_ops::{project_root_for_session, push_error, push_runtime, push_to_session};
 use super::tools::kill_process;
 
@@ -52,18 +52,34 @@ pub fn send_message(
     if runtime.is_busy() {
         return;
     }
+    deliver_message(state, runtime, &sid, text, attachments);
+}
+
+/// Push a user message into `sid` and arm the deferred completion start.
+///
+/// Shared by `send_message` (an ordinary idle send), the queued-message
+/// auto-delivery, and "inject now", so a queued follow-up reaches the model
+/// exactly like a typed one (error cleanup, counter resets, attachments) — the
+/// only difference is which session it targets.
+pub(crate) fn deliver_message(
+    state: &mut AppState,
+    runtime: &mut ChatRuntime,
+    sid: &str,
+    text: String,
+    attachments: Vec<Attachment>,
+) {
     // Clear stale error messages from the session so the user starts fresh.
     if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
         sess.messages.retain(|m| m.role != Role::Error);
     }
     let mut msg = ChatMessage::new(
         Role::User,
-        inject_attachments(text, &attachments, state, &sid),
+        inject_attachments(text, &attachments, state, sid),
     );
     if !attachments.is_empty() {
         msg.attachments = attachments;
     }
-    push_to_session(state, Some(&sid), msg);
+    push_to_session(state, Some(sid), msg);
     // Clear any stale partial response backup from a previous failed attempt.
     runtime.continuation_chain = 0;
     runtime.continue_streak = 0;
@@ -79,8 +95,109 @@ pub fn send_message(
     runtime.last_tool_batch_signature = None;
     runtime.repeat_batch_count = 0;
     runtime.pending_loop_warning = false;
-    runtime.active_session_id = Some(sid);
+    runtime.active_session_id = Some(sid.to_string());
     runtime.pending_start = 2;
+    // This message's turn has to run before any *other* queued message goes
+    // out. Cleared when the request is handed to the provider; see
+    // `ChatRuntime::delivery_undispatched`.
+    runtime.delivery_undispatched = true;
+}
+
+// -- Queued user messages ------------------------------------------------------
+//
+// While a turn is in flight the input row's Send button becomes a queue: the
+// message is held on the runtime and delivered as the NEXT user turn the
+// moment the current one settles (see `polling::update_runtime`). This lets a
+// user keep typing without either losing the text or wedging a user message
+// into the middle of the assistant's tool-call batch.
+
+/// Hold `text` on the active session's runtime for delivery at turn end.
+pub fn queue_message(
+    state: &mut AppState,
+    runtimes: &mut HashMap<String, ChatRuntime>,
+    text: String,
+    attachments: Vec<Attachment>,
+) {
+    if text.trim().is_empty() {
+        return;
+    }
+    let Some(sid) = state.active_session_id.clone() else {
+        return;
+    };
+    let runtime = runtimes.entry(sid.clone()).or_default();
+    // Record which session owns this queue. The auto-delivery in
+    // `polling::update_runtime` targets `active_session_id`, so a runtime that
+    // has not yet stamped it (nothing sent on it this process) would otherwise
+    // hold the queued message forever. Mirrors what `deliver_message` does.
+    runtime.active_session_id = Some(sid);
+    runtime
+        .queued_messages
+        .push(QueuedMessage { text, attachments });
+}
+
+/// Remove one queued message and hand it back to the caller.
+///
+/// Used both to discard it (`cancel_queued_message`) and by the UI to pull it
+/// back into the input box for editing.
+pub fn take_queued_message(
+    runtimes: &mut HashMap<String, ChatRuntime>,
+    sid: &str,
+    index: usize,
+) -> Option<QueuedMessage> {
+    match runtimes.get_mut(sid) {
+        Some(runtime) if index < runtime.queued_messages.len() => {
+            Some(runtime.queued_messages.remove(index))
+        }
+        _ => None,
+    }
+}
+
+/// Drop one queued message without sending it.
+pub fn cancel_queued_message(runtimes: &mut HashMap<String, ChatRuntime>, sid: &str, index: usize) {
+    let _ = take_queued_message(runtimes, sid, index);
+}
+
+/// Deliver a queued message immediately instead of waiting for the current turn
+/// to finish. An in-flight turn is interrupted first — exactly like the Stop
+/// button — because a user message can never be wedged into a request that is
+/// already streaming.
+pub fn inject_queued_message_now(
+    state: &mut AppState,
+    runtimes: &mut HashMap<String, ChatRuntime>,
+    sid: &str,
+    index: usize,
+) {
+    // Delivering into a session that no longer exists would push the text into
+    // nothing and drop it on the floor, so refuse *before* taking the message off
+    // the queue — it stays visible and cancellable instead of vanishing. The
+    // auto-delivery path refuses a dead session the same way.
+    if !state.sessions.iter().any(|s| s.id == sid) {
+        return;
+    }
+    let queued = match runtimes.get_mut(sid) {
+        Some(runtime) if index < runtime.queued_messages.len() => {
+            Some(runtime.queued_messages.remove(index))
+        }
+        _ => None,
+    };
+    let Some(queued) = queued else {
+        return;
+    };
+    let busy = runtimes
+        .get(sid)
+        .is_some_and(|r| r.is_busy() || r.pending_start > 0);
+    if busy {
+        // Cancel spawned sub-agents first so their results land before the
+        // parent runtime drains (same ordering as the Stop button).
+        super::agents::settle_agents_on_stop(state, runtimes, sid);
+        if let Some(runtime) = runtimes.get_mut(sid) {
+            runtime.stopped_by_user = true;
+            runtime.drain();
+            runtime.status = "Interrupted by queued message.".into();
+        }
+    }
+    let runtime = runtimes.entry(sid.to_string()).or_default();
+    deliver_message(state, runtime, sid, queued.text, queued.attachments);
 }
 
 pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
@@ -296,6 +413,9 @@ pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
     crate::provider::api_rate_limit_record(&provider_clone, &prov_label);
     let event_rx = ProviderClient::complete(provider_clone, req);
     runtime.stream_rx = Some(event_rx);
+    // The delivery this runtime was holding now has a turn of its own in
+    // flight, so the rest of the queue may advance once it finishes.
+    runtime.delivery_undispatched = false;
     runtime.net_status.reset();
     runtime.net_status.active = true;
     runtime.status = "Waiting for response...".into();
