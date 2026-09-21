@@ -57,20 +57,29 @@ pub(crate) fn show_agent_cards(
             .inner_margin(Margin::symmetric(10, 8))
             .show(ui, |ui| {
                 ui.set_max_width(width - 20.0);
+                let mut open = false;
                 ui.horizontal(|ui| {
                     ui.add(egui::Spinner::new().size(12.0));
-                    ui.label(
-                        RichText::new(format!(
-                            "[agent] {} \u{2026} {:02}:{:02} ({})",
-                            label,
-                            elapsed / 60,
-                            elapsed % 60,
-                            status
-                        ))
-                        .size(12.0)
-                        .color(theme().tool_badge)
-                        .strong(),
+                    let title = ui.add(
+                        egui::Label::new(
+                            RichText::new(format!(
+                                "[agent] {} \u{2026} {:02}:{:02} ({})",
+                                label,
+                                elapsed / 60,
+                                elapsed % 60,
+                                status
+                            ))
+                            .size(12.0)
+                            .color(theme().tool_badge)
+                            .strong(),
+                        )
+                        .selectable(false)
+                        .sense(egui::Sense::click()),
                     );
+                    if title.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                    open |= title.clicked();
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
                             .add(
@@ -107,22 +116,28 @@ pub(crate) fn show_agent_cards(
                     });
                 });
                 if !goal.is_empty() {
-                    ui.label(
-                        RichText::new(shorten(&goal, 220))
-                            .size(11.0)
-                            .color(theme().text_secondary),
+                    let goal_resp = ui.add(
+                        egui::Label::new(
+                            RichText::new(shorten(&goal, 220))
+                                .size(11.0)
+                                .color(theme().text_secondary),
+                        )
+                        .selectable(false)
+                        .sense(egui::Sense::click()),
                     );
+                    if goal_resp.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                    open |= goal_resp.clicked();
                 }
+                open
             });
-        // Body click opens the window (buttons above take priority).
-        if ui
-            .interact(
-                card.response.rect,
-                egui::Id::new(("agent_card_body", &agent_sid)),
-                egui::Sense::click(),
-            )
-            .clicked()
-        {
+        // Clicking the card body (title / goal) opens the window. This is bound
+        // to the labels rather than a rect over the whole card: a full-card
+        // `interact` is registered after the buttons, so egui's hit-testing
+        // picks it as the topmost click target and the Cancel/Open buttons
+        // never fire.
+        if card.inner {
             panel_state.agent_windows.insert(agent_sid.clone());
         }
     }
@@ -328,5 +343,97 @@ pub fn show_windows(
         if request_close {
             panel_state.agent_windows.remove(&agent_sid);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use autocode_core::state::AgentMeta;
+
+    const SCREEN: egui::Vec2 = egui::vec2(900.0, 400.0);
+    /// Position inside the Cancel button, which sits at the right end of the
+    /// card's header row.
+    const CANCEL_POS: egui::Pos2 = egui::pos2(870.0, 20.0);
+
+    /// Render one agent card headlessly and click at `pos` across three passes
+    /// (move, press, release) so egui registers a real click.
+    fn click_card(state: &AppState, pos: egui::Pos2) -> (Option<String>, bool) {
+        let ctx = egui::Context::default();
+        let mut ps = ChatPanelState::default();
+        let sid = state.sessions[0].id.clone();
+        let handles = vec![(sid.clone(), 12u64)];
+        let mut time = 0.0f64;
+        for events in [
+            vec![egui::Event::PointerMoved(pos)],
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            }],
+            vec![egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+        ] {
+            time += 0.1;
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)),
+                time: Some(time),
+                events,
+                ..Default::default()
+            };
+            let _ = ctx.run_ui(raw, |ui| {
+                let width = ui.available_width();
+                show_agent_cards(ui, state, &handles, &mut ps, width);
+            });
+        }
+        let cancelled = ctx
+            .data(|d| {
+                d.get_temp::<Option<String>>(crate::helpers::data_id(
+                    crate::helpers::data::CANCEL_AGENT_ACTION,
+                ))
+            })
+            .flatten();
+        (cancelled, ps.agent_windows.contains(&sid))
+    }
+
+    fn running_agent_state() -> (AppState, String) {
+        let mut state = AppState::default();
+        let sid = state.create_session_for_project(None);
+        let sess = state.sessions.iter_mut().find(|s| s.id == sid).unwrap();
+        sess.label = "helper".to_string();
+        sess.agent = Some(AgentMeta {
+            parent_session_id: "parent".to_string(),
+            goal: "do the thing".to_string(),
+            status: AgentStatus::Running,
+            error: None,
+            started_at: 0,
+            finished_at: None,
+        });
+        (state, sid)
+    }
+
+    /// The card's Cancel button must receive its own clicks. A rect-wide
+    /// `interact` added after the buttons sits on top in egui's hit-testing and
+    /// swallows them, which made Cancel open the agent window instead.
+    #[test]
+    fn card_cancel_button_clicks_the_button_not_the_card() {
+        let (state, sid) = running_agent_state();
+        let (cancelled, opened) = click_card(&state, CANCEL_POS);
+        assert_eq!(cancelled.as_deref(), Some(sid.as_str()));
+        assert!(!opened, "Cancel must not open the agent window");
+    }
+
+    /// The card body (title text) remains click-to-open.
+    #[test]
+    fn card_body_opens_the_agent_window() {
+        let (state, _) = running_agent_state();
+        let (cancelled, opened) = click_card(&state, egui::pos2(100.0, 20.0));
+        assert!(cancelled.is_none(), "body click must not cancel the agent");
+        assert!(opened);
     }
 }
