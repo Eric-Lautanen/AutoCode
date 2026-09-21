@@ -18,6 +18,77 @@ use super::tabs::show_session_tabs;
 use super::theme::{FONT_LABEL, SPACE_M, theme};
 use crate::helpers;
 
+/// Gap between the floating composer overlays and the divider line above the
+/// input row. The overlays are bottom-anchored to that line, so their distance
+/// from the input is this constant plus the divider's own half-height — never a
+/// hardcoded estimate of the input row's height.
+const COMPOSER_OVERLAY_GAP: f32 = 8.0;
+
+/// Single-line preview of a queued message: collapse whitespace and cap the
+/// length, so a long follow-up can't stretch the floating popup off-screen.
+fn queued_preview(text: &str) -> String {
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut out: String = collapsed.chars().take(80).collect();
+    if collapsed.chars().count() > 80 {
+        out.push('…');
+    }
+    out
+}
+
+/// What the user asked to do with one queued message from the floating popup.
+enum QueuedAction {
+    /// Send it right away, interrupting the running turn.
+    Inject(usize),
+    /// Discard it.
+    Cancel(usize),
+    /// Pull it back into the input box so it can be edited and re-queued.
+    Edit(usize),
+}
+
+/// Clickable, single-line preview of a queued message.
+///
+/// Rendered as a plain label rather than a button so the popup's action
+/// buttons stay the only chrome; a subtle outline appears on hover to signal
+/// that the preview itself is clickable.
+/// The `+2 files` badge shown beside a queued message that is carrying
+/// attachments, or `None` when it carries none.
+fn queued_file_badge(attachments: usize) -> Option<String> {
+    match attachments {
+        0 => None,
+        1 => Some("+1 file".to_string()),
+        n => Some(format!("+{n} files")),
+    }
+}
+
+fn queued_preview_widget(ui: &mut egui::Ui, text: &str, attachments: usize) -> bool {
+    let resp = ui.add(
+        egui::Label::new(
+            RichText::new(queued_preview(text))
+                .size(FONT_LABEL)
+                .color(theme().text_primary),
+        )
+        .sense(egui::Sense::click()),
+    );
+    // A queued message carries its attachments with it, but they are staged off
+    // to the side until it is delivered — without this the files riding along
+    // are invisible, and a queue entry looks like plain text.
+    if let Some(badge) = queued_file_badge(attachments) {
+        ui.label(RichText::new(badge).size(11.0).color(theme().text_muted))
+            .on_hover_text("This queued message carries attached files");
+    }
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        ui.painter().rect_stroke(
+            resp.rect.expand(2.0),
+            3.0,
+            egui::Stroke::new(1.0, theme().accent),
+            egui::StrokeKind::Inside,
+        );
+    }
+    resp.on_hover_text("Click to edit this queued message")
+        .clicked()
+}
+
 pub fn show(
     ui: &mut egui::Ui,
     state: &mut AppState,
@@ -406,36 +477,271 @@ pub fn show(
             ui.ctx().request_repaint();
         }
 
-        // Pending attachment chips float above the input row, overlapping
-        // the chat scroll area so the input never gets pushed off-screen.
-        if !panel_state.pending_attachments.is_empty() {
+        // The divider between the transcript and the composer. It is drawn
+        // *before* the overlay below so the overlay can anchor on the line
+        // itself rather than on a guessed offset from the bottom of the panel
+        // (which drifts with the control height, font size and DPI scale).
+        // `Separator` paints its line through the centre of the band it
+        // allocates, so that centre *is* the line. (Drawing it first is
+        // otherwise a no-op: `Area` lives on its own layer, and the input row
+        // is still drawn after this.)
+        let composer_line_y = ui.separator().rect.center().y;
+        panel_state.composer_divider_y = Some(composer_line_y);
+
+        // Floating composer overlays: queued follow-up messages (each with
+        // "Inject now" / "Cancel") and the pending attachment chips. Both
+        // float above the input row, overlapping the chat scroll area, so the
+        // input never gets pushed off-screen. The queue stacks above the
+        // chips, which stay closest to the input. Queued messages represent a
+        // turn the user typed while the AI was still working; clicking "Inject
+        // now" interrupts the running turn and sends it immediately, while
+        // clicking the message itself pulls it back into the input to edit.
+        let composer_sid = state.active_session_id.clone();
+        // (text, attachment count) per queued message, in queue order.
+        let queued: Vec<(String, usize)> = composer_sid
+            .as_ref()
+            .and_then(|sid| runtimes.get(sid))
+            .map(|r| {
+                r.queued_messages
+                    .iter()
+                    .map(|q| (q.text.clone(), q.attachments.len()))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut queued_action: Option<QueuedAction> = None;
+
+        if !queued.is_empty() || !panel_state.pending_attachments.is_empty() {
+            // Only the left edge is taken from the (now post-separator) layout
+            // rect; the vertical anchor comes from the divider above.
             let avail = ui.available_rect_before_wrap();
-            egui::Area::new(panel_state.chat_panel_id.with("chips_overlay"))
-                .fixed_pos(egui::pos2(avail.left() + 10.0, avail.bottom() - 98.0))
+            let max_w = (chat_w - 40.0).max(220.0);
+            egui::Area::new(panel_state.chat_panel_id.with("composer_overlay"))
+                .fixed_pos(egui::pos2(
+                    avail.left() + 10.0,
+                    composer_line_y - COMPOSER_OVERLAY_GAP,
+                ))
                 .pivot(egui::Align2::LEFT_BOTTOM)
                 .order(egui::Order::Foreground)
                 .interactable(true)
                 .show(ui.ctx(), |ui| {
-                    egui::Frame::NONE
-                        .fill(theme().bg_base)
-                        .corner_radius(4)
-                        .stroke(egui::Stroke::new(1.0, theme().border))
-                        .inner_margin(egui::Margin::symmetric(8, 6))
-                        .shadow(egui::Shadow {
-                            offset: [0, 2],
-                            blur: 8,
-                            spread: 0,
-                            color: egui::Color32::from_black_alpha(60),
-                        })
-                        .show(ui, |ui| {
-                            // Reuse the same chip renderer; it handles
-                            // horizontal wrapping and the X remove buttons.
-                            super::attachments::show_pending_chips(ui, state, panel_state);
-                        });
+                    ui.set_max_width(max_w);
+                    ui.vertical(|ui| {
+                        if !queued.is_empty() {
+                            egui::Frame::NONE
+                                .fill(theme().bg_base)
+                                .corner_radius(4)
+                                .stroke(egui::Stroke::new(1.0, theme().border))
+                                .inner_margin(egui::Margin::symmetric(8, 6))
+                                .shadow(egui::Shadow {
+                                    offset: [0, 2],
+                                    blur: 8,
+                                    spread: 0,
+                                    color: egui::Color32::from_black_alpha(60),
+                                })
+                                .show(ui, |ui| {
+                                    for (i, (text, attachments)) in queued.iter().enumerate() {
+                                        ui.horizontal(|ui| {
+                                            if queued_preview_widget(ui, text, *attachments) {
+                                                queued_action = Some(QueuedAction::Edit(i));
+                                            }
+                                            if ui.small_button("Inject now").clicked() {
+                                                queued_action = Some(QueuedAction::Inject(i));
+                                            }
+                                            if ui.small_button("Cancel").clicked() {
+                                                queued_action = Some(QueuedAction::Cancel(i));
+                                            }
+                                        });
+                                    }
+                                });
+                        }
+                        if !panel_state.pending_attachments.is_empty() {
+                            egui::Frame::NONE
+                                .fill(theme().bg_base)
+                                .corner_radius(4)
+                                .stroke(egui::Stroke::new(1.0, theme().border))
+                                .inner_margin(egui::Margin::symmetric(8, 6))
+                                .shadow(egui::Shadow {
+                                    offset: [0, 2],
+                                    blur: 8,
+                                    spread: 0,
+                                    color: egui::Color32::from_black_alpha(60),
+                                })
+                                .show(ui, |ui| {
+                                    // Reuse the same chip renderer; it handles
+                                    // horizontal wrapping and the X remove
+                                    // buttons.
+                                    super::attachments::show_pending_chips(
+                                        ui,
+                                        state,
+                                        panel_state,
+                                    );
+                                });
+                        }
+                    });
                 });
         }
+        // Apply the queue action outside the overlay's borrow of `runtimes`.
+        if let Some(action) = queued_action
+            && let Some(sid) = composer_sid
+        {
+            match action {
+                QueuedAction::Inject(idx) => {
+                    autocode_ai::chat::inject_queued_message_now(state, runtimes, &sid, idx);
+                }
+                QueuedAction::Cancel(idx) => {
+                    autocode_ai::chat::cancel_queued_message(runtimes, &sid, idx);
+                }
+                QueuedAction::Edit(idx) => {
+                    // Pull the message out of the queue and back into the input
+                    // box. Its attachments return to the pending chips (skipping
+                    // any already staged) so the whole follow-up is editable.
+                    if let Some(mut queued) =
+                        autocode_ai::chat::take_queued_message(runtimes, &sid, idx)
+                    {
+                        let text = std::mem::take(&mut queued.text);
+                        if panel_state.input.trim().is_empty() {
+                            panel_state.input = text;
+                        } else {
+                            if !panel_state.input.ends_with('\n') {
+                                panel_state.input.push('\n');
+                            }
+                            panel_state.input.push_str(&text);
+                        }
+                        for att in queued.attachments {
+                            if !panel_state
+                                .pending_attachments
+                                .iter()
+                                .any(|p| p.id == att.id)
+                            {
+                                panel_state.pending_attachments.push(att);
+                            }
+                        }
+                        panel_state.wants_input_focus = true;
+                    }
+                }
+            }
+            ui.ctx().request_repaint();
+        }
 
-        ui.separator();
         show_input_row(ui, state, runtimes, panel_state, &active_sid_str, chat_w);
     }); // end push_id("chat_panel", ...)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use autocode_ai::chat::QueuedMessage;
+
+    const SCREEN: egui::Vec2 = egui::vec2(1000.0, 700.0);
+
+    /// One queued follow-up with no files — the common case.
+    fn draw_with_a_queued_message() -> (egui::Rect, f32) {
+        draw_with_queued_messages(1, 0)
+    }
+
+    fn one_attachment() -> autocode_core::state::Attachment {
+        autocode_core::state::Attachment {
+            id: "att-1".into(),
+            kind: autocode_core::state::AttachmentKind::File,
+            name: "notes.txt".into(),
+            mime: "text/plain".into(),
+            bytes: 128,
+            rel_path: "attachments/notes.txt".into(),
+        }
+    }
+
+    /// Lay the whole panel out with `queued` follow-ups pending, each carrying
+    /// `attachments` files, and hand back the queue popup's on-screen rect plus
+    /// the divider it should be hugging.
+    fn draw_with_queued_messages(queued: usize, attachments: usize) -> (egui::Rect, f32) {
+        let mut state = AppState::default();
+        let sid = state.create_session_for_project(None);
+        state.activate_session(sid.clone());
+
+        let rt = ChatRuntime {
+            active_session_id: Some(sid.clone()),
+            queued_messages: (0..queued)
+                .map(|i| QueuedMessage {
+                    text: format!("queued follow-up {i}"),
+                    attachments: (0..attachments).map(|_| one_attachment()).collect(),
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let mut runtimes: HashMap<String, ChatRuntime> = HashMap::new();
+        runtimes.insert(sid, rt);
+
+        let mut panel_state = ChatPanelState::default();
+        let ctx = egui::Context::default();
+        // Two passes: an `Area`'s rect is only readable on the frame after the
+        // one that laid it out.
+        for _ in 0..2 {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)),
+                time: Some(0.1),
+                ..Default::default()
+            };
+            let _ = ctx.run_ui(raw, |ui| {
+                show(ui, &mut state, &mut runtimes, &mut panel_state);
+            });
+        }
+
+        let overlay = ctx
+            .memory(|m| m.area_rect(panel_state.chat_panel_id.with("composer_overlay")))
+            .expect("the queue popup was laid out");
+        let divider = panel_state
+            .composer_divider_y
+            .expect("the composer divider was measured");
+        (overlay, divider)
+    }
+
+    /// The popup must be anchored to the divider line itself. Sizing it from a
+    /// fixed offset from the bottom of the panel (as it used to be) leaves it
+    /// floating in the middle of the transcript whenever the input row renders
+    /// taller than the guess.
+    #[test]
+    fn the_queue_popup_hugs_the_divider_above_the_input_row() {
+        let (overlay, divider) = draw_with_a_queued_message();
+
+        assert!(
+            (overlay.bottom() - (divider - COMPOSER_OVERLAY_GAP)).abs() < 1.0,
+            "popup bottom {} vs divider {} - gap {COMPOSER_OVERLAY_GAP}",
+            overlay.bottom(),
+            divider
+        );
+        // The panel also draws a divider under the session tabs; the composer's
+        // is the lower one, so the popup belongs near the bottom of the window.
+        assert!(divider > SCREEN.y * 0.5, "divider at {divider}");
+        assert!(overlay.left() < SCREEN.x * 0.5, "popup hugs the left edge");
+    }
+
+    /// The badge is an extra widget in the row, so the anchoring has to survive
+    /// it, and a queue that carries files must stay anchored where it was.
+    #[test]
+    fn the_popup_still_hugs_the_divider_with_files_and_several_messages() {
+        let (overlay, divider) = draw_with_queued_messages(1, 2);
+        assert!(
+            (overlay.bottom() - (divider - COMPOSER_OVERLAY_GAP)).abs() < 1.0,
+            "popup bottom {} vs divider {divider}",
+            overlay.bottom()
+        );
+
+        // Several queued messages stack *upwards* from the same anchor, so the
+        // bottom edge is the invariant and the box grows into the transcript.
+        let (stacked, divider) = draw_with_queued_messages(4, 0);
+        assert!((stacked.bottom() - (divider - COMPOSER_OVERLAY_GAP)).abs() < 1.0);
+        assert!(
+            stacked.height() > overlay.height(),
+            "a deeper queue is taller: {} vs {}",
+            stacked.height(),
+            overlay.height()
+        );
+    }
+
+    #[test]
+    fn the_attachment_badge_pluralizes() {
+        assert_eq!(queued_file_badge(0), None);
+        assert_eq!(queued_file_badge(1).as_deref(), Some("+1 file"));
+        assert_eq!(queued_file_badge(2).as_deref(), Some("+2 files"));
+    }
 }
