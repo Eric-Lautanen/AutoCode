@@ -47,7 +47,6 @@ pub struct AutocodeApp {
     pub settings: SettingsState,
     folder_picker: Option<std::sync::mpsc::Receiver<Option<String>>>,
     file_picker: Option<std::sync::mpsc::Receiver<Vec<String>>>,
-    repaint_scheduled: bool,
     sysinfo_rx: Option<std::sync::mpsc::Receiver<autocode_core::utils::sysinfo::SysInfo>>,
     prev_session_id: Option<String>,
     /// Last window title handed to the viewport, so the title command is only
@@ -104,7 +103,6 @@ impl AutocodeApp {
             settings: SettingsState::default(),
             folder_picker: None,
             file_picker: None,
-            repaint_scheduled: false,
             sysinfo_rx,
             prev_session_id: None,
             sent_window_title: None,
@@ -165,6 +163,8 @@ impl AutocodeApp {
                 state.settings_open = sess.settings_open;
                 state.show_reasoning_inline = sess.show_reasoning_inline;
                 state.show_project_tasks = sess.show_project_tasks;
+                state.show_processes = sess.show_processes;
+                state.process_user_dismissed = sess.process_user_dismissed;
             }
         }
 
@@ -448,7 +448,7 @@ impl eframe::App for AutocodeApp {
                 || !r.reasoning_buf.is_empty()
                 || !r.live_shell_buf.is_empty()
                 || r.live_tool_call.is_some()
-        });
+        }) || autocode_ai::chat::processes::has_running();
         let visible = ctx.input(|i| i.viewport().visible()).unwrap_or(true);
 
         // Placed before the launch early-return below so even a stuck
@@ -470,8 +470,11 @@ impl eframe::App for AutocodeApp {
         // renders them identically for a third of the full-UI rebuilds.
         // Input events repaint instantly regardless of tier.
         let streaming_text = self.runtimes.values().any(|r| r.stream_rx.is_some());
-        if needs_repaint {
-            self.repaint_scheduled = false;
+        if needs_repaint || any_live {
+            // While anything is live the loop must keep waking even on frames
+            // that changed nothing (a background process may produce output or
+            // finish at any moment), so schedule unconditionally rather than
+            // only on the first frame after a change.
             let delay = if !visible {
                 std::time::Duration::from_millis(2000)
             } else if streaming_text {
@@ -482,17 +485,6 @@ impl eframe::App for AutocodeApp {
                 std::time::Duration::from_millis(1000)
             };
             ctx.request_repaint_after(delay);
-        } else if any_live && !self.repaint_scheduled {
-            self.repaint_scheduled = true;
-            ctx.request_repaint_after(if visible {
-                if streaming_text {
-                    std::time::Duration::from_millis(33)
-                } else {
-                    std::time::Duration::from_millis(100)
-                }
-            } else {
-                std::time::Duration::from_millis(2000)
-            });
         }
 
         if let Some(rx) = &self.folder_picker
@@ -588,6 +580,7 @@ impl eframe::App for AutocodeApp {
         explorer::show_file_viewer(&ctx, &mut self.explorer_panel);
         tasks::show_session_tasks(&ctx, &mut self.state);
         tasks::show_project_tasks(&ctx, &mut self.state);
+        crate::processes::show(&ctx, &mut self.state);
         crate::agents::show_windows(
             &ctx,
             &mut self.state,
@@ -629,6 +622,9 @@ impl eframe::App for AutocodeApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         self.flush_pending_writes();
         self.persistence.flush();
+        // An edited system prompt reaches its project's meta.json here too, so
+        // an edit survives a crash without a per-keystroke disk write.
+        self.state.persist_system_prompt();
         {
             let prov_label = self.state.active_provider.clone();
             let model = self
@@ -643,6 +639,8 @@ impl eframe::App for AutocodeApp {
             let settings_open = self.state.settings_open;
             let show_reasoning_inline = self.state.show_reasoning_inline;
             let show_project_tasks = self.state.show_project_tasks;
+            let show_processes = self.state.show_processes;
+            let process_user_dismissed = self.state.process_user_dismissed;
             if let Some(sess) = self.state.active_session_mut() {
                 sess.provider_label = prov_label;
                 sess.model = model;
@@ -653,6 +651,8 @@ impl eframe::App for AutocodeApp {
                 sess.settings_open = settings_open;
                 sess.show_reasoning_inline = show_reasoning_inline;
                 sess.show_project_tasks = show_project_tasks;
+                sess.show_processes = show_processes;
+                sess.process_user_dismissed = process_user_dismissed;
                 sess.draft_input = self.chat_panel.input.clone();
                 sess.draft_attachments = self.chat_panel.pending_attachments.clone();
             }
@@ -667,10 +667,14 @@ impl eframe::App for AutocodeApp {
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.flush_pending_writes();
+        self.state.persist_system_prompt();
 
         for runtime in self.runtimes.values_mut() {
             runtime.drain();
         }
+        // Background processes are detached from any turn, so nothing in
+        // `drain` stops them — kill them explicitly on exit.
+        autocode_ai::chat::processes::kill_all();
 
         {
             let prov_label = self.state.active_provider.clone();
@@ -686,6 +690,8 @@ impl eframe::App for AutocodeApp {
             let settings_open = self.state.settings_open;
             let show_reasoning_inline = self.state.show_reasoning_inline;
             let show_project_tasks = self.state.show_project_tasks;
+            let show_processes = self.state.show_processes;
+            let process_user_dismissed = self.state.process_user_dismissed;
             if let Some(sess) = self.state.active_session_mut() {
                 sess.provider_label = prov_label;
                 sess.model = model;
@@ -696,6 +702,8 @@ impl eframe::App for AutocodeApp {
                 sess.settings_open = settings_open;
                 sess.show_reasoning_inline = show_reasoning_inline;
                 sess.show_project_tasks = show_project_tasks;
+                sess.show_processes = show_processes;
+                sess.process_user_dismissed = process_user_dismissed;
                 sess.draft_input = self.chat_panel.input.clone();
                 sess.draft_attachments = self.chat_panel.pending_attachments.clone();
             }

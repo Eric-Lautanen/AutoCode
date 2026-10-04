@@ -99,6 +99,8 @@ fn resolve_github_url(url: &str) -> Option<(String, Vec<(&'static str, &'static 
 pub struct ToolExecCtx<'a> {
     pub tc: &'a crate::provider::ToolCall,
     pub project_root: &'a str,
+    /// Owning session, used by `background_process` to scope its registry.
+    pub session_id: &'a str,
     pub path_cache: &'a mut autocode_core::helpers::LruPathCache,
     pub allow_escape: bool,
     pub session_named: bool,
@@ -116,6 +118,7 @@ pub fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
     let ToolExecCtx {
         tc,
         project_root,
+        session_id,
         path_cache,
         allow_escape,
         session_named,
@@ -128,6 +131,7 @@ pub fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
     let args: serde_json::Value =
         serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
     match tc.name.as_str() {
+        "background_process" => crate::chat::processes::tool_execute(project_root, session_id, tc),
         "read_file" => {
             let raw_path = match args["path"].as_str() {
                 Some(p) => p,

@@ -15,7 +15,8 @@ It's not trying to be clever. It's trying to be durable. Transient errors retry 
 
 | Category | What it does |
 |----------|-------------|
-| **AI Coding** | Read, write, edit (7-strategy fuzzy patching), search, and execute code via 25 built-in tools |
+| **AI Coding** | Read, write, edit (7-strategy fuzzy patching), search, and execute code via 26 built-in tools |
+| **Background Processes** | `background_process` starts long-running commands (dev servers, watchers, jobs) detached from the turn; live status/kill panel, output tail, and an automatic `process` turn when one exits |
 | **Sub-Agents** | `spawn_agent` runs autonomous child agents in their own session/context (nested under the parent); multiple run concurrently (cap 4) with cancel + lifecycle handling |
 | **Context Attachments** | "+" button and drag-drop attach files/images to a message; vision models receive `image_url` content-parts, others get labeled text blocks |
 | **Parallel Tools** | Non-shell tool batches run concurrently on scoped threads; provider requests gated by a hand-rolled permit semaphore (cap 16) |
@@ -75,6 +76,7 @@ Built in **Rust 2024** with **egui 0.34** / **eframe 0.34**. Zero async — all 
 - **LRU looping window** — scoring-based pruning when crossing configurable context thresholds. One group removed per trigger (constant across all levels); the three levels differ only in the context-usage trigger threshold (65/75/85%) and the recency-floor size (20/30/40% of recent groups protected). `FileAccessLog` tracks the working set. Breadcrumb markers replace removed content. 3 aggressiveness levels (Conservative / Balanced / Aggressive).
 - **Sub-agents** — `spawn_agent` creates full child `Session`s + `ChatRuntime`s nested under the parent session directory; the tool call is split out before the file-tool dispatcher, the parent pauses until the last agent settles, and rejection-at-cap / cancel / lifecycle handling keep everything on the disk-truth model.
 - **Parallel tool dispatch** — non-shell tool batches are partitioned into path-conflict groups and executed concurrently on `std::thread::scope` workers (`chat/tools/parallel.rs`), then committed in request order; provider requests pass through a hand-rolled permit gate (`provider/permits.rs`, cap 16, cancel-aware).
+- **Background processes** — `background_process` runs long-lived commands detached from the turn. A global manager owns the live receivers and records (they cannot survive a restart, so nothing is persisted); the per-frame pump drains output, enqueues completion as a synthetic `Role::Process` item on the session's message queue (so it rides the same delivery path as a user follow-up and can be injected early), writes it straight to the transcript for a background tab, reassigns processes across a handoff, and kills them on session deletion or app exit. Self-completed processes are dropped from the list once their result is delivered. The tool is disabled for sub-agents, which could otherwise orphan a process.
 - **Context attachments** — staged file/image bytes copy into the session `attachments/` dir (same lifecycle as messages); at send time they assemble into OpenAI content-parts — `image_url` for vision-capable models, labeled text blocks otherwise. Model vision support flows through `ModelManifest.supports_vision` → `provider_file::ModelEntry` → `merge_manifest`.
 
 ### Data Flow
@@ -97,7 +99,7 @@ Settings are persisted across restarts. Most settings in `app.ron`; **provider c
 |-----|----------------------|
 | **Providers** | API keys, models, rate limits, thinking API mode, handoff %, sampling params, **LRU aggressiveness per model (Conservative/Balanced/Aggressive)** |
 | **Projects** | Add/manage project directories via native folder picker |
-| **Prompts** | System prompt, handoff trigger, handoff continuation, connection drop prompts |
+| **Prompts** | System prompt (**per project** — stored in that project's `meta.json`, with an app-wide default for projects that have not been given one) + handoff trigger, handoff continuation, connection drop prompts |
 | **Session** | Display window size (default 50 messages), completion delay, web rate limit, disk write rate |
 | **Timeouts** | Stream idle, request max, tool timeout, shell timeout (default + max), retries |
 | **About** | Version, renderer, system info, OpenGL check |
@@ -112,7 +114,7 @@ Settings are persisted across restarts. Most settings in `app.ron`; **provider c
     ├── providers.json           # provider configs + API keys (plaintext)
     └── projects/
         └── <data_dir>/
-            ├── meta.json
+            ├── meta.json                # identity, project task list + this project's system prompt
             ├── sessions/
             │   └── <id>_<label>/         # one directory per session
             │       ├── session.json       # session metadata
@@ -130,12 +132,13 @@ Settings are persisted across restarts. Most settings in `app.ron`; **provider c
 - Atomic session file writes (temp + rename)
 - Zero confirmation prompts — designed for trusted environments
 
-## Tools (25)
+## Tools (26)
 
 | Tool | Description |
 |------|-------------|
 | `spawn_agent` | Spawn a sub-agent that works autonomously on a focused sub-goal in its own context window under this session's `agents/` folder; its final response returns verbatim as the tool result. Multiple spawns per batch run concurrently (cap 4). |
-| `run_shell` | Execute shell commands with live streaming output (scoped to builds, tests, git, and other CLI tooling — never for file I/O or code search) |
+| `run_shell` | Execute shell commands with live streaming output (scoped to builds, tests, git, and other CLI tooling — never for file I/O or code search). Blocks the turn until it finishes — use `background_process` for anything long-running. |
+| `background_process` | Start and manage long-running processes (dev servers, watch builds, long jobs) that run detached from the turn. `action='start'` returns a process id immediately; `action='status'`/`'list'` inspect output; `action='kill'` stops one or all; `action='clear'` drops finished entries. Processes that finish on their own are cleared from the list automatically once their result is delivered. The window (toolbar **Processes**) shows them live and lets the user kill them. When a process exits, its result arrives as a new `process` turn. |
 | `read_file` | Read a file with numbered lines and byte counts |
 | `read_files` | Batch read multiple files at once |
 | `read_entire_file` | Read an entire file without truncation |
@@ -168,7 +171,7 @@ AutoCode ships with built-in configs for popular providers. You can also add any
 
 ## Project Structure
 
-**~33,561 lines of Rust across 138 source files (5 crates).** See [`structure.md`](structure.md) for the full file-by-file breakdown.
+**~34,100 lines of Rust across 140 source files (5 crates).** See [`structure.md`](structure.md) for the full file-by-file breakdown.
 
 | Crate | Files | Lines | Role |
 |-------|-------|-------|------|

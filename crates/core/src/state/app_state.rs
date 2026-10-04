@@ -26,6 +26,12 @@ the schema doesn't tell you:
 - `grep` and `glob` before reading — find what you need before loading files into context.
 - `web_search` then `fetch_url` — search first to get the URL, then fetch the actual content.
 - `run_shell` exit codes matter. Read the output before proceeding.
+- Use `background_process` (not `run_shell`) for anything that must outlive the current
+  turn: dev servers, watch builds, test watchers, long jobs. It returns a process id
+  immediately and you get its result as a new `process` turn when it exits. Never
+  `run_shell` a blocking server. Never poll `background_process` to wait for it: start it,
+  keep doing other work or end your turn, and the completion turn arrives on its own even
+  after your turn has ended.
 
 ## CONTEXT AND FILE READS
 
@@ -179,7 +185,28 @@ pub struct AppState {
     pub sessions: Vec<Session>,
     pub active_session_id: Option<String>,
 
+    /// The working copy of the *active project's* system prompt. Loaded from
+    /// that project's meta.json whenever the project context changes (app load,
+    /// project switch, opening a session from another project) and written back
+    /// to it when edited — see `apply_project_system_prompt` /
+    /// `persist_system_prompt`. Not serialized: the project's meta.json is the
+    /// source of truth for prompts, this is just the copy being edited.
+    #[serde(skip)]
     pub system_prompt: String,
+
+    /// The app-wide default system prompt. Every project that has not been
+    /// given a prompt of its own falls back to this, and it is what a brand-new
+    /// project starts from. Serialized in app.ron; editable in Settings.
+    #[serde(default = "crate::helpers::default_system_prompt_string")]
+    pub default_system_prompt: String,
+
+    /// The single global prompt older builds kept in app.ron under
+    /// `system_prompt`. Read once at startup to seed `default_system_prompt`
+    /// (so a customized prompt survives the move to per-project prompts) and
+    /// never written back: `system_prompt` is now a working copy and the
+    /// project's meta.json owns the real value.
+    #[serde(rename = "system_prompt", default, skip_serializing)]
+    pub legacy_system_prompt: String,
 
     #[serde(default = "crate::helpers::default_handoff_trigger_prompt_string")]
     pub handoff_trigger_prompt: String,
@@ -219,6 +246,16 @@ pub struct AppState {
 
     #[serde(default)]
     pub show_project_tasks: bool,
+
+    /// Whether the floating background-process panel is open (per-session
+    /// working copy, mirrored from `Session::show_processes`).
+    #[serde(default)]
+    pub show_processes: bool,
+
+    /// Set when the user manually closes the process panel. Reset when a new
+    /// process starts, mirroring `todo_user_dismissed`.
+    #[serde(default)]
+    pub process_user_dismissed: bool,
 
     /// When true, reasoning/thinking content is shown inline in the chat.
     #[serde(default)]
@@ -307,6 +344,20 @@ pub struct AppState {
     /// in the UI so the main loop can persist the session meta to disk.
     #[serde(skip)]
     pub session_meta_dirty: bool,
+
+    /// Which project `system_prompt` currently holds the prompt of. `None`
+    /// until the first `apply_project_system_prompt`, which is what keeps a
+    /// project switch from flushing an unloaded (empty) working copy over the
+    /// project's stored prompt.
+    #[serde(skip)]
+    pub system_prompt_project_id: Option<String>,
+
+    /// Set when the user edits the system prompt box; cleared when the working
+    /// copy is written back to the project's meta.json. Lets the editor be a
+    /// plain `TextEdit` while the disk write happens once per save/switch
+    /// instead of once per keystroke.
+    #[serde(skip)]
+    pub system_prompt_dirty: bool,
 }
 
 impl Default for AppState {
@@ -334,6 +385,8 @@ impl Default for AppState {
             sessions: Vec::new(),
             active_session_id: None,
             system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
+            default_system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
+            legacy_system_prompt: String::new(),
             handoff_trigger_prompt: DEFAULT_HANDOFF_TRIGGER_PROMPT.to_string(),
             handoff_continuation_prompt: DEFAULT_HANDOFF_CONTINUATION_PROMPT.to_string(),
             handoff_fallback_prompt: DEFAULT_HANDOFF_FALLBACK_PROMPT.to_string(),
@@ -346,6 +399,8 @@ impl Default for AppState {
             show_todo: false,
             todo_user_dismissed: false,
             show_project_tasks: false,
+            show_processes: false,
+            process_user_dismissed: false,
             show_reasoning_inline: false,
             settings_open: false,
             sysinfo: crate::utils::sysinfo::SysInfo::default(),
@@ -365,6 +420,8 @@ impl Default for AppState {
             runtime_sessions: std::collections::HashSet::new(),
             pending_agent_runtimes: Vec::new(),
             session_meta_dirty: false,
+            system_prompt_project_id: None,
+            system_prompt_dirty: false,
         }
     }
 }
@@ -463,6 +520,19 @@ impl AppState {
         // so agent sessions are settled and their parents' JSONL pairing is
         // repaired before staleness checks ever see them.
         state.sweep_interrupted_agents();
+
+        // Per-project system prompts. Older builds stored one global prompt in
+        // app.ron; adopt it as the app-wide default once so a customized prompt
+        // survives the move, then let the active project's own prompt (if it has
+        // one) take over the working copy.
+        if !state.legacy_system_prompt.trim().is_empty()
+            && state.legacy_system_prompt != DEFAULT_SYSTEM_PROMPT
+            && state.default_system_prompt == DEFAULT_SYSTEM_PROMPT
+        {
+            state.default_system_prompt = state.legacy_system_prompt.clone();
+        }
+        state.legacy_system_prompt.clear();
+        state.apply_project_system_prompt();
 
         state
     }
@@ -786,6 +856,107 @@ impl AppState {
         meta.project_task_list = todo.clone();
         if let Err(e) = crate::storage::save_project_meta(&self.projects[proj_idx], &meta) {
             eprintln!("[state] Failed to save project task list: {}", e);
+        }
+    }
+
+    // -- Per-project system prompts -------------------------------------------
+    //
+    // A system prompt belongs to the *project*, not the app: meta.json holds a
+    // project's own prompt, and a project that has none inherits
+    // `default_system_prompt`. `self.system_prompt` is the working copy for the
+    // project named by `system_prompt_project_id` — what the settings editor
+    // binds to, and what the seeding paths read.
+
+    /// Load the active project's system prompt into the working copy.
+    ///
+    /// Called whenever the project context changes: app load, project switch,
+    /// and opening a session that belongs to another project. Whatever the
+    /// project being left had unsaved is written back first, so switching can
+    /// never lose an edit, and a project with no prompt of its own falls back to
+    /// `default_system_prompt`. A no-op while the working copy already belongs
+    /// to the active project, so callers can run it every frame.
+    pub fn apply_project_system_prompt(&mut self) {
+        let Some(pid) = self.active_project_id.clone() else {
+            return;
+        };
+        if self.system_prompt_project_id.as_deref() == Some(pid.as_str()) {
+            return;
+        }
+        self.persist_system_prompt();
+        let default = self.default_system_prompt.clone();
+        let prompt = self
+            .projects
+            .iter()
+            .find(|p| p.id == pid)
+            .and_then(crate::storage::load_project_system_prompt)
+            .unwrap_or(default);
+        self.system_prompt = prompt;
+        self.system_prompt_project_id = Some(pid);
+        self.system_prompt_dirty = false;
+    }
+
+    /// Write the working copy back to the project it belongs to (meta.json).
+    /// Skipped while nothing was edited, so it is cheap to call on every
+    /// autosave, when the settings window closes, and before a project switch.
+    pub fn persist_system_prompt(&mut self) {
+        let Some(pid) = self.system_prompt_project_id.clone() else {
+            return;
+        };
+        if !self.system_prompt_dirty {
+            return;
+        }
+        let Some(proj) = self.projects.iter().find(|p| p.id == pid) else {
+            return;
+        };
+        crate::storage::save_project_system_prompt(
+            proj,
+            &self.system_prompt,
+            &self.default_system_prompt,
+        );
+        self.system_prompt_dirty = false;
+    }
+
+    /// The system prompt a session in `project_id` should be seeded with: that
+    /// project's own prompt, or the app-wide default. Background work (a
+    /// sub-agent, a session-scoped handoff) must ask for its own project rather
+    /// than for whatever project the window happens to be showing.
+    ///
+    /// The working copy wins for the project it belongs to, so an edit made
+    /// moments ago is used even before it reaches disk.
+    pub fn system_prompt_for_project(&self, project_id: Option<&str>) -> String {
+        let Some(pid) = project_id.or(self.active_project_id.as_deref()) else {
+            return self.system_prompt.clone();
+        };
+        if self.system_prompt_project_id.as_deref() == Some(pid) {
+            return self.system_prompt.clone();
+        }
+        let default = self.default_system_prompt.clone();
+        self.projects
+            .iter()
+            .find(|p| p.id == pid)
+            .and_then(crate::storage::load_project_system_prompt)
+            .unwrap_or(default)
+    }
+
+    /// After the app-wide default changes, a project that has not been given a
+    /// prompt of its own must immediately show (and send) the new default; a
+    /// project with its own prompt keeps it. An unsaved edit to the project's
+    /// prompt is itself an override, so it wins too.
+    pub fn refresh_inherited_system_prompt(&mut self) {
+        let Some(pid) = self.system_prompt_project_id.clone() else {
+            return;
+        };
+        if self.system_prompt_dirty {
+            return;
+        }
+        let has_own = self
+            .projects
+            .iter()
+            .find(|p| p.id == pid)
+            .and_then(crate::storage::load_project_system_prompt)
+            .is_some();
+        if !has_own {
+            self.system_prompt = self.default_system_prompt.clone();
         }
     }
 

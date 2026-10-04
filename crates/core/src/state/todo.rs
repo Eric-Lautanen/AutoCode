@@ -90,6 +90,14 @@ pub struct ProjectMeta {
     /// runtime source of truth.
     #[serde(default)]
     pub project_show_reasoning_inline: bool,
+    /// This project's own system prompt. Empty means "no override": the
+    /// project inherits the app-wide default (`AppState::default_system_prompt`),
+    /// which is also what a brand-new project starts from. Written only when
+    /// the user edits the prompt while this project is active, so a project the
+    /// user never customized keeps tracking the default instead of being pinned
+    /// to a copy of it.
+    #[serde(default)]
+    pub project_system_prompt: String,
 }
 
 impl Default for ProjectMeta {
@@ -104,6 +112,7 @@ impl Default for ProjectMeta {
             project_thinking_mode: false,
             project_reasoning_effort: String::new(),
             project_show_reasoning_inline: false,
+            project_system_prompt: String::new(),
         }
     }
 }

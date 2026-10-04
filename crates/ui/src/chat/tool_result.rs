@@ -674,3 +674,202 @@ fn render_agent_card(
     }
     action
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chat::attachments::TextureCache;
+    use crate::chat::messages::{MessageAction, TranscriptCtx, render_message};
+    use autocode_core::state::{AgentMeta, AgentStatus, AppState, ChatMessage, Role, ToolMeta};
+
+    const SCREEN: egui::Vec2 = egui::vec2(900.0, 400.0);
+
+    /// A state holding one finished agent session, plus the committed
+    /// `spawn_agent` tool result the parent's transcript shows for it.
+    fn finished_agent() -> (AppState, ChatMessage) {
+        let mut state = AppState::default();
+        let sid = state.create_session_for_project(None);
+        {
+            let sess = state.sessions.iter_mut().find(|s| s.id == sid).unwrap();
+            sess.label = "helper".to_string();
+            sess.agent = Some(AgentMeta {
+                parent_session_id: "parent".to_string(),
+                goal: "find the bug".to_string(),
+                status: AgentStatus::Done,
+                error: None,
+                started_at: 0,
+                finished_at: Some(1),
+            });
+        }
+        let mut msg = ChatMessage::new(Role::Tool, "the agent's summary");
+        msg.tool_call_id = Some("call_1".to_string());
+        msg.tool_meta = Some(ToolMeta {
+            tool_name: "spawn_agent".into(),
+            file_path: Some(sid),
+            is_error: false,
+            ..Default::default()
+        });
+        (state, msg)
+    }
+
+    /// Frame-wide text runs, so a test can click a button by its label instead
+    /// of guessing pixel coordinates (and so it survives restyling).
+    fn text_rects(output: &egui::FullOutput, needle: &str) -> Vec<egui::Rect> {
+        fn walk(shape: &egui::Shape, needle: &str, out: &mut Vec<egui::Rect>) {
+            match shape {
+                egui::Shape::Text(t) if t.galley.text() == needle => {
+                    out.push(egui::Rect::from_min_size(t.pos, t.galley.size()));
+                }
+                egui::Shape::Vec(v) => {
+                    for s in v {
+                        walk(s, needle, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for clipped in &output.shapes {
+            walk(&clipped.shape, needle, &mut out);
+        }
+        out
+    }
+
+    /// One egui context driven pass by pass, so press/release state survives
+    /// between frames exactly as it does in the app.
+    struct Harness {
+        ctx: egui::Context,
+        textures: TextureCache,
+        diff_cache: DiffCache,
+        time: f64,
+    }
+
+    impl Harness {
+        fn new() -> Self {
+            Self {
+                ctx: egui::Context::default(),
+                textures: TextureCache::new(),
+                diff_cache: DiffCache::default(),
+                time: 0.0,
+            }
+        }
+
+        /// Render the message for one frame and report both what the transcript
+        /// layer was asked to do and where the button's label was painted.
+        fn pass(
+            &mut self,
+            state: &AppState,
+            msg: &ChatMessage,
+            events: Vec<egui::Event>,
+        ) -> (MessageAction, Vec<egui::Rect>) {
+            self.time += 0.1;
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)),
+                time: Some(self.time),
+                events,
+                ..Default::default()
+            };
+            let mut action = MessageAction::None;
+            let output = self.ctx.run_ui(raw, |ui| {
+                let tx = TranscriptCtx {
+                    width: SCREEN.x - 40.0,
+                    show_reasoning: false,
+                    att_dir: None,
+                    interactive: true,
+                    state,
+                };
+                action = render_message(ui, msg, &tx, &mut self.textures, &mut self.diff_cache);
+            });
+            (action, text_rects(&output, "Open transcript"))
+        }
+
+        fn press_and_release(
+            &mut self,
+            state: &AppState,
+            msg: &ChatMessage,
+            pos: egui::Pos2,
+        ) -> MessageAction {
+            self.pass(state, msg, vec![egui::Event::PointerMoved(pos)]);
+            self.pass(
+                state,
+                msg,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: Default::default(),
+                }],
+            );
+            let (action, _) = self.pass(
+                state,
+                msg,
+                vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: Default::default(),
+                }],
+            );
+            action
+        }
+    }
+
+    /// The committed agent card's "Open transcript" button must reach the
+    /// transcript layer: the window only opens if `render_message` hands the
+    /// card's action back to its caller. Dropping it there made the button a
+    /// silent no-op for every finished (or cut-off) agent — exactly the moment
+    /// the transcript matters most.
+    #[test]
+    fn the_open_transcript_button_surfaces_an_open_agent_action() {
+        let (state, msg) = finished_agent();
+        let expected = msg.tool_meta.as_ref().unwrap().file_path.clone().unwrap();
+        let mut harness = Harness::new();
+
+        let (_, labels) = harness.pass(&state, &msg, Vec::new());
+        let label = *labels
+            .first()
+            .expect("the button's label should be painted");
+
+        let action = harness.press_and_release(&state, &msg, label.center());
+        assert_eq!(
+            action,
+            MessageAction::OpenAgent(expected),
+            "clicking Open transcript must ask the transcript layer to open the agent"
+        );
+    }
+
+    /// A read-only surface (an agent window rendering a nested card) must not
+    /// offer the transcript action at all.
+    #[test]
+    fn a_read_only_card_offers_no_transcript_button() {
+        let (state, msg) = finished_agent();
+        let mut harness = Harness::new();
+        let mut tx = None;
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)),
+            time: Some(0.1),
+            ..Default::default()
+        };
+        let output = harness.ctx.run_ui(raw, |ui| {
+            let t = TranscriptCtx {
+                width: SCREEN.x - 40.0,
+                show_reasoning: false,
+                att_dir: None,
+                interactive: false,
+                state: &state,
+            };
+            tx = Some(render_message(
+                ui,
+                &msg,
+                &t,
+                &mut harness.textures,
+                &mut harness.diff_cache,
+            ));
+        });
+        assert_eq!(tx, Some(MessageAction::None));
+        assert!(
+            text_rects(&output, "Open transcript").is_empty(),
+            "an agent window must not render its own Open button"
+        );
+    }
+}

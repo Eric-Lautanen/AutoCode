@@ -78,6 +78,14 @@ pub struct Session {
     #[serde(default)]
     pub show_project_tasks: bool,
 
+    /// Whether the floating background-process panel is open.
+    #[serde(default)]
+    pub show_processes: bool,
+
+    /// Set to true when the user manually closes the process panel.
+    #[serde(default)]
+    pub process_user_dismissed: bool,
+
     /// Saved draft input text, restored on session switch.
     #[serde(default)]
     pub draft_input: String,
@@ -139,6 +147,8 @@ impl Session {
             reasoning_effort: "medium".into(),
             show_reasoning_inline: false,
             show_project_tasks: false,
+            show_processes: false,
+            process_user_dismissed: false,
             draft_input: String::new(),
             draft_attachments: Vec::new(),
             looping_window: false,

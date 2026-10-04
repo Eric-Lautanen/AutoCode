@@ -51,6 +51,8 @@ fn make_session_dir(project: &Project, label: &str) -> (SessionMeta, PathBuf) {
         reasoning_effort: String::new(),
         show_reasoning_inline: false,
         show_project_tasks: false,
+        show_processes: false,
+        process_user_dismissed: false,
         draft_input: String::new(),
         draft_attachments: Vec::new(),
         looping_window: false,

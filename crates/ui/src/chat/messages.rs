@@ -6,8 +6,8 @@
 use std::path::PathBuf;
 
 use egui::{
-    Align2, Color32, CursorIcon, FontId, Frame, Margin, Pos2, Rect, RichText, Sense, Stroke, Vec2,
-    vec2,
+    Align2, CollapsingHeader, Color32, CursorIcon, FontId, Frame, Margin, Pos2, Rect, RichText,
+    Sense, Stroke, Vec2, vec2,
 };
 
 use autocode_core::helpers::sanitize_display_text;
@@ -19,7 +19,7 @@ use crate::theme::{Palette, ROUND_SM};
 use super::attachments::{TextureCache, show_bubble_attachments};
 use super::diff_view::DiffCache;
 use super::markdown::render_markdown;
-use super::theme::{FONT_LABEL, FONT_SMALL, SPACE_M, SPACE_XS, theme};
+use super::theme::{FONT_LABEL, FONT_META, FONT_SMALL, SPACE_M, SPACE_XS, theme};
 use super::tool_result::render_tool_result;
 
 /// What the transcript loop should do after rendering a message.
@@ -83,15 +83,100 @@ pub(crate) fn render_message(
             MessageAction::None
         }
         ChatRole::Tool => {
-            ui.push_id(msg.id, |ui| render_tool_result(ui, msg, ctx, diff_cache));
-            MessageAction::None
+            // The tool card owns its own action (the spawn_agent card's "Open
+            // transcript" button). It must be returned, not dropped: losing it
+            // here silently made every agent card's Open button a no-op.
+            ui.push_id(msg.id, |ui| render_tool_result(ui, msg, ctx, diff_cache))
+                .inner
         }
         ChatRole::System => MessageAction::None,
+        ChatRole::Process => {
+            show_process_notice(ui, msg, ctx.width);
+            MessageAction::None
+        }
         ChatRole::Error => {
             render_error_card(ui, msg, ctx.width);
             MessageAction::None
         }
     }
+}
+
+/// Captured process output longer than this many lines is collapsed by
+/// default; the summary lines always stay visible so status/exit is never
+/// hidden behind a disclosure triangle.
+const PROCESS_OUTPUT_COLLAPSE_LINES: usize = 12;
+
+/// Split a process notice into its summary and its captured output.
+///
+/// `processes::notice_content` indents captured output by four spaces under an
+/// "output (...)" heading; everything shallower is the summary (process label,
+/// command, cwd, status). Splitting on that indent keeps a multi-process notice
+/// readable — every process's status line stays in the summary while only the
+/// bulky output collapses.
+fn split_process_notice(content: &str) -> (String, String) {
+    let mut summary = String::new();
+    let mut output = String::new();
+    for line in content.lines() {
+        if line.starts_with("    ") {
+            output.push_str(line);
+            output.push('\n');
+        } else {
+            summary.push_str(line);
+            summary.push('\n');
+        }
+    }
+    (summary, output)
+}
+
+/// A background-process completion turn. Rendered as its own framed card with a
+/// "process" badge so it reads as a system event rather than a user message,
+/// even though it travels to the provider as one. Long captured output is
+/// collapsed behind a header (like a file-read card) so a chatty process cannot
+/// fill the transcript with its tail.
+fn show_process_notice(ui: &mut egui::Ui, msg: &ChatMessage, width: f32) {
+    const PROCESS_COLOR: Color32 = Color32::from_rgb(120, 200, 160);
+    ui.push_id(msg.id, |ui| {
+        ui.add_space(SPACE_XS);
+        ui.set_max_width(width);
+        turn_header(
+            ui,
+            "process",
+            PROCESS_COLOR,
+            msg.timestamp,
+            true,
+            false,
+            &[TurnAction::Copy(
+                sanitize_display_text(strip_time_stamp(&msg.content)).to_string(),
+            )],
+        );
+        let body = sanitize_display_text(strip_time_stamp(&msg.content));
+        let (summary, output) = split_process_notice(&body);
+        let output_lines = output.lines().count();
+        Frame::NONE
+            .fill(theme().live_tool_bg)
+            .corner_radius(ROUND_SM)
+            .stroke(Stroke::new(1.0, theme().border))
+            .inner_margin(Margin::symmetric(10, 6))
+            .show(ui, |ui| {
+                ui.set_max_width(ui.available_width());
+                render_markdown(ui, &summary, true, width - 24.0);
+                if output_lines == 0 {
+                    return;
+                }
+                if output_lines > PROCESS_OUTPUT_COLLAPSE_LINES {
+                    CollapsingHeader::new(
+                        RichText::new(format!("output, {output_lines} lines"))
+                            .size(FONT_META)
+                            .monospace(),
+                    )
+                    .id_salt(ui.auto_id_with("process_output"))
+                    .default_open(false)
+                    .show(ui, |ui| render_markdown(ui, &output, true, width - 24.0));
+                } else {
+                    render_markdown(ui, &output, true, width - 24.0);
+                }
+            });
+    });
 }
 
 pub(crate) fn empty_state(ui: &mut egui::Ui, state: &AppState) {
@@ -388,4 +473,34 @@ fn render_error_card(ui: &mut egui::Ui, msg: &ChatMessage, width: f32) {
                     .color(theme().text_primary),
             );
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The summary (label/command/cwd/status) must stay out of the collapsed
+    /// output, so a finished process never hides its exit status behind the
+    /// disclosure triangle.
+    #[test]
+    fn process_notice_splits_summary_from_indented_output() {
+        let notice = "[Background process finished]\n\n- short5 (id=5do2z, pid=2184)\n  command: ping -n 5 127.0.0.1\n  cwd: C:\\github\\DBllm\n  status: completed | ran 5s\n  output (last 2 lines):\n    Pinging 127.0.0.1 with 32 bytes of data:\n    Reply from 127.0.0.1: bytes=32\n";
+        let (summary, output) = split_process_notice(notice);
+        assert!(summary.contains("status: completed"));
+        assert!(summary.contains("command: ping -n 5"));
+        assert!(summary.contains("output (last 2 lines):"));
+        assert!(!summary.contains("Pinging 127.0.0.1"));
+        assert_eq!(output.lines().count(), 2);
+        assert!(output.contains("Reply from 127.0.0.1"));
+    }
+
+    /// A notice with no captured output yields an empty output section, so the
+    /// card renders summary-only with no empty disclosure.
+    #[test]
+    fn process_notice_without_output_has_empty_output_section() {
+        let notice = "[Background process finished]\n\n- quiet (id=abc, pid=1)\n  status: completed | ran 1s\n  output: (none captured)\n";
+        let (summary, output) = split_process_notice(notice);
+        assert!(output.trim().is_empty());
+        assert!(summary.contains("(none captured)"));
+    }
 }

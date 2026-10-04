@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use egui::{Frame, Key, Margin, RichText, ScrollArea};
 
-use autocode_ai::chat::ChatRuntime;
+use autocode_ai::chat::{ChatRuntime, QueuedKind};
 use autocode_core::state::{AppState, Role};
 
 use super::input::show_input_row;
@@ -60,14 +60,31 @@ fn queued_file_badge(attachments: usize) -> Option<String> {
     }
 }
 
-fn queued_preview_widget(ui: &mut egui::Ui, text: &str, attachments: usize) -> bool {
+fn queued_preview_widget(
+    ui: &mut egui::Ui,
+    text: &str,
+    attachments: usize,
+    kind: QueuedKind,
+) -> bool {
+    // A process notice is machine-generated: it cannot usefully be pulled back
+    // into the input box for editing, so only a real user follow-up is
+    // click-to-edit. Both kinds stay injectable/cancellable from the row buttons.
+    let editable = kind == QueuedKind::User;
+    if kind == QueuedKind::Process {
+        ui.label(RichText::new("process").size(11.0).color(theme().accent))
+            .on_hover_text("Background-process completion, delivered as a 'process' turn");
+    }
     let resp = ui.add(
         egui::Label::new(
             RichText::new(queued_preview(text))
                 .size(FONT_LABEL)
                 .color(theme().text_primary),
         )
-        .sense(egui::Sense::click()),
+        .sense(if editable {
+            egui::Sense::click()
+        } else {
+            egui::Sense::hover()
+        }),
     );
     // A queued message carries its attachments with it, but they are staged off
     // to the side until it is delivered — without this the files riding along
@@ -76,7 +93,7 @@ fn queued_preview_widget(ui: &mut egui::Ui, text: &str, attachments: usize) -> b
         ui.label(RichText::new(badge).size(11.0).color(theme().text_muted))
             .on_hover_text("This queued message carries attached files");
     }
-    if resp.hovered() {
+    if editable && resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
         ui.painter().rect_stroke(
             resp.rect.expand(2.0),
@@ -85,8 +102,13 @@ fn queued_preview_widget(ui: &mut egui::Ui, text: &str, attachments: usize) -> b
             egui::StrokeKind::Inside,
         );
     }
-    resp.on_hover_text("Click to edit this queued message")
-        .clicked()
+    if editable {
+        resp.on_hover_text("Click to edit this queued message")
+            .clicked()
+    } else {
+        resp.on_hover_text("Waiting for the turn to finish; 'Inject now' sends it immediately");
+        false
+    }
 }
 
 pub fn show(
@@ -497,14 +519,14 @@ pub fn show(
         // now" interrupts the running turn and sends it immediately, while
         // clicking the message itself pulls it back into the input to edit.
         let composer_sid = state.active_session_id.clone();
-        // (text, attachment count) per queued message, in queue order.
-        let queued: Vec<(String, usize)> = composer_sid
+        // (text, attachment count, kind) per queued message, in queue order.
+        let queued: Vec<(String, usize, QueuedKind)> = composer_sid
             .as_ref()
             .and_then(|sid| runtimes.get(sid))
             .map(|r| {
                 r.queued_messages
                     .iter()
-                    .map(|q| (q.text.clone(), q.attachments.len()))
+                    .map(|q| (q.text.clone(), q.attachments.len(), q.kind))
                     .collect()
             })
             .unwrap_or_default();
@@ -539,9 +561,16 @@ pub fn show(
                                     color: egui::Color32::from_black_alpha(60),
                                 })
                                 .show(ui, |ui| {
-                                    for (i, (text, attachments)) in queued.iter().enumerate() {
+                                    for (i, (text, attachments, kind)) in
+                                        queued.iter().enumerate()
+                                    {
                                         ui.horizontal(|ui| {
-                                            if queued_preview_widget(ui, text, *attachments) {
+                                            if queued_preview_widget(
+                                                ui,
+                                                text,
+                                                *attachments,
+                                                *kind,
+                                            ) {
                                                 queued_action = Some(QueuedAction::Edit(i));
                                             }
                                             if ui.small_button("Inject now").clicked() {
@@ -664,6 +693,7 @@ mod tests {
                 .map(|i| QueuedMessage {
                     text: format!("queued follow-up {i}"),
                     attachments: (0..attachments).map(|_| one_attachment()).collect(),
+                    kind: autocode_ai::chat::QueuedKind::User,
                 })
                 .collect(),
             ..Default::default()

@@ -150,7 +150,7 @@ fn count_request_input_tokens(
         .filter(|m| m.role != Role::Error)
         .map(|m| {
             let mut obj = serde_json::json!({
-                "role": m.role.label(),
+                "role": m.role.wire_label(),
                 "content": m.content,
             });
             // Mirror the completion wire shape exactly when the message

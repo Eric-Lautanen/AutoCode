@@ -72,6 +72,7 @@ crates/ai/src/chat/tools/mod.rs                |  10
 crates/ai/src/chat/tools/execute.rs            |1293  24 file/fs/web/skill/proof tool handlers
 crates/ai/src/chat/tools/meta.rs               | 408  ToolMeta builders
 crates/ai/src/chat/tools/parallel.rs           | 405  path-conflict grouping + `std::thread::scope` parallel executor
+crates/ai/src/chat/processes.rs                |1096  background-process manager (start/poll/kill/notice)
 crates/ai/src/chat/tools/process.rs            |  38
 crates/ai/src/chat/tools/proof.rs              |1766  Yang–Mills proof checker (verifier discovery, exec, parse, JSONL log)
 crates/ai/src/helpers/mod.rs                   |  22
@@ -87,7 +88,7 @@ crates/ai/src/provider/client.rs               | 484  request build, permit-gate
 crates/ai/src/provider/http.rs                 |1130  hand-rolled HTTP + SSE parser; text/parts request bodies
 crates/ai/src/provider/permits.rs              |  62  RAII request-concurrency gate (cap 16, cancel-aware)
 crates/ai/src/provider/rate_limit.rs           |  68
-crates/ai/src/provider/tool_defs.rs            | 110  25 tool definitions (+ agent-restricted profile)
+crates/ai/src/provider/tool_defs.rs            | 119  26 tool definitions (+ agent-restricted profile)
 crates/ai/src/provider/types.rs                 | 165  `ContentPart`, `ApiMessage.parts`
 crates/ai/src/provider/web.rs                   |1258  HTTP/network layer; headless-Chrome (CDP) SPA renderer
 ```
@@ -165,7 +166,7 @@ crates/fs/src/helpers/glob_match.rs              |  74
 crates/fs/src/helpers/levenshtein.rs            |  25
 ```
 
-## `crates/ui/` — Desktop UI (egui/eframe) (49 files, 9,270 Rust lines)
+## `crates/ui/` — Desktop UI (egui/eframe) (50 files, 9,600 Rust lines)
 
 ```
 crates/ui/Cargo.toml                            |  15
@@ -200,6 +201,7 @@ crates/ui/src/helpers/todo.rs                   |  12
 crates/ui/src/helpers/tool_result.rs            | 143
 crates/ui/src/helpers/ui_id.rs                  | 179
 crates/ui/src/helpers/widgets.rs                |  51
+crates/ui/src/processes/mod.rs                  | 383  background-process window (status, output, kill)
 crates/ui/src/settings/mod.rs                   |  11
 crates/ui/src/settings/about.rs                 | 223
 crates/ui/src/settings/projects.rs              | 209
@@ -307,15 +309,15 @@ skills/yang_mills_mass_gap.md                    |  62
 
 | Area | Files | Lines | Role |
 |------|-------|-------|------|
-| `crates/ai/` | 37 | 13,108 | AI provider clients, chat orchestration, parallel tool dispatch, sub-agents, HTTP/SSE, web scraping, LRU looping |
+| `crates/ai/` | 38 | 13,900 | AI provider clients, chat orchestration, parallel tool dispatch, sub-agents, background processes, HTTP/SSE, web scraping, LRU looping |
 | `crates/autocode/` | 2 | 13 | Windows binary entry point, icon embedding |
 | `crates/core/` | 34 | 8,473 | State types, persistence, helpers, tokenizer, sysinfo, HTML extraction, FileAccessLog, attachments |
 | `crates/fs/` | 17 | 2,697 | File explorer, shell executor, git status, skill loader |
-| `crates/ui/` | 48 | 9,270 | egui panels — chat, settings, explorer, toolbar, agent windows, attachments, todo windows |
-| **Crate subtotal (Rust)** | **138** | **33,561** | 5 crates (144 files incl. manifests) |
+| `crates/ui/` | 50 | 9,600 | egui panels — chat, settings, explorer, toolbar, agent windows, attachments, todo windows, background-process window |
+| **Crate subtotal (Rust)** | **141** | **34,600** | 5 crates (147 files incl. manifests) |
 | `skills/` | 77 | 20,156 | Skill markdown files bundled with the binary |
 | `assets/` | 11 | — | Icons, screenshot, bundled `providers.json` |
 | Root + config | 13 | ~3,617 | Workspace manifest, CI/CD, `.gitignore`, documentation |
 
-**Grand total:** ~57,300 lines across ~245 files (excluding `target/`, `.git/`, and the
+**Grand total:** ~58,400 lines across ~248 files (excluding `target/`, `.git/`, and the
 generated `Cargo.lock`).

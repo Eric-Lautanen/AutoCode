@@ -41,7 +41,7 @@ pub fn push_to_session(state: &mut AppState, session_id: Option<&str>, mut msg: 
                     .push_str(&format!("\nTime: {} UTC", crate::helpers::format_now_utc(),));
             }
         }
-        Role::Tool => {
+        Role::Tool | Role::Process => {
             msg.content
                 .push_str(&format!("\nTime: {} UTC", crate::helpers::format_now_utc(),));
         }
