@@ -7,6 +7,11 @@ pub enum Role {
     Assistant,
     Tool,
     Error,
+    /// A synthetic turn injected when a background process finishes. It is
+    /// delivered to the provider as a `user` message (see [`Role::wire_label`])
+    /// but renders in the transcript under its own "process" badge so the
+    /// completion notice is visually distinct from a real user instruction.
+    Process,
 }
 
 impl Role {
@@ -17,6 +22,17 @@ impl Role {
             Self::Assistant => "assistant",
             Self::Tool => "tool",
             Self::Error => "error",
+            Self::Process => "process",
+        }
+    }
+
+    /// The role sent to the provider. `Process` notices are wire-compatible
+    /// with a user message (OpenAI-compatible APIs only accept
+    /// system/user/assistant/tool), but keep their own display label.
+    pub fn wire_label(&self) -> &'static str {
+        match self {
+            Self::Process => "user",
+            _ => self.label(),
         }
     }
 }

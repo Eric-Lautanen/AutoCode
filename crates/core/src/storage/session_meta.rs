@@ -43,6 +43,14 @@ pub struct SessionMeta {
     #[serde(default)]
     pub show_project_tasks: bool,
 
+    /// Whether the background-process panel is open.
+    #[serde(default)]
+    pub show_processes: bool,
+
+    /// Whether the user manually closed the process panel.
+    #[serde(default)]
+    pub process_user_dismissed: bool,
+
     /// Saved draft input text, restored on session switch.
     #[serde(default)]
     pub draft_input: String,
@@ -82,6 +90,8 @@ impl SessionMeta {
             reasoning_effort: session.reasoning_effort.clone(),
             show_reasoning_inline: session.show_reasoning_inline,
             show_project_tasks: session.show_project_tasks,
+            show_processes: session.show_processes,
+            process_user_dismissed: session.process_user_dismissed,
             draft_input: session.draft_input.clone(),
             draft_attachments: session.draft_attachments.clone(),
             looping_window: session.looping_window,

@@ -544,6 +544,7 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
             runtime.continue_streak = 0;
             runtime.pending_response.clear();
             let session_id = runtime.active_session_id.as_deref().unwrap_or("");
+            let batch_session_id = session_id.to_string();
             let root = project_root_for_session(state, session_id);
 
             let allow_escape = state
@@ -589,7 +590,7 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                 for tc in normal_calls.drain(..) {
                     if matches!(
                         tc.name.as_str(),
-                        "handoff" | "todo_list" | "project_task_list"
+                        "handoff" | "todo_list" | "project_task_list" | "background_process"
                     ) {
                         rejected.push(tc);
                     } else {
@@ -822,6 +823,7 @@ pub(super) fn poll_stream(state: &mut AppState, runtime: &mut ChatRuntime) -> bo
                 std::thread::spawn(move || {
                     let ctx = super::super::tools::BatchCtx {
                         project_root: pr_clone,
+                        session_id: batch_session_id,
                         allow_escape,
                         session_named,
                         chrome_path,

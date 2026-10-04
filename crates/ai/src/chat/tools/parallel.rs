@@ -22,6 +22,7 @@ use crate::helpers;
 #[derive(Clone)]
 pub(crate) struct BatchCtx {
     pub project_root: String,
+    pub session_id: String,
     pub allow_escape: bool,
     pub session_named: bool,
     pub chrome_path: Option<String>,
@@ -74,6 +75,10 @@ fn conflict_keys(tc: &ToolCall) -> Vec<String> {
         }
         // All verifier attempts append to the same attempts.jsonl log.
         "verify_proof" => vec![normalize_key("proofs/attempts.jsonl")],
+        // Every call mutates the one global process registry: serialize them so
+        // a start/status/kill sequence inside a batch runs in the order the
+        // model wrote it.
+        "background_process" => vec!["__process_manager__".to_string()],
         _ => Vec::new(),
     }
 }
@@ -172,6 +177,7 @@ fn execute_one(
         execute_tool_with_cache(ToolExecCtx {
             tc,
             project_root: &ctx.project_root,
+            session_id: &ctx.session_id,
             path_cache: cache,
             allow_escape: ctx.allow_escape,
             session_named: ctx.session_named,
@@ -415,6 +421,7 @@ mod tests {
             .collect();
         let ctx = BatchCtx {
             project_root: dir.to_string_lossy().to_string(),
+            session_id: "test-session".to_string(),
             allow_escape: true,
             session_named: true,
             chrome_path: None,

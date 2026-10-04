@@ -18,7 +18,11 @@ pub fn ensure_session(state: &mut AppState) -> bool {
         return true;
     }
     let info = &state.sysinfo;
-    let mut prompt = state.system_prompt.clone();
+    // The prompt belongs to the session's project: a session restored from
+    // another project must be seeded with that project's prompt, not with the
+    // one the user happens to be looking at.
+    let pid = state.active_session().and_then(|s| s.project_id.clone());
+    let mut prompt = state.system_prompt_for_project(pid.as_deref());
     if !prompt.ends_with('\n') {
         prompt.push('\n');
     }
@@ -275,6 +279,8 @@ pub fn prepare_request_messages_for_session(
 /// recursively — including any agents/ subtree — and drops its agent
 /// sessions from RAM; their runtimes are reaped by update_all's zombie sweep.
 pub fn delete_session(state: &mut AppState, id: &str) {
+    // Kill and forget any background processes this session started.
+    super::processes::remove_session(id);
     // Remove the on-disk file first.
     if let Some(sess) = state.sessions.iter().find(|s| s.id == id)
         && let Some(pid) = sess.project_id.as_ref()

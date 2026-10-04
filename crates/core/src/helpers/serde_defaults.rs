@@ -39,6 +39,9 @@ pub fn default_handoff_fallback_prompt_string() -> String {
 pub fn default_loop_warning_prompt_string() -> String {
     crate::state::DEFAULT_LOOP_WARNING_PROMPT.to_string()
 }
+pub fn default_system_prompt_string() -> String {
+    crate::state::DEFAULT_SYSTEM_PROMPT.to_string()
+}
 pub fn default_thinking_mode() -> bool {
     false
 }

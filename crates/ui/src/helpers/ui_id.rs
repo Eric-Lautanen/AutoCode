@@ -99,6 +99,9 @@ pub mod data {
     /// Whether the project-tasks popup is open (bool).
     pub const PROJECT_TASKS_OPEN: &str = "ac::project_tasks_open";
 
+    /// Whether the background-process popup is open (bool).
+    pub const PROCESSES_OPEN: &str = "ac::processes_open";
+
     /// Written by an agent card's Cancel button; executed where the runtimes
     /// map is borrowable (Option<String> — agent session id).
     pub const CANCEL_AGENT_ACTION: &str = "ac::cancel_agent_action";

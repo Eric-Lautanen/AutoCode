@@ -170,6 +170,11 @@ pub(crate) fn load_new_session(
         state.show_reasoning_inline = false;
         state.show_project_tasks = false;
     }
+    // The working copy always mirrors the active project: opening a session
+    // from another project brings that project's prompt with it, and an
+    // unsaved edit to the project being left is flushed first. Cheap no-op
+    // while the project has not changed.
+    state.apply_project_system_prompt();
     purge_on_missing
 }
 

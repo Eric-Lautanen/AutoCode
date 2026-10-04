@@ -7,8 +7,10 @@ pub use completion::{
 pub use errors::{fix_provider_params, shorten_err};
 pub use looping::apply_looping_window;
 pub use polling::{update_all, update_runtime};
+pub use processes::{BackgroundProcess, ProcessStatus};
 pub use runtime::{
-    AgentHandle, AgentOutcome, BlinkKind, ChatRuntime, NetworkStatus, QueuedMessage, ToolResult,
+    AgentHandle, AgentOutcome, BlinkKind, ChatRuntime, NetworkStatus, QueuedKind, QueuedMessage,
+    ToolResult,
 };
 pub use session::{delete_session, ensure_session};
 pub use session_ops::{
@@ -25,6 +27,7 @@ mod completion;
 mod errors;
 mod looping;
 mod polling;
+pub mod processes;
 mod runtime;
 mod session;
 mod session_ops;

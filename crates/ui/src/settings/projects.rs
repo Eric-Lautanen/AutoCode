@@ -204,6 +204,9 @@ pub fn show_projects(ui: &mut egui::Ui, state: &mut AppState) {
         if state.active_project_id.as_deref() == Some(&id) {
             state.active_project_id = state.projects.last().map(|p| p.id.clone());
             state.active_session_id = None;
+            // The removed project's prompt must not linger as the working copy
+            // for whichever project becomes active now.
+            state.apply_project_system_prompt();
         }
     }
 }

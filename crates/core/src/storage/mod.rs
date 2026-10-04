@@ -16,8 +16,9 @@ pub use attachments::{
 };
 pub use discovery::{
     discover_projects_from_disk, discover_sessions_from_disk, load_project_identity,
-    load_project_meta, project_meta_path, save_project_identity, save_project_meta,
-    switch_to_project, sync_project_show_reasoning_defaults, sync_project_thinking_defaults,
+    load_project_meta, load_project_system_prompt, project_meta_path, save_project_identity,
+    save_project_meta, save_project_system_prompt, switch_to_project,
+    sync_project_show_reasoning_defaults, sync_project_thinking_defaults,
 };
 pub use messages::{
     append_messages, has_messages_file, read_all_messages, remove_messages_by_id, truncate_messages,

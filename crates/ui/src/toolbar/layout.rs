@@ -69,6 +69,17 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, runtimes: &mut HashMap<Stri
                         state.show_explorer = !state.show_explorer;
                     }
 
+                    // Background-process panel toggle.
+                    if buttons::lit_btn(ui, "Processes", state.show_processes)
+                        .on_hover_text("Show background processes started by the AI")
+                        .clicked()
+                    {
+                        state.show_processes = !state.show_processes;
+                        if state.show_processes {
+                            state.process_user_dismissed = false;
+                        }
+                    }
+
                     // Handoff toggle (lights up when enabled).
                     buttons::show_handoff_toggle(ui, state);
 

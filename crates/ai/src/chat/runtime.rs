@@ -3,13 +3,27 @@ use std::sync::mpsc::Receiver;
 use crate::provider::{CompletionStream, ToolCall};
 use autocode_core::state::{Attachment, TodoItem, ToolMeta};
 
-/// A user message held until the runtime's current turn finishes (see
+/// A message held until the runtime's current turn finishes (see
 /// `queued_messages`). Stored on the runtime so it survives across frames and
 /// is scoped to the session the turn belongs to, exactly like the turn itself.
+///
+/// A queued item is not always something the user typed: a finished background
+/// process posts its completion notice through this same queue, so the one
+/// delivery path — and the one "Inject now" affordance — covers both.
 #[derive(Clone, Debug)]
 pub struct QueuedMessage {
     pub text: String,
     pub attachments: Vec<Attachment>,
+    pub kind: QueuedKind,
+}
+
+/// What a queued item becomes when it is delivered: a real user turn, or a
+/// synthetic `Role::Process` background-process completion notice.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum QueuedKind {
+    #[default]
+    User,
+    Process,
 }
 
 /// Semantic blink state for `NetworkStatus::blink_dot()`.
@@ -648,6 +662,7 @@ mod tests {
         rt.queued_messages.push(QueuedMessage {
             text: "after you stop".into(),
             attachments: Vec::new(),
+            kind: QueuedKind::User,
         });
         assert!(rt.is_busy());
 

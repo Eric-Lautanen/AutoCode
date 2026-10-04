@@ -83,7 +83,7 @@ impl From<&ChatMessage> for ApiMessage {
         let mut tool_calls = m.tool_calls.clone();
         autocode_core::helpers::sanitize_tool_calls(&mut tool_calls);
         Self {
-            role: m.role.label().to_string(),
+            role: m.role.wire_label().to_string(),
             content: m.content.clone(),
             tool_call_id: m.tool_call_id.clone(),
             tool_calls,

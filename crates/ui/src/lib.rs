@@ -3,14 +3,15 @@
 //! Implements the egui-based user interface: chat panel with user message
 //! bubbles and inline assistant/tool content (markdown, diffs, code blocks,
 //! terminal output), settings window (6 tabs), file explorer tree with preview,
-//! floating task list, toolbar with project/session/provider pickers,
-//! and various UI helpers.
+//! floating task list, floating background-process window, toolbar with
+//! project/session/provider pickers, and various UI helpers.
 
 pub mod agents;
 pub mod app;
 pub mod chat;
 pub mod explorer;
 pub mod helpers;
+pub mod processes;
 pub mod settings;
 pub mod tasks;
 pub mod theme;

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use autocode_core::state::AppState;
 
 use super::agents;
-use super::completion::{check_auto_handoff, deliver_message, start_completion};
+use super::completion::{check_auto_handoff, deliver_queued, start_completion};
 use super::runtime::{AgentOutcome, ChatRuntime};
 
 mod shell;
@@ -119,11 +119,29 @@ pub fn update_runtime(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
         && state.sessions.iter().any(|s| s.id == sid)
     {
         let queued = runtime.queued_messages.remove(0);
-        deliver_message(state, runtime, &sid, queued.text, queued.attachments);
+        deliver_queued(state, runtime, &sid, queued);
         repaint = true;
     }
 
     repaint
+}
+
+/// Pop the process panel open when a process was started for the active
+/// session, mirroring how a new todo list raises the task window. Respects a
+/// manual dismissal until the next new start.
+fn handle_process_attention(state: &mut AppState) -> bool {
+    let sessions = super::processes::take_attention();
+    if sessions.is_empty() {
+        return false;
+    }
+    if let Some(active) = state.active_session_id.as_deref()
+        && sessions.iter().any(|s| s == active)
+    {
+        state.show_processes = true;
+        state.process_user_dismissed = false;
+        return true;
+    }
+    false
 }
 
 /// Parent-side sub-agent settlement (D3): when every child of a batch is
@@ -245,6 +263,9 @@ fn poll_agent_settlement(
 
 pub fn update_all(state: &mut AppState, runtimes: &mut HashMap<String, ChatRuntime>) -> bool {
     let mut repaint = false;
+    // Drain background-process output before anything else so the window and
+    // completion notices see this frame's events.
+    repaint |= super::processes::poll();
     // Publish runtime-owned session ids so core-side pruning (MAX_SESSIONS)
     // never evicts a session with a live runtime.
     state.runtime_sessions = runtimes.keys().cloned().collect();
@@ -282,6 +303,14 @@ pub fn update_all(state: &mut AppState, runtimes: &mut HashMap<String, ChatRunti
     agents::create_queued_runtimes(state, runtimes);
     // Settle finished sub-agents and resume their parents.
     repaint |= poll_agent_settlement(state, runtimes);
+    // Deliver background-process completion notices as their own 'process'
+    // turns. Runs after per-runtime pumping so this frame's settled state is
+    // what the delivery guard sees.
+    repaint |= super::processes::deliver_notices(state, runtimes);
+    // A newly started process pops its panel open (unless the user dismissed it).
+    if handle_process_attention(state) {
+        repaint = true;
+    }
     // Prune zombie runtimes for sessions deleted elsewhere (e.g. Settings UI).
     let valid_ids: std::collections::HashSet<String> =
         state.sessions.iter().map(|s| s.id.clone()).collect();

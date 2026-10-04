@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use crate::{helpers, provider::ProviderClient};
 use autocode_core::state::{AppState, Attachment, ChatMessage, Role, TodoStatus, ToolMeta};
 
-use super::runtime::{ChatRuntime, QueuedMessage};
+use super::runtime::{ChatRuntime, QueuedKind, QueuedMessage};
 use super::session_ops::{project_root_for_session, push_error, push_runtime, push_to_session};
 use super::tools::kill_process;
 
@@ -103,6 +103,36 @@ pub(crate) fn deliver_message(
     runtime.delivery_undispatched = true;
 }
 
+/// Push a background-process completion notice into `sid` and arm the deferred
+/// completion start. Mirrors [`deliver_message`] so the notice reaches the
+/// model exactly like a user turn (error cleanup, counter resets, rate-limit
+/// gates), with two differences: the message carries `Role::Process` so the
+/// transcript renders its own badge, and it has no attachments.
+pub(crate) fn deliver_process_notice(
+    state: &mut AppState,
+    runtime: &mut ChatRuntime,
+    sid: &str,
+    content: String,
+) {
+    if let Some(sess) = state.sessions.iter_mut().find(|s| s.id == sid) {
+        sess.messages.retain(|m| m.role != Role::Error);
+    }
+    push_to_session(state, Some(sid), ChatMessage::new(Role::Process, content));
+    runtime.continuation_chain = 0;
+    runtime.continue_streak = 0;
+    runtime.orphaned_retry_count = 0;
+    runtime.retry_after = None;
+    runtime.next_completion_allowed = None;
+    runtime.live_write_progress = None;
+    runtime.handoff_trigger_sent = false;
+    runtime.last_tool_batch_signature = None;
+    runtime.repeat_batch_count = 0;
+    runtime.pending_loop_warning = false;
+    runtime.active_session_id = Some(sid.to_string());
+    runtime.pending_start = 2;
+    runtime.delivery_undispatched = true;
+}
+
 // -- Queued user messages ------------------------------------------------------
 //
 // While a turn is in flight the input row's Send button becomes a queue: the
@@ -130,9 +160,28 @@ pub fn queue_message(
     // has not yet stamped it (nothing sent on it this process) would otherwise
     // hold the queued message forever. Mirrors what `deliver_message` does.
     runtime.active_session_id = Some(sid);
-    runtime
-        .queued_messages
-        .push(QueuedMessage { text, attachments });
+    runtime.queued_messages.push(QueuedMessage {
+        text,
+        attachments,
+        kind: QueuedKind::User,
+    });
+}
+
+/// Deliver one queued item as its own turn: a user follow-up goes out exactly
+/// like a typed message, and a process notice becomes a `Role::Process` turn
+/// (see [`deliver_process_notice`]). Shared by the auto-delivery in
+/// `polling::update_runtime` and by "inject now", so both kinds ride one code
+/// path and can never diverge.
+pub(crate) fn deliver_queued(
+    state: &mut AppState,
+    runtime: &mut ChatRuntime,
+    sid: &str,
+    queued: QueuedMessage,
+) {
+    match queued.kind {
+        QueuedKind::Process => deliver_process_notice(state, runtime, sid, queued.text),
+        QueuedKind::User => deliver_message(state, runtime, sid, queued.text, queued.attachments),
+    }
 }
 
 /// Remove one queued message and hand it back to the caller.
@@ -197,7 +246,7 @@ pub fn inject_queued_message_now(
         }
     }
     let runtime = runtimes.entry(sid.to_string()).or_default();
-    deliver_message(state, runtime, sid, queued.text, queued.attachments);
+    deliver_queued(state, runtime, sid, queued);
 }
 
 pub fn start_completion(state: &mut AppState, runtime: &mut ChatRuntime) {
@@ -505,11 +554,20 @@ pub fn handle_handoff(state: &mut AppState, runtime: &mut ChatRuntime) {
         state.activate_session(new_sid.clone());
     }
 
-    // Point the runtime at the new session before pushing messages.
+    // Point the runtime at the new session before pushing messages. Any
+    // background process the handing-off session started moves with it, so its
+    // completion notice lands on the continuation rather than a session that no
+    // longer has a runtime.
+    if let Some(old) = old_sid.as_deref() {
+        super::processes::reassign_session(old, &new_sid);
+    }
     runtime.active_session_id = Some(new_sid);
 
-    // Seed the new session with system prompt + host environment + project context.
-    let mut sys_prompt = state.system_prompt.clone();
+    // Seed the new session with system prompt + host environment + project
+    // context. The continuation session can belong to a different project than
+    // the one being viewed (a background handoff), so resolve the prompt from
+    // the handing-off session's project rather than from the active one.
+    let mut sys_prompt = state.system_prompt_for_project(old_pid.as_deref());
     if autocode_core::utils::sysinfo::is_ready() {
         if !sys_prompt.ends_with('\n') {
             sys_prompt.push('\n');
@@ -713,10 +771,17 @@ fn auto_continue_impl(
     if runtime.handoff_in_progress {
         return;
     }
-    // Only auto-nudge about remaining tasks when handoff is enabled.
-    if !state.handoff_enabled_for(runtime.active_session_id.as_deref()) {
-        return;
-    }
+    // Two different kinds of nudge live here, and only one of them belongs to
+    // handoff. "Session/project tasks remain" is a handoff-era reminder and
+    // stays behind that gate. Resuming a response that was cut off — by the
+    // output token limit, or because the text itself promises more work — is
+    // NOT a handoff feature: every session must be able to finish its turn.
+    // Most of all a sub-agent, whose entire contract is to work to completion
+    // and return a summary to its parent, and which can never hand off: gating
+    // its recovery on handoff left it stopped mid-sentence, and the settlement
+    // pass then handed the parent that abandoned text as the agent's result.
+    let session_handoff = state.handoff_enabled_for(runtime.active_session_id.as_deref());
+    let cut_short = truncated || helpers::is_incomplete_task_response(response);
     // Task lists are read from the runtime's own session and its project —
     // never the app-active ones, which may belong to a different tab.
     let session_todo = runtime
@@ -732,14 +797,10 @@ fn auto_continue_impl(
             .and_then(|s| s.project_id.clone())
     });
     let session_ptl = state.project_task_list_for(session_project.as_deref());
-    let has_todo_incomplete = session_todo.has_incomplete();
+    let has_todo_incomplete = session_handoff && session_todo.has_incomplete();
     let has_project_tasks_incomplete =
-        session_ptl.has_incomplete() && !session_todo.has_incomplete();
-    if !has_todo_incomplete
-        && !has_project_tasks_incomplete
-        && !truncated
-        && !helpers::is_incomplete_task_response(response)
-    {
+        session_handoff && session_ptl.has_incomplete() && !session_todo.has_incomplete();
+    if !has_todo_incomplete && !has_project_tasks_incomplete && !cut_short {
         // The model produced a complete response — break any silent-drop loop.
         runtime.continue_streak = 0;
         return;
@@ -760,14 +821,21 @@ fn auto_continue_impl(
     // Count consecutive continue injections. If the provider keeps silently
     // dropping (three "continue" nudges in a row with no real progress), force
     // a handoff to a fresh session instead of injecting yet another continue.
+    // That escape hatch only exists for a session that may hand off: an agent's
+    // parent holds a handle to THIS session id, so minting a fresh one would
+    // orphan the very result it is waiting for. A sub-agent relies on the
+    // continuation-chain bound above instead, which is exactly the budget a
+    // turn that keeps being cut short needs.
     runtime.continue_streak += 1;
-    if runtime.continue_streak >= 3 {
+    if session_handoff && runtime.continue_streak >= 3 {
         runtime.status = "Repeated silent drops -- forcing a fresh session.".into();
         handle_handoff(state, runtime);
         return;
     }
 
-    let msg = if has_todo_incomplete {
+    let msg = if truncated {
+        "Your last response was cut off by the output token limit. Continue exactly where you left off.".to_string()
+    } else if has_todo_incomplete {
         let (done, total) = session_todo.progress();
         format!(
             "Session tasks remain ({done}/{total} complete). Update the todo list with your next concrete steps and continue working.",
@@ -777,10 +845,10 @@ fn auto_continue_impl(
         format!(
             "Project milestones remain ({done}/{total} complete). Update project_task_list when a phase is finished and continue working.",
         )
-    } else if truncated {
-        "Your last response was cut off by the output token limit. Continue exactly where you left off.".to_string()
-    } else {
+    } else if session_handoff {
         "Continue working. Update session todo_list with your next steps.".to_string()
+    } else {
+        "Continue working and finish the task, then report your complete result.".to_string()
     };
 
     push_runtime(state, runtime, ChatMessage::new(Role::User, msg));
@@ -814,5 +882,113 @@ pub fn auto_execute(state: &mut AppState, runtime: &mut ChatRuntime, response: &
             runtime,
             ChatMessage::new(Role::Tool, format!("Files written: {}", written.join(", "))),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A session with handoff disabled — exactly what `prepare_spawn` gives a
+    /// sub-agent (D5: agents never hand off).
+    fn agent_session() -> (AppState, String, ChatRuntime) {
+        let mut state = AppState::default();
+        let sid = state.create_session_for_project(None);
+        state
+            .sessions
+            .iter_mut()
+            .find(|s| s.id == sid)
+            .unwrap()
+            .handoff_enabled = false;
+        let runtime = ChatRuntime {
+            active_session_id: Some(sid.clone()),
+            ..Default::default()
+        };
+        (state, sid, runtime)
+    }
+
+    fn continue_nudges(state: &AppState, sid: &str) -> Vec<String> {
+        state
+            .sessions
+            .iter()
+            .find(|s| s.id == sid)
+            .map(|s| {
+                s.messages
+                    .iter()
+                    .filter(|m| m.role == Role::User)
+                    .map(|m| m.content.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// A sub-agent can never hand off, so gating "keep going" on handoff left
+    /// every truncated agent turn stopped mid-work — and the settlement pass
+    /// then handed the parent that abandoned text as the agent's result.
+    /// Recovering from a cut-off response is not a handoff feature.
+    #[test]
+    fn a_truncated_agent_turn_is_continued() {
+        let (mut state, sid, mut runtime) = agent_session();
+
+        auto_continue(
+            &mut state,
+            &mut runtime,
+            "I read half of parser.rs and",
+            true,
+        );
+
+        let nudges = continue_nudges(&state, &sid);
+        assert_eq!(nudges.len(), 1, "the agent must be told to keep going");
+        assert!(nudges[0].contains("cut off by the output token limit"));
+    }
+
+    /// The same for a response that stops mid-task without hitting the output
+    /// limit: the text itself promises more work.
+    #[test]
+    fn an_agent_that_stopped_mid_task_is_continued() {
+        let (mut state, sid, mut runtime) = agent_session();
+
+        auto_continue(
+            &mut state,
+            &mut runtime,
+            "Now let me read the rest of the call sites.",
+            false,
+        );
+
+        assert_eq!(
+            continue_nudges(&state, &sid).len(),
+            1,
+            "an incomplete agent turn resumes instead of dying there"
+        );
+    }
+
+    /// A finished agent turn is not nudged: nothing here should keep a
+    /// sub-agent working past its own summary.
+    #[test]
+    fn a_complete_agent_turn_is_left_alone() {
+        let (mut state, sid, mut runtime) = agent_session();
+
+        auto_continue(
+            &mut state,
+            &mut runtime,
+            "Fixed the off-by-one in parser.rs:412. Summary: the guard read the wrong index.",
+            false,
+        );
+
+        assert!(continue_nudges(&state, &sid).is_empty());
+        assert_eq!(runtime.continuation_chain, 0);
+    }
+
+    /// Repeated cut-offs are bounded rather than nudged forever: an agent has
+    /// no handoff escape hatch, so the continuation chain is its whole budget.
+    #[test]
+    fn an_agent_cannot_be_nudged_forever() {
+        let (mut state, _sid, mut runtime) = agent_session();
+
+        for _ in 0..20 {
+            auto_continue(&mut state, &mut runtime, "part way through", true);
+        }
+
+        assert!(runtime.continuation_chain <= state.max_retries.max(5));
     }
 }

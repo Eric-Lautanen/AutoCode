@@ -31,6 +31,9 @@ pub fn switch_to_project(state: &mut AppState, project_id: &str) {
     state.show_project_tasks = false;
     state.show_todo = false;
     state.todo_user_dismissed = false;
+    // The system prompt belongs to the project being switched to. This also
+    // writes back any unsaved edit to the project being left.
+    state.apply_project_system_prompt();
 }
 
 pub fn project_meta_path(project: &Project) -> PathBuf {
@@ -60,6 +63,35 @@ pub fn load_project_meta(project: &Project) -> Option<crate::state::ProjectMeta>
     match fsutil::read_to_string(&path) {
         Ok(json) => serde_json::from_str(&json).ok(),
         Err(_) => None,
+    }
+}
+
+/// This project's own system prompt, or `None` when it has none and should
+/// inherit the app-wide default (`AppState::default_system_prompt`).
+/// An empty meta field means "no override", so a project the user never
+/// customized keeps tracking future default changes instead of being pinned to
+/// a copy of whatever the default was when it was created.
+pub fn load_project_system_prompt(project: &Project) -> Option<String> {
+    load_project_meta(project)
+        .map(|m| m.project_system_prompt)
+        .filter(|p| !p.trim().is_empty())
+}
+
+/// Store `prompt` as this project's own system prompt in meta.json, leaving the
+/// project's identity, task list and thinking defaults untouched.
+///
+/// A prompt identical to the app-wide `default` clears the override instead of
+/// storing a copy of it, so "Reset to Default" genuinely returns the project to
+/// inheriting the default rather than freezing it at today's text.
+pub fn save_project_system_prompt(project: &Project, prompt: &str, default: &str) {
+    let mut meta = load_project_meta(project).unwrap_or_default();
+    meta.project_system_prompt = if prompt == default {
+        String::new()
+    } else {
+        prompt.to_string()
+    };
+    if let Err(e) = save_project_meta(project, &meta) {
+        eprintln!("[storage] Failed to save project system prompt: {}", e);
     }
 }
 
@@ -258,6 +290,8 @@ fn session_from_meta_file(meta_path: &Path, project: &Project) -> Option<Session
         reasoning_effort: meta.reasoning_effort,
         show_reasoning_inline: meta.show_reasoning_inline,
         show_project_tasks: meta.show_project_tasks,
+        show_processes: meta.show_processes,
+        process_user_dismissed: meta.process_user_dismissed,
         draft_input: meta.draft_input,
         draft_attachments: meta.draft_attachments,
         looping_window: meta.looping_window,

@@ -179,6 +179,9 @@ pub fn show_window(ctx: &egui::Context, state: &mut AppState, settings: &mut Set
                 eprintln!("[settings] Failed to save session meta: {}", e);
             }
         }
+        // The prompt box is a plain TextEdit that only marks itself dirty;
+        // closing the window is when that edit reaches the project's meta.json.
+        state.persist_system_prompt();
     }
     if !state.settings_open {
         // Notify the chat input that a popup just closed so it can reclaim focus.

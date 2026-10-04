@@ -50,6 +50,7 @@ pub fn tool_color(tool: &str) -> Color32 {
         "write_file" => Palette::SUCCESS,
         "patch_file" | "patch_lines" => Color32::from_rgb(220, 170, 80),
         "run_shell" => Color32::from_rgb(120, 200, 160),
+        "background_process" => Color32::from_rgb(140, 200, 130),
         "delete_file" | "create_dir" | "rename_file" => Palette::WARNING,
         "grep" | "glob" => Color32::from_rgb(140, 190, 120),
         "web_search" | "fetch_url" | "search_literature" => Color32::from_rgb(110, 160, 230),

@@ -133,7 +133,9 @@ pub(crate) fn prepare_spawn(
 
     // D7 seeding via the handoff pattern: identical system prompt skeleton,
     // then the brief as a simulated USER message carrying the return contract.
-    let mut sys_prompt = state.system_prompt.clone();
+    // The agent inherits the prompt of its parent's project, which is not
+    // necessarily the project the user is viewing right now.
+    let mut sys_prompt = state.system_prompt_for_project(Some(project.id.as_str()));
     if autocode_core::utils::sysinfo::is_ready() {
         if !sys_prompt.ends_with('\n') {
             sys_prompt.push('\n');
@@ -193,13 +195,22 @@ pub(crate) fn create_queued_runtimes(
 /// True when a child runtime has no in-flight work left (terminal for
 /// settlement purposes: every continuation path re-arms synchronously within
 /// the child's own frame, so observing idleness means it finished or died).
+///
+/// This is `ChatRuntime::turn_settled` — the same single source of truth the
+/// queued-message guard uses — plus the two things that matter only here: a
+/// scheduled retry (`unsettled_reason` deliberately ignores it, because a
+/// queued message may pre-empt it, but a child mid-backoff must not be settled)
+/// and background `run_shell` tasks, which own their own completion path.
+///
+/// Every reason `unsettled_reason` names (tool results not yet committed, a
+/// buffered reply, an unanswered `tool_calls` block, display-only batch cards)
+/// is a window where a child has no channel open and so looks idle from the
+/// outside while it is still mid-task. Settlement commits the child's LAST
+/// assistant message as its result and resumes the parent, so observing
+/// idleness there does not merely report early: it cuts the agent off mid-work
+/// and hands the parent stale text as if it were the child's summary.
 pub(crate) fn child_settled(rt: &ChatRuntime) -> bool {
-    rt.stream_rx.is_none()
-        && rt.tool_rx.is_none()
-        && rt.live_shell_rx.is_none()
-        && rt.retry_after.is_none()
-        && rt.pending_start == 0
-        && rt.running_tasks.is_empty()
+    rt.turn_settled() && rt.retry_after.is_none() && rt.running_tasks.is_empty()
 }
 
 /// The agent's final assistant message: RAM display window first, disk tail
@@ -388,4 +399,99 @@ pub fn cancel_agent(
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chat::runtime::ToolResult;
+    use crate::provider::{CompletionStream, ToolCall};
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    fn tool_call() -> ToolCall {
+        ToolCall {
+            id: "call_1".into(),
+            name: "read_file".into(),
+            arguments: "{}".into(),
+        }
+    }
+
+    fn idle_child() -> ChatRuntime {
+        ChatRuntime {
+            active_session_id: Some("agent-session".into()),
+            ..Default::default()
+        }
+    }
+
+    fn assert_unsettled(why: &str, mutate: impl Fn(&mut ChatRuntime)) {
+        let mut rt = idle_child();
+        mutate(&mut rt);
+        assert!(
+            !child_settled(&rt),
+            "a child that is {why} must not be settled"
+        );
+    }
+
+    /// A child that is still mid-task must never look settled. Settlement
+    /// commits the child's last assistant message as the agent's result and
+    /// resumes the parent, so a false positive does not merely report early: it
+    /// cuts the agent off mid-work and hands the parent stale text as if it
+    /// were the agent's summary. Each case below is a window where the child has
+    /// no channel open and therefore looks idle from the outside.
+    #[test]
+    fn a_child_still_working_is_never_settled() {
+        assert!(child_settled(&idle_child()), "a finished child settles");
+
+        assert_unsettled("streaming", |rt| {
+            let (_tx, rx) = std::sync::mpsc::channel();
+            rt.stream_rx = Some(CompletionStream::new(rx, Arc::new(AtomicBool::new(false))));
+        });
+        assert_unsettled("executing a tool batch", |rt| {
+            let (_tx, rx) = std::sync::mpsc::channel();
+            rt.tool_rx = Some(rx);
+        });
+        assert_unsettled("streaming a live shell command", |rt| {
+            let (_tx, rx) = std::sync::mpsc::channel();
+            rt.live_shell_rx = Some(rx);
+        });
+        assert_unsettled("with tool results not yet committed", |rt| {
+            rt.pending_tool_results.push(ToolResult {
+                tool_call: tool_call(),
+                content: "ok".into(),
+                meta: Default::default(),
+                accessed_paths: Vec::new(),
+                todo_update: None,
+                project_todo_update: None,
+            });
+        });
+        assert_unsettled("with a tool_calls block not yet answered", |rt| {
+            rt.assistant_tool_calls_json = Some(serde_json::json!([]));
+        });
+        assert_unsettled("with shell calls still buffered", |rt| {
+            rt.pending_tool_remaining.push(tool_call());
+        });
+        assert_unsettled("with a reply still buffered", |rt| {
+            rt.pending_response = "half a summary".into();
+        });
+        assert_unsettled("with reasoning still buffered", |rt| {
+            rt.reasoning_buf = "still thinking".into();
+        });
+        assert_unsettled("with batch cards still on screen", |rt| {
+            rt.live_batch = vec!["read_file".into()];
+        });
+        assert_unsettled("still streaming a tool call", |rt| {
+            rt.live_tool_call = Some(("read_file".into(), "{}".into()));
+        });
+        assert_unsettled("waiting out a retry", |rt| {
+            rt.retry_after = Some(std::time::Instant::now() + std::time::Duration::from_secs(60));
+        });
+        assert_unsettled("with its deferred start armed", |rt| {
+            rt.pending_start = 2;
+        });
+        assert_unsettled("with a background shell task running", |rt| {
+            let (_tx, rx) = std::sync::mpsc::channel();
+            rt.running_tasks.push(("task".into(), rx, 0));
+        });
+    }
 }

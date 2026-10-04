@@ -94,7 +94,18 @@ pub(super) fn poll_tool_results(state: &mut AppState, runtime: &mut ChatRuntime)
             false
         }
         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+            // The worker thread died before reporting (a panicking tool takes
+            // its sender down with it), so the batch can never complete now.
+            // Drop the markers that describe it: leaving them set made the
+            // runtime look permanently mid-batch, which held the queued-message
+            // queue open forever and kept the sub-agent settlement pass from
+            // ever seeing the child as finished.
             runtime.tool_rx = None;
+            runtime.live_tool_call = None;
+            runtime.live_batch.clear();
+            runtime.tool_batch_start = None;
+            runtime.live_write_progress = None;
+            runtime.status = "Tool batch lost -- its worker stopped without reporting.".to_string();
             true
         }
     }
@@ -160,5 +171,42 @@ pub(super) fn commit_tool_results(state: &mut AppState, runtime: &mut ChatRuntim
         }
     } else if !still_owns_session(runtime, state) {
         runtime.drain();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A panicking tool worker takes its sender down with it, so the receiver
+    /// sees Disconnected and the batch can never complete. The markers that
+    /// describe it must be dropped: while they stay set the runtime looks
+    /// permanently mid-batch, which holds the queued-message queue open forever
+    /// and stops sub-agent settlement from ever seeing the child as finished.
+    #[test]
+    fn a_dead_tool_worker_does_not_pin_the_runtime_open() {
+        let mut state = AppState::default();
+        let sid = state.create_session_for_project(None);
+        let mut runtime = ChatRuntime {
+            active_session_id: Some(sid),
+            ..Default::default()
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        drop(tx);
+        runtime.tool_rx = Some(rx);
+        runtime.live_batch = vec!["read_file".to_string()];
+        runtime.live_tool_call = Some(("read_file".to_string(), "{}".to_string()));
+        assert!(runtime.unsettled_reason().is_some());
+
+        poll_tool_results(&mut state, &mut runtime);
+
+        assert!(runtime.tool_rx.is_none());
+        assert!(runtime.live_batch.is_empty());
+        assert!(runtime.live_tool_call.is_none());
+        assert_eq!(
+            runtime.unsettled_reason(),
+            None,
+            "a dead batch must not pin the runtime (or its child's settlement) open"
+        );
     }
 }
