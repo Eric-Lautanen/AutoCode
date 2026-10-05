@@ -1403,6 +1403,51 @@ mod tests {
         assert!(snapshot(Some(&sid)).is_empty());
     }
 
+    /// Captured output must include what a real *child program* writes, not just
+    /// what the shell itself prints.
+    ///
+    /// The test above spawns `echo`, a `cmd` builtin: the shell prints that
+    /// itself, so it was captured even while the Windows spawn flags were wrong.
+    /// A genuine console program is the case that exposes the bug -- spawned
+    /// without `CREATE_NO_WINDOW` the child was handed a brand-new console,
+    /// which discarded its redirected stdout/stderr (blank output card, empty
+    /// completion notice) and flashed a window on screen.
+    #[cfg(windows)]
+    #[test]
+    fn a_real_console_child_program_is_captured() {
+        let _g = test_guard();
+        let sid = autocode_core::helpers::generate_id();
+        let root = std::env::temp_dir().to_string_lossy().to_string();
+        // `ping` is an ordinary console program shipped with Windows, so it
+        // exercises the child-process path that `echo` cannot reach.
+        let (id, _pid) =
+            start("ping -n 2 127.0.0.1", None, "ping", &sid, &root).expect("process starts");
+
+        let mut finished = false;
+        for _ in 0..600 {
+            poll();
+            if get(&id).is_some_and(|p| p.status.is_terminal()) {
+                finished = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert!(finished, "process must reach a terminal state");
+        let captured = get(&id).map(|p| p.output).unwrap_or_default();
+        assert!(
+            !captured.trim().is_empty(),
+            "a real console child's output must be captured, got {captured:?}"
+        );
+        // ... and the completion notice has to carry it, since that is the only
+        // place the model ever sees a background process's result.
+        let notice = notice_content(std::slice::from_ref(&id));
+        assert!(
+            !notice.contains("output: (none captured"),
+            "completion notice must include the captured output, got:\n{notice}"
+        );
+        remove_session(&sid);
+    }
+
     #[test]
     fn kill_marks_a_running_process_terminal() {
         let _g = test_guard();

@@ -174,11 +174,24 @@ fn run_command_detached_inner(
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
-            // A new process group plus DETACHED_PROCESS keeps the child off the
-            // app's console so it is not signalled when the app closes.
+            // CREATE_NO_WINDOW, deliberately not DETACHED_PROCESS. This app is
+            // a GUI binary with no console of its own, and DETACHED_PROCESS
+            // leaves `cmd` -- and every console program `cmd` then starts (a
+            // python trainer, a CLI binary, ...) -- with no console at all.
+            // Windows answers that by allocating a fresh console for the child,
+            // which does two things: it puts a real window on screen, and it
+            // resets the child's standard handles, silently discarding the
+            // redirection to this process's log file. That is why the card
+            // stayed blank and the completion notice captured no output.
+            // CREATE_NO_WINDOW gives the child its own console *with no
+            // window*, so the redirects survive and nothing is displayed.
+            // CREATE_NEW_PROCESS_GROUP just keeps the child out of this
+            // process's control group. Neither flag ties the child to this app:
+            // its stdio is a real file handle, which is what lets it outlive a
+            // restart.
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
             const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
-            const DETACHED_PROCESS: u32 = 0x00000008;
-            cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
+            cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
         }
         cmd.args(["/C", &bat_str]);
         if let Some(ref d) = cwd {
