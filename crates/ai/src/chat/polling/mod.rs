@@ -140,6 +140,16 @@ pub fn update_runtime(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
         repaint = true;
     }
 
+    // Mirror any queue change into the session meta. Done after the delivery
+    // above so the post-delivery queue is what lands on disk, and driven by a
+    // marker rather than by each mutation site, so a queue change that forgets
+    // to persist cannot silently leave stale work to be re-delivered at the
+    // next launch.
+    if runtime.queue_dirty {
+        runtime.queue_dirty = false;
+        super::completion::persist_session_queue(state, runtime);
+    }
+
     repaint
 }
 
@@ -829,6 +839,28 @@ mod tests {
     /// batch passing through the stream leaves several "in-flight" markers
     /// behind one at a time, and any one of them left set would hold the queue
     /// open forever.
+    /// The pump is what writes a queue change to disk, so a marker left set
+    /// would let the on-disk copy drift away from the live queue.
+    #[test]
+    fn the_pump_writes_out_a_queue_change() {
+        let (mut state, mut runtimes, sid) = fixture();
+        let _tx = dispatch_a_turn(&mut runtimes, &sid);
+        queue_message(&mut state, &mut runtimes, "waiting".into(), Vec::new());
+        assert!(
+            runtimes[&sid].queue_dirty,
+            "queuing marks the queue for writing"
+        );
+
+        pump(&mut state, &mut runtimes, &sid);
+
+        assert!(!runtimes[&sid].queue_dirty, "the pump consumes the marker");
+        assert_eq!(
+            runtimes[&sid].queued_messages.len(),
+            1,
+            "and the live turn still holds the queue"
+        );
+    }
+
     /// A delivery whose dispatch was abandoned must not pin the queue forever.
     ///
     /// `delivery_undispatched` is set by every delivery and cleared by an actual

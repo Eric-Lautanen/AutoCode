@@ -165,6 +165,91 @@ pub fn queue_message(
         attachments,
         kind: QueuedKind::User,
     });
+    // Mirror it to disk: a queued follow-up must survive a restart rather than
+    // being lost with the process that was holding it.
+    runtime.queue_dirty = true;
+}
+
+/// Mirror a runtime's queue into its session meta so a restart still delivers
+/// it.
+///
+/// Best-effort throughout: a queue that cannot be written must never break the
+/// in-RAM delivery it is only a backup for. Sessions with no project (a scratch
+/// session, or a sub-agent) have no session file to write, so they are skipped —
+/// their queue is short-lived by construction.
+pub(crate) fn persist_session_queue(state: &AppState, runtime: &ChatRuntime) {
+    let Some(sid) = runtime.active_session_id.as_deref() else {
+        return;
+    };
+    let Some(sess) = state.sessions.iter().find(|s| s.id == sid) else {
+        return;
+    };
+    let Some(pid) = sess.project_id.as_ref() else {
+        return;
+    };
+    let Some(proj) = state.projects.iter().find(|p| p.id == *pid) else {
+        return;
+    };
+    let records: Vec<autocode_core::state::chat::PersistedQueuedMessage> = runtime
+        .queued_messages
+        .iter()
+        .map(|q| autocode_core::state::chat::PersistedQueuedMessage {
+            text: q.text.clone(),
+            attachments: q.attachments.clone(),
+            kind: match q.kind {
+                QueuedKind::User => "user".to_string(),
+                QueuedKind::Process => "process".to_string(),
+            },
+        })
+        .collect();
+    if let Err(e) = autocode_core::storage::save_session_queued_messages(proj, sess, &records) {
+        eprintln!("[chat] Failed to persist queued messages: {}", e);
+    }
+}
+
+/// Rebuild every session's runtime queue from disk after a restart, delivering
+/// later exactly what the previous run was still holding.
+///
+/// Returns how many follow-ups were restored. A session with nothing queued is
+/// left alone: restoring must not create runtimes (and therefore turns) for
+/// sessions that had no waiting work.
+pub fn restore_queued_messages(
+    state: &AppState,
+    runtimes: &mut HashMap<String, ChatRuntime>,
+) -> usize {
+    let mut restored = 0;
+    for sess in &state.sessions {
+        let Some(pid) = sess.project_id.as_ref() else {
+            continue;
+        };
+        let Some(proj) = state.projects.iter().find(|p| p.id == *pid) else {
+            continue;
+        };
+        let records = autocode_core::storage::load_session_queued_messages(proj, sess);
+        if records.is_empty() {
+            continue;
+        }
+        let runtime = runtimes.entry(sess.id.clone()).or_default();
+        // An already-live runtime (a resumed session) keeps its own queue.
+        if !runtime.queued_messages.is_empty() {
+            continue;
+        }
+        runtime.active_session_id = Some(sess.id.clone());
+        for r in records {
+            runtime.queued_messages.push(QueuedMessage {
+                text: r.text,
+                attachments: r.attachments,
+                kind: match r.kind.as_str() {
+                    "process" => QueuedKind::Process,
+                    _ => QueuedKind::User,
+                },
+            });
+            restored += 1;
+        }
+        // Already on disk: no need to write it straight back.
+        runtime.queue_dirty = false;
+    }
+    restored
 }
 
 /// Deliver one queued item as its own turn: a user follow-up goes out exactly
@@ -182,6 +267,9 @@ pub(crate) fn deliver_queued(
         QueuedKind::Process => deliver_process_notice(state, runtime, sid, queued.text),
         QueuedKind::User => deliver_message(state, runtime, sid, queued.text, queued.attachments),
     }
+    // One item left the queue: rewrite the on-disk copy so a restart does not
+    // deliver it a second time.
+    runtime.queue_dirty = true;
 }
 
 /// Remove one queued message and hand it back to the caller.
@@ -195,7 +283,11 @@ pub fn take_queued_message(
 ) -> Option<QueuedMessage> {
     match runtimes.get_mut(sid) {
         Some(runtime) if index < runtime.queued_messages.len() => {
-            Some(runtime.queued_messages.remove(index))
+            let taken = runtime.queued_messages.remove(index);
+            // Cancelled or pulled back into the input box: the on-disk copy has
+            // to follow, or a restart would resurrect what was removed.
+            runtime.queue_dirty = true;
+            Some(taken)
         }
         _ => None,
     }
@@ -946,6 +1038,92 @@ mod tests {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// A follow-up queued while the model works must survive a restart.
+    ///
+    /// The queue used to live only in RAM, so quitting the app silently
+    /// discarded a message the user had already sent — and a background
+    /// process's completion notice with it. It is now mirrored into the session
+    /// meta as it changes and rebuilt onto the runtime at launch.
+    #[test]
+    fn a_queued_follow_up_survives_a_restart() {
+        use autocode_core::state::Project;
+
+        // A private data root: this test writes real session metadata.
+        let dir = std::env::temp_dir().join(format!(
+            "autocode_queue_{}",
+            autocode_core::helpers::generate_id()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp data root");
+        autocode_core::utils::fsutil::set_exe_dir_for_test(&dir);
+
+        let proj = Project {
+            id: "proj_queue".into(),
+            name: "queue".into(),
+            root_path: String::new(),
+            created_at: 0,
+            data_dir_name: "proj_queue".into(),
+        };
+        autocode_core::storage::save_project_identity(&proj).expect("project identity");
+
+        let mut state = AppState::default();
+        state.projects.push(proj.clone());
+        state.new_session_for_project(Some(proj.id.clone()));
+        let sid = state.active_session_id.clone().expect("active session");
+        let sess = state
+            .sessions
+            .iter()
+            .find(|s| s.id == sid)
+            .cloned()
+            .expect("session");
+        // The session file the queue is written beside.
+        autocode_core::storage::save_session_meta(&proj, &sess).expect("session meta");
+
+        let mut runtimes: HashMap<String, ChatRuntime> = HashMap::new();
+        queue_message(
+            &mut state,
+            &mut runtimes,
+            "queued while you worked".into(),
+            Vec::new(),
+        );
+        let runtime = runtimes.get(&sid).expect("runtime");
+        assert!(
+            runtime.queue_dirty,
+            "a queue change must be marked for writing"
+        );
+        persist_session_queue(&state, runtime);
+
+        // An ordinary metadata save (a rename, a message push) must not wipe the
+        // queue — it is preserved from disk exactly like the todo list.
+        autocode_core::storage::save_session_meta(&proj, &sess).expect("meta save");
+        assert_eq!(
+            autocode_core::storage::load_session_queued_messages(&proj, &sess).len(),
+            1,
+            "a plain metadata save must not erase the queued follow-up"
+        );
+
+        // A restart: fresh state, the same project and session on disk, and no
+        // runtime at all yet.
+        let mut state2 = AppState::default();
+        state2.projects.push(proj);
+        state2.sessions.push(sess);
+        let mut runtimes2: HashMap<String, ChatRuntime> = HashMap::new();
+        assert_eq!(
+            restore_queued_messages(&state2, &mut runtimes2),
+            1,
+            "the follow-up must be restored from disk"
+        );
+        let restored = &runtimes2[&sid].queued_messages;
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].text, "queued while you worked");
+        assert_eq!(restored[0].kind, QueuedKind::User);
+        assert!(
+            !runtimes2[&sid].queue_dirty,
+            "restoring is not a change: nothing to write back"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The yield rule, pinned: a follow-up waiting in the queue takes the turn

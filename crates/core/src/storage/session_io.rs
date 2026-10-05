@@ -2,6 +2,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::helpers;
+use crate::state::chat::PersistedQueuedMessage;
 use crate::state::{ChatMessage, Project, Role, Session, TodoList};
 use crate::storage::messages;
 use crate::utils::fsutil;
@@ -228,15 +229,19 @@ pub fn save_session_meta(project: &Project, session: &Session) -> std::io::Resul
     fsutil::create_dir_all(&dir)?;
     let meta_path = dir.join("session.json");
 
-    // Preserve the on-disk todo_list — Session no longer carries it in RAM.
-    let existing_todo = fsutil::read_to_string(&meta_path)
+    // Preserve the fields the in-RAM Session does not carry — the todo list and
+    // the queued follow-ups. Both are owned by disk and written by their own
+    // updater, so rebuilding them from `Session` here would erase them on the
+    // next ordinary metadata save.
+    let existing = fsutil::read_to_string(&meta_path)
         .ok()
-        .and_then(|s| serde_json::from_str::<SessionMeta>(&s).ok())
-        .map(|m| m.todo_list)
-        .unwrap_or_default();
+        .and_then(|s| serde_json::from_str::<SessionMeta>(&s).ok());
 
     let mut meta = SessionMeta::from_session(session);
-    meta.todo_list = existing_todo;
+    if let Some(existing) = existing {
+        meta.todo_list = existing.todo_list;
+        meta.queued_messages = existing.queued_messages;
+    }
 
     atomic_write_json(&meta_path, &meta)
 }
@@ -279,6 +284,56 @@ pub fn save_session_todo_list(
         .unwrap_or_else(|| SessionMeta::from_session(session));
 
     meta.todo_list = todo_list.clone();
+    atomic_write_json(&path, &meta)
+}
+
+/// Load the follow-ups held on a session's runtime (session meta JSON).
+///
+/// These are the messages a restart must still deliver: a user follow-up typed
+/// while the model was working, or a background process's completion notice that
+/// had not gone out yet. An empty result means the queue was empty on disk.
+pub fn load_session_queued_messages(
+    project: &Project,
+    session: &Session,
+) -> Vec<PersistedQueuedMessage> {
+    let dir = sessions_root(project, session);
+    let path = match find_session_file(&dir, session) {
+        Some(p) => p,
+        None => return Vec::new(),
+    };
+    fsutil::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<SessionMeta>(&s).ok())
+        .map(|m| m.queued_messages)
+        .unwrap_or_default()
+}
+
+/// Persist the follow-ups held on a session's runtime, replacing whatever the
+/// previous write left behind. Reads the existing session meta and updates only
+/// this field, so it never clobbers a concurrently written field such as the
+/// todo list.
+pub fn save_session_queued_messages(
+    project: &Project,
+    session: &Session,
+    queued: &[PersistedQueuedMessage],
+) -> std::io::Result<()> {
+    let dir = sessions_root(project, session);
+    let path = match find_session_file(&dir, session) {
+        Some(p) => p,
+        None => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "session meta not found",
+            ));
+        }
+    };
+
+    let mut meta: SessionMeta = fsutil::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| SessionMeta::from_session(session));
+
+    meta.queued_messages = queued.to_vec();
     atomic_write_json(&path, &meta)
 }
 

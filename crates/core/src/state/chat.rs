@@ -111,6 +111,24 @@ pub struct Attachment {
     pub rel_path: String,
 }
 
+/// A follow-up held on a session's runtime until its current turn settles.
+///
+/// Mirrored into the session meta so a restart still delivers it: the queue is
+/// the user's own next turn (or a finished background process's result), so
+/// losing it on exit silently drops work that was already asked for. Nothing
+/// here duplicates a transcript message — the entry leaves the queue the moment
+/// it is pushed into the session as a `user`/`process` turn.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct PersistedQueuedMessage {
+    pub text: String,
+    #[serde(default)]
+    pub attachments: Vec<Attachment>,
+    /// `"user"` for a typed follow-up, `"process"` for a background-process
+    /// result. An unknown value loads as a user message.
+    #[serde(default)]
+    pub kind: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AttachmentKind {

@@ -2,7 +2,8 @@
 pub use agents::{cancel_agent, settle_agents_on_stop};
 pub use completion::{
     auto_continue, auto_execute, cancel_queued_message, check_auto_handoff, handle_handoff,
-    inject_queued_message_now, queue_message, send_message, start_completion, take_queued_message,
+    inject_queued_message_now, queue_message, restore_queued_messages, send_message,
+    start_completion, take_queued_message,
 };
 pub use errors::{fix_provider_params, shorten_err};
 pub use looping::apply_looping_window;

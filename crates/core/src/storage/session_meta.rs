@@ -1,3 +1,4 @@
+use crate::state::chat::PersistedQueuedMessage;
 use crate::state::{AgentMeta, TodoList};
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
@@ -67,6 +68,12 @@ pub struct SessionMeta {
     /// parent session's agents/ folder. Old files load with None.
     #[serde(default)]
     pub agent: Option<AgentMeta>,
+
+    /// Follow-ups held on the session's runtime until its current turn settles.
+    /// Written by the runtime whenever its queue changes and cleared as items go
+    /// out, so a restart still delivers what the user already asked for.
+    #[serde(default)]
+    pub queued_messages: Vec<PersistedQueuedMessage>,
 }
 
 impl SessionMeta {
@@ -96,6 +103,9 @@ impl SessionMeta {
             draft_attachments: session.draft_attachments.clone(),
             looping_window: session.looping_window,
             agent: session.agent.clone(),
+            // Owned by disk, like the todo list: written by its own updater, never
+            // rebuilt from the in-RAM Session.
+            queued_messages: Vec::new(),
         }
     }
 }

@@ -251,6 +251,12 @@ pub struct ChatRuntime {
     /// message too, and the next, so the model would receive several user
     /// messages in a row with no reply between them.
     pub delivery_undispatched: bool,
+    /// Set whenever `queued_messages` changes, and cleared by the pump once the
+    /// change has been mirrored into the session meta. The queue is the user's
+    /// own next turn (or a finished process's result), so it is written to disk
+    /// as it changes rather than only at shutdown: a queue that lives in RAM
+    /// alone is silently discarded when the app is killed or restarted.
+    pub queue_dirty: bool,
 }
 
 /// How many appended messages beyond the last Done's watermark still count as
@@ -308,6 +314,7 @@ impl Default for ChatRuntime {
             usage_watermark: None,
             queued_messages: Vec::new(),
             delivery_undispatched: false,
+            queue_dirty: false,
         }
     }
 }

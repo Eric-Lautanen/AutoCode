@@ -80,6 +80,10 @@ impl AutocodeApp {
         state.prune_disk_state();
         Self::restore_active_session(&mut state);
         Self::restore_background_processes(&state);
+        // A follow-up the previous run was still holding goes back on its
+        // session's queue, so the pump delivers it instead of losing it.
+        let mut runtimes: HashMap<String, autocode_ai::chat::ChatRuntime> = HashMap::new();
+        Self::restore_queued_messages(&state, &mut runtimes);
 
         let sysinfo_rx = if autocode_core::utils::sysinfo::seed_from_persisted(&state.sysinfo) {
             None
@@ -98,7 +102,7 @@ impl AutocodeApp {
 
         Self {
             state,
-            runtimes: HashMap::new(),
+            runtimes,
             chat_panel: ChatPanelState::default(),
             explorer_panel: ExplorerPanelState::default(),
             settings: SettingsState::default(),
@@ -128,6 +132,20 @@ impl AutocodeApp {
         }
         if restored > 0 {
             eprintln!("[diag] restored {} background process record(s)", restored);
+        }
+    }
+
+    /// Rebuild the runtime queues persisted in each session's meta.json, so a
+    /// follow-up typed while the model was working — or a background process's
+    /// completion notice that had not gone out yet — is still delivered after a
+    /// restart instead of being lost with the process that was holding it.
+    fn restore_queued_messages(
+        state: &AppState,
+        runtimes: &mut HashMap<String, autocode_ai::chat::ChatRuntime>,
+    ) {
+        let restored = autocode_ai::chat::restore_queued_messages(state, runtimes);
+        if restored > 0 {
+            eprintln!("[diag] restored {} queued follow-up(s)", restored);
         }
     }
 

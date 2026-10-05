@@ -57,6 +57,7 @@ fn make_session_dir(project: &Project, label: &str) -> (SessionMeta, PathBuf) {
         draft_attachments: Vec::new(),
         looping_window: false,
         agent: None,
+        queued_messages: Vec::new(),
     };
     let sess_dir = storage::project_sessions_dir(project);
     // Create the session subdirectory with metadata inside.
