@@ -79,6 +79,7 @@ impl AutocodeApp {
 
         state.prune_disk_state();
         Self::restore_active_session(&mut state);
+        Self::restore_background_processes(&state);
 
         let sysinfo_rx = if autocode_core::utils::sysinfo::seed_from_persisted(&state.sysinfo) {
             None
@@ -107,6 +108,26 @@ impl AutocodeApp {
             prev_session_id: None,
             sent_window_title: None,
             persistence,
+        }
+    }
+
+    /// Adopt background processes persisted in each project's meta.json so the
+    /// process window (and the model's `background_process list`) survive a
+    /// restart. A process still alive is reattached by PID; one that ended while
+    /// the app was closed is restored as lost and announced once.
+    fn restore_background_processes(state: &AppState) {
+        let mut restored = 0;
+        for proj in &state.projects {
+            let Some(meta) = autocode_core::storage::load_project_meta(proj) else {
+                continue;
+            };
+            if meta.background_processes.is_empty() {
+                continue;
+            }
+            restored += autocode_ai::chat::processes::restore_records(meta.background_processes);
+        }
+        if restored > 0 {
+            eprintln!("[diag] restored {} background process record(s)", restored);
         }
     }
 
@@ -672,9 +693,10 @@ impl eframe::App for AutocodeApp {
         for runtime in self.runtimes.values_mut() {
             runtime.drain();
         }
-        // Background processes are detached from any turn, so nothing in
-        // `drain` stops them — kill them explicitly on exit.
-        autocode_ai::chat::processes::kill_all();
+        // Background processes are spawned detached so they survive a restart.
+        // Persist their records (start timestamps included) instead of killing
+        // them here, so they can be listed and reconciled on the next launch.
+        autocode_ai::chat::processes::persist_all(&self.state);
 
         {
             let prov_label = self.state.active_provider.clone();

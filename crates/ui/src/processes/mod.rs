@@ -149,9 +149,8 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
                     if procs.is_empty() {
                         empty_state(ui);
                     } else {
-                        let item_w = full_w - 16.0;
                         for p in &procs {
-                            render_process(ui, p, item_w);
+                            render_process(ui, p);
                             ui.add_space(3.0);
                         }
                     }
@@ -180,7 +179,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
     }
 }
 
-fn render_process(ui: &mut egui::Ui, p: &BackgroundProcess, item_w: f32) {
+fn render_process(ui: &mut egui::Ui, p: &BackgroundProcess) {
     let (icon, color, bg_fill, border_color) = match &p.status {
         ProcessStatus::Running => (
             ">",
@@ -212,6 +211,13 @@ fn render_process(ui: &mut egui::Ui, p: &BackgroundProcess, item_w: f32) {
             Color32::from_rgba_premultiplied(40, 40, 40, 20),
             Color32::from_rgba_premultiplied(60, 60, 60, 40),
         ),
+        // Ended while the app was closed: no exit code was captured.
+        ProcessStatus::Lost => (
+            "?",
+            Palette::TEXT_MUTED,
+            Color32::from_rgba_premultiplied(40, 40, 40, 20),
+            Color32::from_rgba_premultiplied(60, 60, 60, 40),
+        ),
     };
 
     let expanded_id = egui::Id::new(("ac::process_output", &p.id));
@@ -227,55 +233,58 @@ fn render_process(ui: &mut egui::Ui, p: &BackgroundProcess, item_w: f32) {
             bottom: 7,
         })
         .show(ui, |ui| {
+            // Constrain the row to the frame's inner width so nothing bleeds
+            // past the border or under the scrollbar.
+            let item_w = ui.available_width();
             ui.set_min_width(item_w);
             ui.set_max_width(item_w);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(icon).size(12.0).color(color));
-                ui.add_space(2.0);
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(&p.label)
-                            .size(12.0)
-                            .color(Palette::TEXT_PRIMARY),
-                    )
-                    .truncate(),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if p.status == ProcessStatus::Running
-                        && ui
-                            .add(
-                                egui::Button::new(
-                                    RichText::new("Kill").size(10.5).color(Palette::ERROR),
-                                )
-                                .fill(Color32::TRANSPARENT)
-                                .stroke(Stroke::NONE)
-                                .min_size(Vec2::new(30.0, 18.0)),
+            // Lay out the trailing controls first so they reserve their width;
+            // only then does the label get the leftover space and truncate.
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if p.status == ProcessStatus::Running
+                    && ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new("Kill").size(10.5).color(Palette::ERROR),
                             )
-                            .on_hover_text("Terminate this process")
-                            .clicked()
-                    {
-                        processes::request_kill(&p.id);
-                        ui.ctx().request_repaint();
-                    }
-                    let elapsed = p.elapsed_secs();
-                    ui.label(
-                        RichText::new(format_elapsed(elapsed))
-                            .size(10.0)
-                            .color(Palette::TEXT_MUTED),
+                            .fill(Color32::TRANSPARENT)
+                            .stroke(Stroke::NONE)
+                            .min_size(Vec2::new(30.0, 18.0)),
+                        )
+                        .on_hover_text("Terminate this process")
+                        .clicked()
+                {
+                    processes::request_kill(&p.id);
+                    ui.ctx().request_repaint();
+                }
+                let elapsed = p.elapsed_secs();
+                ui.label(
+                    RichText::new(format_elapsed(elapsed))
+                        .size(10.0)
+                        .color(Palette::TEXT_MUTED),
+                );
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.label(RichText::new(icon).size(12.0).color(color));
+                    ui.add_space(2.0);
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(&p.label)
+                                .size(12.0)
+                                .color(Palette::TEXT_PRIMARY),
+                        )
+                        .truncate(),
                     );
                 });
             });
             ui.add_space(2.0);
-            ui.horizontal(|ui| {
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(format!("$ {}", p.command))
-                            .size(10.5)
-                            .color(Palette::TEXT_SECONDARY),
-                    )
-                    .truncate(),
-                );
-            });
+            ui.add(
+                egui::Label::new(
+                    RichText::new(format!("$ {}", p.command))
+                        .size(10.5)
+                        .color(Palette::TEXT_SECONDARY),
+                )
+                .truncate(),
+            );
             ui.horizontal(|ui| {
                 let mut expanded = ui.data(|d| d.get_temp::<bool>(expanded_id).unwrap_or(false));
                 let label = if expanded { "Hide" } else { "Output" };
@@ -296,6 +305,14 @@ fn render_process(ui: &mut egui::Ui, p: &BackgroundProcess, item_w: f32) {
                         .size(10.0)
                         .color(Palette::TEXT_MUTED),
                 );
+                if p.recovered {
+                    ui.label(
+                        RichText::new("(restored)")
+                            .size(10.0)
+                            .color(Palette::TEXT_MUTED),
+                    )
+                    .on_hover_text("Recovered from a previous run of AutoCode");
+                }
                 if let Some(pid) = p.pid {
                     ui.label(
                         RichText::new(format!("pid {}", pid))

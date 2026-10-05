@@ -53,12 +53,11 @@ pub fn tool_color(tool: &str) -> Color32 {
         "background_process" => Color32::from_rgb(140, 200, 130),
         "delete_file" | "create_dir" | "rename_file" => Palette::WARNING,
         "grep" | "glob" => Color32::from_rgb(140, 190, 120),
-        "web_search" | "fetch_url" | "search_literature" => Color32::from_rgb(110, 160, 230),
+        "web_search" | "fetch_url" => Color32::from_rgb(110, 160, 230),
         "todo_list" | "project_task_list" => Palette::PURPLE,
         "handoff" | "name_session" => Color32::from_rgb(200, 140, 200),
-        "get_skill" | "explore_theorem" => Color32::from_rgb(80, 190, 190),
+        "get_skill" => Color32::from_rgb(80, 190, 190),
         "spawn_agent" => Color32::from_rgb(230, 130, 170),
-        "verify_proof" => Color32::from_rgb(150, 200, 90),
         _ => Palette::TEXT_SECONDARY,
     }
 }

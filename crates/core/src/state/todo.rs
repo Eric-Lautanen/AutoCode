@@ -54,6 +54,48 @@ impl TodoList {
     }
 }
 
+/// On-disk record of a background process, persisted per project in meta.json
+/// so the process window (and the model's `background_process list`) survives an
+/// app restart. Only metadata is stored: live output lives in the process's own
+/// log file and is re-read when the record is restored.
+///
+/// `status` is a lowercase kind (`running`, `completed`, `failed`, `killed`,
+/// `lost`) rather than the AI crate's `ProcessStatus` enum, because core cannot
+/// depend on the AI crate. `exit_code`/`failure` carry the terminal detail.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct PersistedProcess {
+    pub id: String,
+    pub session_id: String,
+    pub command: String,
+    pub cwd: String,
+    pub label: String,
+    #[serde(default)]
+    pub pid: Option<u32>,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub exit_code: Option<i32>,
+    #[serde(default)]
+    pub failure: String,
+    /// Unix seconds when the process was started. This is what makes elapsed
+    /// time accurate after a restart instead of resetting to zero.
+    #[serde(default)]
+    pub created_at: u64,
+    #[serde(default)]
+    pub finished_at: Option<u64>,
+    /// Path of the process's stdout+stderr log file.
+    #[serde(default)]
+    pub log_path: String,
+    /// OS start-time fingerprint captured at spawn, used to tell a still-running
+    /// process apart from a recycled PID on restore.
+    #[serde(default)]
+    pub start_marker: String,
+    /// True once this process's completion result has been surfaced to the
+    /// model, so a restored record is not announced twice.
+    #[serde(default)]
+    pub notified: bool,
+}
+
 /// Disk-persisted project metadata stored alongside the sessions folder.
 /// Version field enables future schema evolution.
 /// Includes project identity fields so only one file (meta.json) is needed
@@ -98,6 +140,10 @@ pub struct ProjectMeta {
     /// to a copy of it.
     #[serde(default)]
     pub project_system_prompt: String,
+    /// Background processes belonging to this project's sessions, so they can be
+    /// listed and reconciled after an app restart.
+    #[serde(default)]
+    pub background_processes: Vec<PersistedProcess>,
 }
 
 impl Default for ProjectMeta {
@@ -113,6 +159,7 @@ impl Default for ProjectMeta {
             project_reasoning_effort: String::new(),
             project_show_reasoning_inline: false,
             project_system_prompt: String::new(),
+            background_processes: Vec::new(),
         }
     }
 }

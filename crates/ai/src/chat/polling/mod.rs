@@ -307,6 +307,9 @@ pub fn update_all(state: &mut AppState, runtimes: &mut HashMap<String, ChatRunti
     // turns. Runs after per-runtime pumping so this frame's settled state is
     // what the delivery guard sees.
     repaint |= super::processes::deliver_notices(state, runtimes);
+    // Flush process metadata (start/exit/kill/clear) into project meta.json when
+    // it changed, so a restart can restore the records.
+    super::processes::persist_dirty(state);
     // A newly started process pops its panel open (unless the user dismissed it).
     if handle_process_attention(state) {
         repaint = true;

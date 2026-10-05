@@ -8,17 +8,27 @@
 //
 // The manager owns the live receivers and the process records. It is a global
 // (mutex-protected) registry rather than AppState state because the receivers
-// are non-serializable thread handles and because the records describe runtime
-// resources that cannot survive an app restart. AppState only owns the window's
+// are non-serializable thread handles. AppState only owns the window's
 // visibility flags; the tool runs on a scoped worker thread and reaches the
 // manager directly.
+//
+// A background process is spawned detached with its output redirected to a log
+// file (see `ShellEvent`/`run_command_detached`), so it outlives the app. Two
+// things therefore bridge a restart: the record is persisted into its project's
+// meta.json (`persist_dirty`), and it is reconciled on the way back up
+// (`restore_records`). Elapsed time survives because it is derived from the
+// stored wall-clock start timestamp, never from a runtime `Instant`.
 
 use std::collections::HashMap;
+use std::io::{Read, Seek, SeekFrom};
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
-use autocode_core::state::AppState;
+use autocode_core::state::{AppState, PersistedProcess};
 use autocode_fs::shell::{self, ShellEvent};
+
+use super::procinfo;
 
 use super::runtime::{ChatRuntime, QueuedKind, QueuedMessage};
 use super::session_ops::push_to_session;
@@ -43,12 +53,33 @@ const MAX_LINES_PER_POLL: usize = 2000;
 /// Output lines included in a completion notice / status result.
 const NOTICE_TAIL_LINES: usize = 60;
 
+/// How often a process recovered after a restart is checked for liveness.
+/// Probing asks the OS about a PID, so it is throttled rather than run every
+/// frame.
+const PROBE_INTERVAL_SECS: u64 = 1;
+
+/// Hard cap on a running process's on-disk log. Past this the file is truncated
+/// back to empty and starts again: the recent output is already held in the
+/// in-memory buffer (`MAX_OUTPUT_BYTES`), so nothing useful is lost and a
+/// runaway process cannot fill the disk. The child keeps its append handle, so
+/// it simply continues writing from offset 0.
+const MAX_LOG_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Largest chunk of new log content consumed in a single poll. A process that
+/// outran the pump must not make one frame allocate an unbounded buffer.
+const MAX_LOG_READ_BYTES: u64 = 512 * 1024;
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum ProcessStatus {
     Running,
-    Completed { exit_code: i32 },
+    Completed {
+        exit_code: i32,
+    },
     Failed(String),
     Killed,
+    /// Running when the app last saw it, and gone now: it exited while the app
+    /// was not running, so its exit code was never captured.
+    Lost,
 }
 
 impl ProcessStatus {
@@ -63,6 +94,7 @@ impl ProcessStatus {
             Self::Completed { exit_code } => format!("completed (exit {})", exit_code),
             Self::Failed(e) => format!("failed: {}", e),
             Self::Killed => "killed".into(),
+            Self::Lost => "ended (exit code unknown)".into(),
         }
     }
 }
@@ -85,6 +117,14 @@ pub struct BackgroundProcess {
     pub kill_requested: bool,
     /// True once output was truncated at the cap.
     pub truncated: bool,
+    /// True when this record was reconstructed from disk after a restart rather
+    /// than spawned by this app run.
+    pub recovered: bool,
+    /// OS start-time fingerprint captured at spawn, used to tell our process
+    /// apart from a recycled PID when reconciling after a restart.
+    pub start_marker: String,
+    /// Path of the process's stdout+stderr log file.
+    pub log_path: String,
 }
 
 impl BackgroundProcess {
@@ -112,12 +152,24 @@ impl BackgroundProcess {
             notified: self.notified,
             kill_requested: self.kill_requested,
             truncated: self.truncated,
+            recovered: self.recovered,
+            start_marker: self.start_marker.clone(),
+            log_path: self.log_path.clone(),
         }
     }
 }
 
 struct ProcessHandle {
-    rx: Receiver<ShellEvent>,
+    /// Completion channel. Present while this app run owns the child (it carries
+    /// the exact exit code); `None` for a process recovered from disk, where
+    /// liveness is probed by PID instead.
+    rx: Option<Receiver<ShellEvent>>,
+    /// Log file the child appends its output to, tailed here for live output.
+    log_path: PathBuf,
+    /// Byte offset already consumed from `log_path`.
+    offset: u64,
+    /// Unix seconds of the last liveness probe (recovered processes only).
+    last_probe: u64,
 }
 
 #[derive(Default)]
@@ -128,6 +180,10 @@ struct ManagerState {
     /// Sessions with a newly started process this poll cycle, so the UI can
     /// pop the panel open without the worker thread touching AppState.
     attention: Vec<String>,
+    /// Set on metadata changes (start, exit, kill, clear, restore) that make the
+    /// on-disk project meta stale. Output appends do NOT set it: output lives in
+    /// the per-process log file, not in meta.json.
+    dirty: bool,
 }
 
 static MANAGER: Mutex<Option<ManagerState>> = Mutex::new(None);
@@ -163,6 +219,104 @@ fn append_output(proc: &mut BackgroundProcess, text: &str) {
 /// Evict the oldest finished, already-notified records once the registry grows
 /// past `MAX_PROCESSES`. Pending notices and running processes are never
 /// evicted.
+/// Read complete lines appended to a process's log file since the last call,
+/// advancing the handle's offset. A trailing partial line is deliberately left
+/// unconsumed so a write that is split across polls is not chopped in half.
+fn read_new_log(handle: &mut ProcessHandle) -> Vec<String> {
+    let Ok(mut file) = std::fs::File::open(&handle.log_path) else {
+        return Vec::new();
+    };
+    let len = match file.metadata() {
+        Ok(md) => md.len(),
+        Err(_) => return Vec::new(),
+    };
+    if len < handle.offset {
+        // The file was truncated (size cap) or replaced: resync from the start.
+        handle.offset = 0;
+    }
+    // If we fell far behind -- e.g. the app was closed while the process wrote
+    // megabytes -- skip to the recent tail instead of reading it all back.
+    if len.saturating_sub(handle.offset) > MAX_LOG_READ_BYTES + MAX_OUTPUT_BYTES as u64 {
+        handle.offset = len - MAX_OUTPUT_BYTES as u64;
+    }
+    if len <= handle.offset {
+        return Vec::new();
+    }
+    if file.seek(SeekFrom::Start(handle.offset)).is_err() {
+        return Vec::new();
+    }
+    let mut buf = Vec::new();
+    if file.take(MAX_LOG_READ_BYTES).read_to_end(&mut buf).is_err() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&buf);
+    // Advance by the *file* bytes consumed, not the (possibly length-changed)
+    // lossy text length, so the offset stays a true file position.
+    let (consumed, lines): (u64, Vec<String>) = match text.rfind('\n') {
+        Some(i) => (
+            (i + 1) as u64,
+            text[..i + 1].lines().map(|l| l.to_string()).collect(),
+        ),
+        // Pathological: one line longer than the per-poll budget. Consume it
+        // rather than stalling forever on the same bytes.
+        None if buf.len() as u64 >= MAX_LOG_READ_BYTES => (
+            buf.len() as u64,
+            vec![text.trim_end_matches(['\r', '\n']).to_string()],
+        ),
+        None => return Vec::new(),
+    };
+    handle.offset += consumed;
+    lines
+}
+
+/// Enforce the on-disk size cap for a running process. Truncating to empty is
+/// safe with the child's append handle: further writes go to the new end of
+/// file, and the recent output is already in the in-memory buffer.
+fn cap_log(handle: &mut ProcessHandle) {
+    let len = match std::fs::metadata(&handle.log_path) {
+        Ok(md) => md.len(),
+        Err(_) => return,
+    };
+    if len <= MAX_LOG_BYTES {
+        return;
+    }
+    if autocode_core::storage::truncate_process_log(&handle.log_path) {
+        // Everything before the truncation point is gone, so restart reading
+        // from the beginning of the now-empty file.
+        handle.offset = 0;
+    }
+}
+
+/// Read a *finished* process's log file tail (capped) so its output is available
+/// for the completion notice just before the file is deleted.
+fn read_log_tail(path: &std::path::Path) -> String {
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return String::new();
+    };
+    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    // Only the tail is kept, matching the live in-memory cap; a chatty process
+    // must not be able to make us allocate its whole log here.
+    let start = len.saturating_sub(MAX_OUTPUT_BYTES as u64);
+    if start > 0 && file.seek(SeekFrom::Start(start)).is_err() {
+        return String::new();
+    }
+    let mut buf = Vec::new();
+    if file.read_to_end(&mut buf).is_err() {
+        return String::new();
+    }
+    let text = String::from_utf8_lossy(&buf).into_owned();
+    // Drop the partial first line when we began mid-file.
+    let text = if start > 0 {
+        match text.find('\n') {
+            Some(i) => text[i + 1..].to_string(),
+            None => text,
+        }
+    } else {
+        text
+    };
+    text.trim_end().to_string()
+}
+
 fn prune_old(state: &mut ManagerState) {
     if state.procs.len() <= MAX_PROCESSES {
         return;
@@ -226,9 +380,18 @@ pub fn start(
         }
         None => project_root.to_string(),
     };
-    let (task, rx) = shell::run_command_in_dir(command, Some(&dir))?;
+    // Spawn detached with output redirected to a log file under the session's
+    // process dir, so the child keeps running (and keeps logging) after this app
+    // exits and we can re-read its output on the next launch.
+    let log_dir = autocode_core::storage::process_log_dir(session_id);
+    let (task, rx, log_path) = shell::run_command_detached(command, Some(&dir), &log_dir)?;
     let id = task.id.clone();
     let pid = task.pid;
+    // Fingerprint the process start now so a recycled PID cannot masquerade as
+    // this process after a restart.
+    let start_marker = pid
+        .and_then(procinfo::process_start_marker)
+        .unwrap_or_default();
     let label = if label.trim().is_empty() {
         autocode_core::helpers::truncate_str(command, 48).to_string()
     } else {
@@ -251,11 +414,23 @@ pub fn start(
                 notified: false,
                 kill_requested: false,
                 truncated: false,
+                recovered: false,
+                start_marker,
+                log_path: log_path.to_string_lossy().to_string(),
             },
         );
-        m.handles.insert(id.clone(), ProcessHandle { rx });
+        m.handles.insert(
+            id.clone(),
+            ProcessHandle {
+                rx: Some(rx),
+                log_path,
+                offset: 0,
+                last_probe: 0,
+            },
+        );
         m.order.push(id.clone());
         m.attention.push(session_id.to_string());
+        m.dirty = true;
         prune_old(m);
     });
     Ok((id, pid))
@@ -312,6 +487,7 @@ pub fn kill_all() {
             }
         }
         m.handles.clear();
+        m.dirty = true;
     });
     for pid in kill {
         kill_process(pid);
@@ -354,7 +530,10 @@ pub fn remove_session(session_id: &str) {
             m.procs.remove(id);
         }
         m.order.retain(|id| !ids.contains(id));
+        m.dirty = true;
     });
+    // The session is gone; its per-process log files have no reader left.
+    autocode_core::storage::remove_process_logs(session_id);
 }
 
 /// Remove finished processes for a session (UI "Clear").
@@ -371,6 +550,9 @@ pub fn clear_finished(session_id: &str) -> usize {
             m.procs.remove(id);
         }
         m.order.retain(|id| !ids.contains(id));
+        if !ids.is_empty() {
+            m.dirty = true;
+        }
         ids.len()
     })
 }
@@ -391,7 +573,9 @@ fn remove_auto_cleared(ids: &[String]) {
                 m.procs.get(*id).is_some_and(|p| {
                     matches!(
                         p.status,
-                        ProcessStatus::Completed { .. } | ProcessStatus::Failed(_)
+                        ProcessStatus::Completed { .. }
+                            | ProcessStatus::Failed(_)
+                            | ProcessStatus::Lost
                     )
                 })
             })
@@ -402,6 +586,9 @@ fn remove_auto_cleared(ids: &[String]) {
             m.procs.remove(id);
         }
         m.order.retain(|id| !removed.contains(id));
+        if !removed.is_empty() {
+            m.dirty = true;
+        }
     });
 }
 
@@ -448,7 +635,9 @@ pub fn get(process_id: &str) -> Option<BackgroundProcess> {
 /// this to keep polling: without it the UI could sleep between events and never
 /// notice a completion.
 pub fn has_running() -> bool {
-    with_manager(|m| !m.handles.is_empty())
+    // Any running record keeps the pump awake -- including a recovered one with
+    // no channel, whose liveness is probed instead.
+    with_manager(|m| m.procs.values().any(|p| p.status == ProcessStatus::Running))
 }
 
 /// Drain every live receiver, execute requested kills, and report whether
@@ -457,82 +646,129 @@ pub fn poll() -> bool {
     let mut changed = false;
     let mut to_kill: Vec<(String, u32)> = Vec::new();
 
-    {
-        // One lock for the whole drain: processes are polled from the single
-        // main thread, and each receiver is drained on the spot so output order
-        // is preserved.
-        with_manager(|m| {
-            let ids: Vec<String> = m.handles.keys().cloned().collect();
-            for id in ids {
-                let Some(handle) = m.handles.get(&id) else {
-                    continue;
-                };
-                let mut lines: Vec<String> = Vec::new();
-                let mut terminal: Option<ProcessStatus> = None;
-                loop {
-                    if lines.len() >= MAX_LINES_PER_POLL {
-                        changed = true;
-                        break;
-                    }
-                    match handle.rx.try_recv() {
-                        Ok(ShellEvent::Output(line)) => lines.push(line),
-                        Ok(ShellEvent::Done { exit_code }) => {
-                            terminal = Some(ProcessStatus::Completed { exit_code });
+    // One lock for the whole drain: processes are polled from the single main
+    // thread, and each source is read on the spot so output order is preserved.
+    with_manager(|m| {
+        let ids: Vec<String> = m.handles.keys().cloned().collect();
+        for id in ids {
+            // 1. Tail the log file the child appends its output to.
+            let mut lines: Vec<String> = match m.handles.get_mut(&id) {
+                Some(handle) => {
+                    let lines = read_new_log(handle);
+                    cap_log(handle);
+                    lines
+                }
+                None => continue,
+            };
+
+            // 2. Completion signal: the channel while this app run owns the
+            //    child, otherwise a throttled liveness probe of its PID.
+            let mut terminal: Option<ProcessStatus> = None;
+            let mut needs_probe = false;
+            if let Some(handle) = m.handles.get(&id) {
+                if let Some(rx) = &handle.rx {
+                    loop {
+                        if lines.len() >= MAX_LINES_PER_POLL {
+                            changed = true;
                             break;
                         }
-                        Ok(ShellEvent::SpawnError(e)) => {
-                            terminal = Some(ProcessStatus::Failed(e));
-                            break;
+                        match rx.try_recv() {
+                            Ok(ShellEvent::Output(line)) => lines.push(line),
+                            Ok(ShellEvent::Done { exit_code }) => {
+                                terminal = Some(ProcessStatus::Completed { exit_code });
+                                break;
+                            }
+                            Ok(ShellEvent::SpawnError(e)) => {
+                                terminal = Some(ProcessStatus::Failed(e));
+                                break;
+                            }
+                            Err(TryRecvError::Empty) => break,
+                            Err(TryRecvError::Disconnected) => {
+                                // The worker dropped its sender without a Done:
+                                // it panicked, so the exit code is unknown.
+                                terminal = Some(ProcessStatus::Failed(
+                                    "output stream closed unexpectedly".into(),
+                                ));
+                                break;
+                            }
                         }
-                        Err(TryRecvError::Empty) => break,
-                        Err(TryRecvError::Disconnected) => {
-                            // The worker dropped its sender without a Done: it
-                            // panicked, so the exit code is unknown.
-                            terminal = Some(ProcessStatus::Failed(
-                                "output stream closed unexpectedly".into(),
-                            ));
-                            break;
-                        }
                     }
-                }
-                if let Some(p) = m.procs.get_mut(&id) {
-                    for line in lines {
-                        append_output(p, &line);
-                        changed = true;
-                    }
-                }
-                if let Some(status) = terminal {
-                    if let Some(p) = m.procs.get_mut(&id) {
-                        // A kill the user asked for wins over a race with the
-                        // channel closing: report it as Killed, not Completed.
-                        p.status = if p.kill_requested {
-                            ProcessStatus::Killed
-                        } else {
-                            status
-                        };
-                        p.finished_at = Some(autocode_core::helpers::unix_now());
-                    }
-                    m.handles.remove(&id);
-                    changed = true;
-                }
-                // Only act on a pending kill while the process is still
-                // running: if it exited in this same drain the PID may already
-                // be recycled, and killing it then could hit an unrelated
-                // process.
-                if let Some(p) = m.procs.get(&id)
-                    && p.kill_requested
-                    && !p.status.is_terminal()
-                    && let Some(pid) = p.pid
-                {
-                    to_kill.push((id.clone(), pid));
+                } else {
+                    needs_probe = autocode_core::helpers::unix_now()
+                        .saturating_sub(handle.last_probe)
+                        >= PROBE_INTERVAL_SECS;
                 }
             }
-        });
-    }
+            if needs_probe {
+                let alive = m
+                    .procs
+                    .get(&id)
+                    .and_then(|p| p.pid)
+                    .map(procinfo::process_alive)
+                    .unwrap_or(false);
+                if let Some(handle) = m.handles.get_mut(&id) {
+                    handle.last_probe = autocode_core::helpers::unix_now();
+                }
+                if !alive {
+                    terminal = Some(ProcessStatus::Lost);
+                }
+            }
+
+            // 3. Apply output.
+            if let Some(p) = m.procs.get_mut(&id) {
+                for line in lines {
+                    append_output(p, &line);
+                    changed = true;
+                }
+            }
+
+            // 4. Terminal transition.
+            if let Some(status) = terminal {
+                // The child has exited, so its log file is complete: take one
+                // more read so the final bytes are not left behind.
+                let extra = m.handles.get_mut(&id).map(read_new_log).unwrap_or_default();
+                let log_path = if let Some(p) = m.procs.get_mut(&id) {
+                    for line in extra {
+                        append_output(p, &line);
+                    }
+                    // A kill the user asked for wins over a race with the
+                    // channel closing: report it as Killed, not Completed.
+                    p.status = if p.kill_requested && !matches!(status, ProcessStatus::Lost) {
+                        ProcessStatus::Killed
+                    } else {
+                        status
+                    };
+                    p.finished_at = Some(autocode_core::helpers::unix_now());
+                    p.log_path.clone()
+                } else {
+                    String::new()
+                };
+                m.handles.remove(&id);
+                m.dirty = true;
+                changed = true;
+                // The final output is now in memory, so the log file can go:
+                // keeping it would leak one file per finished process.
+                if !log_path.is_empty() {
+                    autocode_core::storage::remove_process_log(std::path::Path::new(&log_path));
+                }
+            }
+
+            // Only act on a pending kill while the process is still running: if
+            // it exited in this same drain the PID may already be recycled, and
+            // killing it then could hit an unrelated process.
+            if let Some(p) = m.procs.get(&id)
+                && p.kill_requested
+                && !p.status.is_terminal()
+                && let Some(pid) = p.pid
+            {
+                to_kill.push((id.clone(), pid));
+            }
+        }
+    });
 
     for (id, pid) in to_kill {
         kill_process(pid);
-        with_manager(|m| {
+        let log_path = with_manager(|m| {
             if let Some(p) = m.procs.get_mut(&id)
                 && !p.status.is_terminal()
             {
@@ -543,7 +779,16 @@ pub fn poll() -> bool {
                 p.kill_requested = false;
             }
             m.handles.remove(&id);
+            m.dirty = true;
+            // The record (and its captured output) is kept, but its log is not.
+            m.procs
+                .get(&id)
+                .map(|p| p.log_path.clone())
+                .unwrap_or_default()
         });
+        if !log_path.is_empty() {
+            autocode_core::storage::remove_process_log(std::path::Path::new(&log_path));
+        }
         changed = true;
     }
 
@@ -571,9 +816,200 @@ pub fn mark_notified(process_ids: &[String]) {
         for id in process_ids {
             if let Some(p) = m.procs.get_mut(id) {
                 p.notified = true;
+                m.dirty = true;
             }
         }
     });
+}
+
+/// Rebuild process records from persisted project meta after a restart.
+///
+/// Only records that were *running* when the app last closed are candidates:
+/// everything terminal had already been reported, so resurrecting it would only
+/// duplicate history. A running record is probed -- if its PID is still alive
+/// (and, when a start fingerprint was stored, matches it) the process is adopted
+/// as a live `recovered` process whose log is tailed from the beginning;
+/// otherwise it becomes [`ProcessStatus::Lost`] and is queued for one completion
+/// notice so the model learns it ended while the app was closed.
+///
+/// Returns how many records were adopted.
+pub fn restore_records(records: Vec<PersistedProcess>) -> usize {
+    let now = autocode_core::helpers::unix_now();
+    with_manager(|m| {
+        let mut adopted = 0;
+        for r in records {
+            if m.procs.contains_key(&r.id) {
+                continue;
+            }
+            if r.status != "running" {
+                // Terminal history that was already reported before the restart;
+                // reclaim its log, which nothing will read again.
+                if !r.log_path.is_empty() {
+                    autocode_core::storage::remove_process_log(std::path::Path::new(&r.log_path));
+                }
+                continue;
+            }
+            // A PID alone is not proof: reject a recycled PID when both sides
+            // have a start fingerprint and they disagree.
+            let alive = r
+                .pid
+                .map(|pid| {
+                    if !procinfo::process_alive(pid) {
+                        return false;
+                    }
+                    match procinfo::process_start_marker(pid) {
+                        Some(marker) if !r.start_marker.is_empty() => marker == r.start_marker,
+                        _ => true,
+                    }
+                })
+                .unwrap_or(false);
+            let log_path = PathBuf::from(&r.log_path);
+            // Seed the record with the log's recent tail. A process that ended
+            // while the app was closed reports this in its notice; a survivor
+            // shows it immediately and then tails only *new* output.
+            let output = read_log_tail(&log_path);
+            let proc = BackgroundProcess {
+                id: r.id.clone(),
+                session_id: r.session_id,
+                command: r.command,
+                cwd: r.cwd,
+                label: r.label,
+                pid: r.pid,
+                status: if alive {
+                    ProcessStatus::Running
+                } else {
+                    ProcessStatus::Lost
+                },
+                output,
+                // Elapsed time keeps counting up from the real start time for a
+                // survivor; a lost one freezes at the moment we noticed it.
+                created_at: r.created_at,
+                finished_at: if alive { None } else { Some(now) },
+                notified: false,
+                kill_requested: false,
+                truncated: false,
+                recovered: true,
+                start_marker: r.start_marker,
+                log_path: r.log_path,
+            };
+            let live = proc.status == ProcessStatus::Running;
+            let id = proc.id.clone();
+            m.procs.insert(id.clone(), proc);
+            m.order.push(r.id);
+            if live {
+                // Skip the bytes just seeded so they are not replayed. A backlog
+                // larger than the cap is dropped: start the file clean and keep
+                // only the tail already captured in memory.
+                let log_len = std::fs::metadata(&log_path).map(|m| m.len()).unwrap_or(0);
+                let offset = if log_len > MAX_LOG_BYTES {
+                    autocode_core::storage::truncate_process_log(&log_path);
+                    0
+                } else {
+                    log_len
+                };
+                m.handles.insert(
+                    id,
+                    ProcessHandle {
+                        rx: None,
+                        log_path,
+                        offset,
+                        last_probe: 0,
+                    },
+                );
+            } else {
+                // The tail was captured above; the file itself can go.
+                autocode_core::storage::remove_process_log(&log_path);
+            }
+            adopted += 1;
+        }
+        if adopted > 0 {
+            m.dirty = true;
+        }
+        adopted
+    })
+}
+
+/// Map an in-memory record to its serializable form.
+fn to_persisted(p: &BackgroundProcess) -> PersistedProcess {
+    let (status, exit_code, failure) = match &p.status {
+        ProcessStatus::Running => ("running", None, String::new()),
+        ProcessStatus::Completed { exit_code } => ("completed", Some(*exit_code), String::new()),
+        ProcessStatus::Failed(e) => ("failed", None, e.clone()),
+        ProcessStatus::Killed => ("killed", None, String::new()),
+        ProcessStatus::Lost => ("lost", None, String::new()),
+    };
+    PersistedProcess {
+        id: p.id.clone(),
+        session_id: p.session_id.clone(),
+        command: p.command.clone(),
+        cwd: p.cwd.clone(),
+        label: p.label.clone(),
+        pid: p.pid,
+        status: status.to_string(),
+        exit_code,
+        failure,
+        created_at: p.created_at,
+        finished_at: p.finished_at,
+        log_path: p.log_path.clone(),
+        start_marker: p.start_marker.clone(),
+        notified: p.notified,
+    }
+}
+
+/// Snapshot every record in its serializable form.
+pub fn export_records() -> Vec<PersistedProcess> {
+    with_manager(|m| {
+        m.order
+            .iter()
+            .filter_map(|id| m.procs.get(id))
+            .map(to_persisted)
+            .collect()
+    })
+}
+
+fn take_dirty() -> bool {
+    with_manager(|m| std::mem::take(&mut m.dirty))
+}
+
+/// Flush process metadata into each project's `meta.json` when anything has
+/// changed. Only metadata is written -- live output lives in the per-process
+/// log file -- so this runs on state transitions, not on every output line.
+///
+/// Each process is filed under the project its session belongs to, which is how
+/// a restart finds it again for that specific project. A project whose record
+/// set becomes empty is cleared, so deleted sessions do not leave stale rows.
+pub fn persist_dirty(state: &AppState) -> bool {
+    if !take_dirty() {
+        return false;
+    }
+    let all = export_records();
+    for proj in &state.projects {
+        let records: Vec<PersistedProcess> = all
+            .iter()
+            .filter(|r| {
+                state
+                    .sessions
+                    .iter()
+                    .find(|s| s.id == r.session_id)
+                    .is_some_and(|s| s.project_id.as_deref() == Some(proj.id.as_str()))
+            })
+            .cloned()
+            .collect();
+        let mut meta = autocode_core::storage::load_project_meta(proj).unwrap_or_default();
+        if meta.background_processes != records {
+            meta.background_processes = records;
+            if let Err(e) = autocode_core::storage::save_project_meta(proj, &meta) {
+                eprintln!("[processes] Failed to persist process records: {}", e);
+            }
+        }
+    }
+    true
+}
+
+/// Force a metadata flush regardless of the dirty flag (used at app shutdown).
+pub fn persist_all(state: &AppState) {
+    with_manager(|m| m.dirty = true);
+    persist_dirty(state);
 }
 
 /// Enqueue pending completion notices onto their sessions' message queues.
@@ -680,6 +1116,11 @@ pub fn notice_content(process_ids: &[String]) -> String {
             p.status.label(),
             p.elapsed_secs(),
         ));
+        if p.recovered && p.status == ProcessStatus::Lost {
+            out.push_str(
+                "  (it was running when AutoCode last closed and ended while the app was not running, so its exit code is unknown)\n",
+            );
+        }
         if p.truncated {
             out.push_str("  (output truncated to the most recent bytes)\n");
         }
@@ -897,6 +1338,9 @@ mod tests {
             notified: false,
             kill_requested: false,
             truncated: false,
+            recovered: false,
+            start_marker: String::new(),
+            log_path: String::new(),
         };
         for i in 0..80_000 {
             append_output(&mut p, &format!("line-{}", i));
@@ -1006,6 +1450,9 @@ mod tests {
                     notified: false,
                     kill_requested: false,
                     truncated: false,
+                    recovered: false,
+                    start_marker: String::new(),
+                    log_path: String::new(),
                 },
             );
             m.order.push(id.clone());
@@ -1113,6 +1560,9 @@ mod tests {
                         notified: true,
                         kill_requested: false,
                         truncated: false,
+                        recovered: false,
+                        start_marker: String::new(),
+                        log_path: String::new(),
                     },
                 );
                 m.order.push(id);
@@ -1138,6 +1588,9 @@ mod tests {
                     notified: false,
                     kill_requested: false,
                     truncated: false,
+                    recovered: false,
+                    start_marker: String::new(),
+                    log_path: String::new(),
                 },
             );
             m.order.push(pending.clone());
@@ -1159,6 +1612,9 @@ mod tests {
                         notified: true,
                         kill_requested: false,
                         truncated: false,
+                        recovered: false,
+                        start_marker: String::new(),
+                        log_path: String::new(),
                     },
                 );
                 m.order.push(id);
@@ -1174,5 +1630,426 @@ mod tests {
         let text = "a\nb\nc\nd";
         assert_eq!(tail(text, 2), "c\nd");
         assert_eq!(tail(text, 10), text);
+    }
+
+    fn bare_handle(log: PathBuf) -> ProcessHandle {
+        ProcessHandle {
+            rx: None,
+            log_path: log,
+            offset: 0,
+            last_probe: 0,
+        }
+    }
+
+    /// The manager reads output back from the log file rather than a pipe, so a
+    /// line written in two pieces must still come out whole, exactly once.
+    #[test]
+    fn log_file_is_tailed_a_full_line_at_a_time() {
+        let dir =
+            std::env::temp_dir().join(format!("ac-log-{}", autocode_core::helpers::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("p.log");
+        std::fs::write(&log, "first\npart").unwrap();
+
+        let mut h = bare_handle(log.clone());
+        assert_eq!(read_new_log(&mut h), vec!["first".to_string()]);
+        assert!(
+            read_new_log(&mut h).is_empty(),
+            "the partial line is held back"
+        );
+
+        // Completing the second line releases exactly that one line.
+        std::fs::write(&log, "first\npartial\n").unwrap();
+        assert_eq!(read_new_log(&mut h), vec!["partial".to_string()]);
+        assert!(read_new_log(&mut h).is_empty(), "nothing new to read");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A single poll reads only a bounded chunk, yet across polls every line is
+    /// consumed exactly once, in order -- a chatty process cannot make one frame
+    /// allocate a huge buffer.
+    #[test]
+    fn bounded_reads_consume_every_line_exactly_once() {
+        let dir = std::env::temp_dir().join(format!(
+            "ac-bound-{}",
+            autocode_core::helpers::generate_id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("p.log");
+        let target = MAX_LOG_READ_BYTES as usize + 50_000;
+        let mut body = String::new();
+        let mut n: u64 = 0;
+        while body.len() < target {
+            body.push_str(&format!("line-{}\n", n));
+            n += 1;
+        }
+        std::fs::write(&log, &body).unwrap();
+
+        let mut h = bare_handle(log.clone());
+        let mut all: Vec<String> = Vec::new();
+        let mut rounds = 0;
+        loop {
+            let got = read_new_log(&mut h);
+            if got.is_empty() {
+                break;
+            }
+            all.extend(got);
+            rounds += 1;
+            assert!(rounds < 100, "read loop must terminate");
+        }
+        assert!(rounds > 1, "the backlog needs more than one bounded read");
+        assert_eq!(all.len(), n as usize, "every line exactly once");
+        assert_eq!(all[0], "line-0");
+        assert_eq!(all[all.len() - 1], format!("line-{}", n - 1));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A log past the cap is truncated to empty and the reader resyncs, so disk
+    /// use stays bounded no matter how noisy the process is.
+    #[test]
+    fn running_log_is_truncated_past_the_cap() {
+        let dir =
+            std::env::temp_dir().join(format!("ac-cap-{}", autocode_core::helpers::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("p.log");
+        std::fs::write(&log, "x".repeat(MAX_LOG_BYTES as usize + 1)).unwrap();
+
+        let mut h = bare_handle(log.clone());
+        cap_log(&mut h);
+        assert_eq!(
+            std::fs::metadata(&log).unwrap().len(),
+            0,
+            "an oversized log is truncated to empty"
+        );
+        assert_eq!(h.offset, 0, "the reader resyncs to the emptied file");
+
+        // A log under the cap is left untouched.
+        std::fs::write(&log, b"small\n").unwrap();
+        cap_log(&mut h);
+        assert_eq!(std::fs::metadata(&log).unwrap().len(), 6);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A record that was running when the app closed, whose PID is long gone, is
+    /// restored as `Lost` and queued for one completion notice -- never as a
+    /// phantom live process.
+    #[test]
+    fn restore_marks_a_dead_running_process_lost() {
+        let _g = test_guard();
+        let sid = autocode_core::helpers::generate_id();
+        let record = PersistedProcess {
+            id: autocode_core::helpers::generate_id(),
+            session_id: sid.clone(),
+            command: "train --epochs 10".into(),
+            cwd: "/tmp".into(),
+            label: "train".into(),
+            // A PID that is effectively never a live process on any platform.
+            pid: Some(u32::MAX - 1),
+            status: "running".into(),
+            exit_code: None,
+            failure: String::new(),
+            created_at: autocode_core::helpers::unix_now().saturating_sub(120),
+            finished_at: None,
+            log_path: String::new(),
+            start_marker: String::new(),
+            notified: false,
+        };
+        assert_eq!(restore_records(vec![record]), 1);
+        let p = snapshot(Some(&sid)).into_iter().next().expect("restored");
+        assert_eq!(p.status, ProcessStatus::Lost);
+        assert!(p.recovered);
+        assert!(p.pid.is_some(), "the PID is retained for reference");
+        // A lost process is terminal and un-notified, so it produces a notice.
+        assert!(
+            pending_notices()
+                .iter()
+                .any(|(s, i)| s == &sid && i == &p.id)
+        );
+        let notice = notice_content(std::slice::from_ref(&p.id));
+        assert!(notice.contains("exit code unknown"), "{notice}");
+        remove_session(&sid);
+    }
+
+    /// A record whose PID and start fingerprint match a live process is adopted
+    /// as a running, recovered process.
+    #[test]
+    fn restore_adopts_a_live_process_by_pid_and_fingerprint() {
+        let _g = test_guard();
+        let sid = autocode_core::helpers::generate_id();
+        let pid = std::process::id();
+        let marker = procinfo::process_start_marker(pid).unwrap_or_default();
+        let id = autocode_core::helpers::generate_id();
+        let record = PersistedProcess {
+            id: id.clone(),
+            session_id: sid.clone(),
+            command: "sleep 999".into(),
+            cwd: "/tmp".into(),
+            label: "survivor".into(),
+            pid: Some(pid),
+            status: "running".into(),
+            exit_code: None,
+            failure: String::new(),
+            created_at: autocode_core::helpers::unix_now().saturating_sub(300),
+            finished_at: None,
+            log_path: String::new(),
+            start_marker: marker,
+            notified: false,
+        };
+        assert_eq!(restore_records(vec![record]), 1);
+        let p = get(&id).expect("adopted");
+        assert_eq!(p.status, ProcessStatus::Running);
+        assert!(p.recovered);
+        // Elapsed time is measured from the persisted start, not from zero.
+        assert!(p.elapsed_secs() >= 300, "elapsed survives the restart");
+        assert!(snapshot(Some(&sid)).len() == 1);
+        // Clean up WITHOUT `remove_session`: that kills running processes, and
+        // the adopted PID here is this very test process.
+        with_manager(|m| {
+            m.handles.remove(&id);
+            m.procs.remove(&id);
+            m.order.retain(|x| x != &id);
+        });
+        assert!(get(&id).is_none());
+    }
+
+    /// Terminal records from before the restart are history that was already
+    /// reported; they must not be resurrected as live rows or notices.
+    #[test]
+    fn restore_ignores_already_reported_terminal_records() {
+        let _g = test_guard();
+        let sid = autocode_core::helpers::generate_id();
+        let record = PersistedProcess {
+            id: autocode_core::helpers::generate_id(),
+            session_id: sid.clone(),
+            command: "build".into(),
+            cwd: "/tmp".into(),
+            label: "build".into(),
+            pid: Some(1),
+            status: "completed".into(),
+            exit_code: Some(0),
+            failure: String::new(),
+            created_at: 0,
+            finished_at: Some(9),
+            log_path: String::new(),
+            start_marker: String::new(),
+            notified: true,
+        };
+        assert_eq!(restore_records(vec![record]), 0);
+        assert!(snapshot(Some(&sid)).is_empty());
+    }
+
+    /// Persistence files each process under the project its session belongs to,
+    /// and clears a project's list once its processes are gone.
+    #[test]
+    fn persist_writes_records_into_the_owning_projects_meta() {
+        let _g = test_guard();
+        let dir = std::env::temp_dir().join(format!(
+            "ac-proc-persist-{}",
+            autocode_core::helpers::generate_id()
+        ));
+        autocode_core::utils::fsutil::set_exe_dir_for_test(&dir);
+
+        let mut state = AppState::default();
+        let proj = autocode_core::state::Project {
+            id: "proj-1".into(),
+            name: "P".into(),
+            root_path: dir.to_string_lossy().to_string(),
+            created_at: 0,
+            data_dir_name: "proj-1-data".into(),
+        };
+        state.projects.push(proj.clone());
+        let sid = state.create_session_for_project(Some("proj-1".into()));
+        let id = autocode_core::helpers::generate_id();
+        with_manager(|m| {
+            m.procs.insert(
+                id.clone(),
+                BackgroundProcess {
+                    id: id.clone(),
+                    session_id: sid.clone(),
+                    command: "train".into(),
+                    cwd: "/tmp".into(),
+                    label: "train".into(),
+                    // No PID: the cleanup below must not attempt a real kill.
+                    pid: None,
+                    status: ProcessStatus::Running,
+                    output: String::new(),
+                    created_at: 7,
+                    finished_at: None,
+                    notified: false,
+                    kill_requested: false,
+                    truncated: false,
+                    recovered: false,
+                    start_marker: "win:123".into(),
+                    log_path: "/tmp/p.log".into(),
+                },
+            );
+            m.order.push(id.clone());
+            m.dirty = true;
+        });
+
+        assert!(persist_dirty(&state));
+        let meta = autocode_core::storage::load_project_meta(&proj).expect("meta written");
+        assert_eq!(meta.background_processes.len(), 1);
+        assert_eq!(meta.background_processes[0].id, id);
+        assert_eq!(meta.background_processes[0].created_at, 7);
+        // Nothing dirty -> no rewrite reported.
+        assert!(!persist_dirty(&state));
+
+        // Removing the session's processes clears the project's list.
+        remove_session(&sid);
+        assert!(persist_dirty(&state));
+        let meta = autocode_core::storage::load_project_meta(&proj).unwrap_or_default();
+        assert!(meta.background_processes.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// End-to-end round trip: a real detached process is persisted, the manager
+    /// is wiped (simulating an app restart), and the record is restored as a
+    /// live recovered process whose output is re-read from its log file.
+    #[test]
+    fn process_survives_a_simulated_restart() {
+        let _g = test_guard();
+        let sid = autocode_core::helpers::generate_id();
+        let root = std::env::temp_dir().to_string_lossy().to_string();
+        let cmd = if cfg!(windows) {
+            "echo restart-marker & ping -n 8 127.0.0.1 > nul"
+        } else {
+            "echo restart-marker; sleep 8"
+        };
+        let (id, pid) = start(cmd, None, "survivor", &sid, &root).expect("process starts");
+        assert!(pid.is_some(), "a detached child still reports its pid");
+
+        // Output arrives through the log file, not a pipe.
+        let mut saw_output = false;
+        for _ in 0..80 {
+            poll();
+            if get(&id).is_some_and(|p| p.output.contains("restart-marker")) {
+                saw_output = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert!(saw_output, "log output is captured while running");
+
+        // Persist the record, then wipe the in-memory manager to simulate a
+        // restart of the app (the OS child keeps running).
+        let records = export_records();
+        assert!(
+            records.iter().any(|r| r.id == id && r.status == "running"),
+            "the running process was exported for persistence"
+        );
+        with_manager(|m| {
+            m.procs.clear();
+            m.handles.clear();
+            m.order.clear();
+        });
+        assert!(get(&id).is_none(), "manager is empty after the restart");
+
+        // Restore: the PID is still alive and the fingerprint matches.
+        assert!(restore_records(records) >= 1);
+        let p = get(&id).expect("process adopted after restart");
+        assert_eq!(p.status, ProcessStatus::Running);
+        assert!(p.recovered);
+
+        // Its earlier output is re-read from the log file from offset 0.
+        let mut recovered_output = false;
+        for _ in 0..80 {
+            poll();
+            if get(&id).is_some_and(|p| p.output.contains("restart-marker")) {
+                recovered_output = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert!(
+            recovered_output,
+            "output survives the restart through the log file"
+        );
+
+        // Kill the real child so it does not linger past the test.
+        request_kill(&id);
+        for _ in 0..200 {
+            poll();
+            if get(&id).is_some_and(|p| p.status.is_terminal()) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        remove_session(&sid);
+    }
+
+    /// A finished process's log file is reclaimed once its output has been
+    /// captured, so a long session cannot leak one file per process.
+    #[test]
+    fn finished_process_log_file_is_reclaimed() {
+        let _g = test_guard();
+        let sid = autocode_core::helpers::generate_id();
+        let root = std::env::temp_dir().to_string_lossy().to_string();
+        let (id, _pid) =
+            start("echo reclaim-me", None, "reclaim", &sid, &root).expect("process starts");
+        let log_path = PathBuf::from(get(&id).expect("recorded").log_path);
+        assert!(log_path.exists(), "the log exists while the process runs");
+
+        for _ in 0..400 {
+            poll();
+            if get(&id).is_some_and(|p| p.status.is_terminal()) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert!(get(&id).is_some_and(|p| p.status.is_terminal()), "finished");
+        assert!(
+            !log_path.exists(),
+            "the log is removed once the process reaches a terminal state"
+        );
+        // The output itself is retained in the record for the notice and the UI.
+        assert!(get(&id).unwrap().output.contains("reclaim-me"));
+        assert!(notice_content(std::slice::from_ref(&id)).contains("reclaim-me"));
+        remove_session(&sid);
+    }
+
+    /// A process that ended while the app was closed has its final output read
+    /// from its log, and then the log is reclaimed.
+    #[test]
+    fn restore_reads_then_reclaims_a_lost_process_log() {
+        let _g = test_guard();
+        let sid = autocode_core::helpers::generate_id();
+        let dir =
+            std::env::temp_dir().join(format!("ac-lost-{}", autocode_core::helpers::generate_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("gone.log");
+        std::fs::write(&log, "epoch 1 loss=0.5\nepoch 2 loss=0.1\ndone\n").unwrap();
+
+        let id = autocode_core::helpers::generate_id();
+        let record = PersistedProcess {
+            id: id.clone(),
+            session_id: sid.clone(),
+            command: "train".into(),
+            cwd: "/tmp".into(),
+            label: "train".into(),
+            pid: Some(u32::MAX - 1),
+            status: "running".into(),
+            exit_code: None,
+            failure: String::new(),
+            created_at: autocode_core::helpers::unix_now().saturating_sub(60),
+            finished_at: None,
+            log_path: log.to_string_lossy().to_string(),
+            start_marker: String::new(),
+            notified: false,
+        };
+        assert_eq!(restore_records(vec![record]), 1);
+        let p = get(&id).expect("adopted as lost");
+        assert_eq!(p.status, ProcessStatus::Lost);
+        assert!(
+            p.output.contains("epoch 2 loss=0.1"),
+            "tail recovered: {:?}",
+            p.output
+        );
+        assert!(!log.exists(), "the log is reclaimed after the tail is read");
+        assert!(notice_content(std::slice::from_ref(&id)).contains("loss=0.1"));
+        remove_session(&sid);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

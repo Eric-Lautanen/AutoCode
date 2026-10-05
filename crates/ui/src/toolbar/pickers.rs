@@ -90,11 +90,6 @@ pub fn show_session_picker(ui: &mut egui::Ui, state: &mut AppState) {
                     });
                 }
             });
-        // New session button next to the session picker.
-        if super::buttons::lit_btn(ui, "+ Session", false).clicked() {
-            state.new_session_for_project(Some(pid.clone()));
-            autocode_ai::chat::ensure_session(state);
-        }
     }
 }
 

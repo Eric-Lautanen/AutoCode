@@ -3,6 +3,7 @@ pub mod attachments;
 pub mod discovery;
 pub mod messages;
 pub mod persistence;
+pub mod proc_log;
 pub mod provider_file;
 pub mod session_io;
 pub mod session_meta;
@@ -24,6 +25,9 @@ pub use messages::{
     append_messages, has_messages_file, read_all_messages, remove_messages_by_id, truncate_messages,
 };
 pub use persistence::{PanicInfo, PersistenceCommand, PersistenceThread};
+pub use proc_log::{
+    process_log_dir, processes_root, remove_process_log, remove_process_logs, truncate_process_log,
+};
 pub use provider_file::{
     ModelEntry, ProviderEntry, ProviderFile, load_providers_file, save_providers_file,
 };

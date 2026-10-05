@@ -180,6 +180,27 @@ pub(crate) fn show_session_tabs(
                             }); // end push_id("chat_content", ...)
                     });
                 }
+
+                // "+" button at the end of the tab strip starts a new session
+                // in the active project, keeping session creation next to the
+                // tabs instead of in the top toolbar.
+                if let Some(pid) = state.active_project_id.clone() {
+                    ui.add_space(4.0);
+                    let new_resp = ui
+                        .add(
+                            egui::Button::new(
+                                RichText::new("+").size(15.0).color(theme().text_muted),
+                            )
+                            .fill(Color32::TRANSPARENT)
+                            .stroke(Stroke::NONE)
+                            .min_size(Vec2::new(24.0, 24.0)),
+                        )
+                        .on_hover_text("New session");
+                    if new_resp.clicked() {
+                        state.new_session_for_project(Some(pid));
+                        autocode_ai::chat::ensure_session(state);
+                    }
+                }
             });
         });
     // Auto-scroll tabs to the right when content exceeds viewport

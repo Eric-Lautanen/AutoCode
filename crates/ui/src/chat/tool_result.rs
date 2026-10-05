@@ -578,15 +578,6 @@ fn render_structured(
             }
         }
         "spawn_agent" => action = render_agent_card(ui, ts, ctx, meta, &body),
-        "verify_proof" | "search_literature" | "explore_theorem" => {
-            if meta.is_error {
-                header(ui, ts, &format!("[fail] {}", meta.tool_name));
-                error_body(ui, msg, width);
-            } else {
-                header(ui, ts, &format!("[tool] {}", meta.tool_name));
-                render_markdown(ui, &sanitize_display_text(&body), true, width);
-            }
-        }
         _ => {
             // Unknown / future tools still get a header (title + copy
             // button) so the turn is never copy-less.

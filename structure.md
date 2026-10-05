@@ -49,7 +49,7 @@ assets/linux/icon-256.png     |  —
 assets/linux/icon-512.png     |  —
 ```
 
-## `crates/ai/` — AI Provider & Chat Orchestration (38 files, 13,108 Rust lines)
+## `crates/ai/` — AI Provider & Chat Orchestration (38 files, 14,626 Rust lines)
 
 ```
 crates/ai/Cargo.toml                          |  12
@@ -64,17 +64,17 @@ crates/ai/src/chat/agents.rs                   | 391  Sub-agent lifecycle: spawn
 crates/ai/src/chat/completion/mod.rs           | 698  completion loop, seeding, handoff, session-scoped model
 crates/ai/src/chat/completion/preflight.rs     | 239  token counting preflight (skips when fresh); session-scoped handoff gate
 crates/ai/src/chat/completion/provider.rs      | 136
-crates/ai/src/chat/polling/mod.rs              | 267  per-frame pump; parent-side agent settlement step
+crates/ai/src/chat/polling/mod.rs              | 916  per-frame pump; parent-side agent settlement step; process-meta flush
 crates/ai/src/chat/polling/shell.rs            | 350  live shell streaming
 crates/ai/src/chat/polling/stream.rs           | 948  SSE drain; Step-5 split (spawn_agent / parallel batch); commit
 crates/ai/src/chat/polling/tools.rs            | 162
 crates/ai/src/chat/tools/mod.rs                |  10
-crates/ai/src/chat/tools/execute.rs            |1293  24 file/fs/web/skill/proof tool handlers
+crates/ai/src/chat/tools/execute.rs            |1110  21 file/fs/web/skill tool handlers
 crates/ai/src/chat/tools/meta.rs               | 408  ToolMeta builders
 crates/ai/src/chat/tools/parallel.rs           | 405  path-conflict grouping + `std::thread::scope` parallel executor
-crates/ai/src/chat/processes.rs                |1096  background-process manager (start/poll/kill/notice)
+crates/ai/src/chat/processes.rs                |2055  background-process manager (detached spawn, log tailing/capping, persist/restore, notice)
+crates/ai/src/chat/procinfo.rs                  | 158  PID liveness + process start-time fingerprint (recycled-PID guard)
 crates/ai/src/chat/tools/process.rs            |  38
-crates/ai/src/chat/tools/proof.rs              |1766  Yang–Mills proof checker (verifier discovery, exec, parse, JSONL log)
 crates/ai/src/helpers/mod.rs                   |  22
 crates/ai/src/helpers/fuzzy.rs                 | 761  7-strategy fuzzy patching
 crates/ai/src/helpers/misc.rs                  | 123
@@ -123,8 +123,9 @@ crates/core/src/state/project.rs                |  11
 crates/core/src/state/provider.rs              | 496
 crates/core/src/state/secret.rs                 |  66  SecretString
 crates/core/src/state/session.rs               | 250  Session, AgentMeta, storage_override
-crates/core/src/state/todo.rs                   | 109
-crates/core/src/storage/mod.rs                  |  36
+crates/core/src/state/todo.rs                   | 152  ProjectMeta (+ `PersistedProcess` records)
+crates/core/src/storage/mod.rs                  |  38
+crates/core/src/storage/proc_log.rs              |  54  per-process log-file paths, reclaim + size-cap truncate
 crates/core/src/storage/app_storage.rs           |  14
 crates/core/src/storage/attachments.rs          | 201  stage/copy/resolve/delete attachment bytes
 crates/core/src/storage/discovery.rs             | 270  session + agent discovery on load
@@ -201,7 +202,7 @@ crates/ui/src/helpers/todo.rs                   |  12
 crates/ui/src/helpers/tool_result.rs            | 143
 crates/ui/src/helpers/ui_id.rs                  | 179
 crates/ui/src/helpers/widgets.rs                |  51
-crates/ui/src/processes/mod.rs                  | 383  background-process window (status, output, kill)
+crates/ui/src/processes/mod.rs                  | 391  background-process window (status, output, kill, restored)
 crates/ui/src/settings/mod.rs                   |  11
 crates/ui/src/settings/about.rs                 | 223
 crates/ui/src/settings/projects.rs              | 209
@@ -221,7 +222,7 @@ crates/ui/src/toolbar/meters.rs                 | 141
 crates/ui/src/toolbar/pickers.rs                | 199  project/session/provider pickers
 ```
 
-## `skills/` — Agent Skill Library (77 files, 20,156 lines)
+## `skills/` — Agent Skill Library (76 files, 20,094 lines)
 
 ```
 skills/accessibility.md                         | 199
@@ -300,7 +301,6 @@ skills/web_research.md                           | 171
 skills/webscraping.md                           | 229
 skills/websocket_and_realtime.md                | 252
 skills/writing_tests.md                          | 233
-skills/yang_mills_mass_gap.md                    |  62
 ```
 
 ---
@@ -309,15 +309,15 @@ skills/yang_mills_mass_gap.md                    |  62
 
 | Area | Files | Lines | Role |
 |------|-------|-------|------|
-| `crates/ai/` | 38 | 13,900 | AI provider clients, chat orchestration, parallel tool dispatch, sub-agents, background processes, HTTP/SSE, web scraping, LRU looping |
+| `crates/ai/` | 38 | 14,626 | AI provider clients, chat orchestration, parallel tool dispatch, sub-agents, background processes, HTTP/SSE, web scraping, LRU looping |
 | `crates/autocode/` | 2 | 13 | Windows binary entry point, icon embedding |
 | `crates/core/` | 34 | 8,473 | State types, persistence, helpers, tokenizer, sysinfo, HTML extraction, FileAccessLog, attachments |
 | `crates/fs/` | 17 | 2,697 | File explorer, shell executor, git status, skill loader |
 | `crates/ui/` | 50 | 9,600 | egui panels — chat, settings, explorer, toolbar, agent windows, attachments, todo windows, background-process window |
-| **Crate subtotal (Rust)** | **141** | **34,600** | 5 crates (147 files incl. manifests) |
-| `skills/` | 77 | 20,156 | Skill markdown files bundled with the binary |
+| **Crate subtotal (Rust)** | **140** | **32,834** | 5 crates (146 files incl. manifests) |
+| `skills/` | 76 | 20,094 | Skill markdown files bundled with the binary |
 | `assets/` | 11 | — | Icons, screenshot, bundled `providers.json` |
 | Root + config | 13 | ~3,617 | Workspace manifest, CI/CD, `.gitignore`, documentation |
 
-**Grand total:** ~58,400 lines across ~248 files (excluding `target/`, `.git/`, and the
+**Grand total:** ~56,600 lines across ~246 files (excluding `target/`, `.git/`, and the
 generated `Cargo.lock`).

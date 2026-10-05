@@ -55,6 +55,179 @@ pub fn run_command_in_dir(
     Ok((task, rx))
 }
 
+/// Spawn a command **detached** from this app, with stdout and stderr
+/// redirected to `log_dir/<id>.log`.
+///
+/// Unlike [`run_command_in_dir`], the child is not tied to the app's lifetime:
+/// it keeps running -- and keeps appending to its log file -- after the app
+/// exits, because its stdio is a real file handle rather than a pipe owned by
+/// this process. That is what lets a background process survive a restart and
+/// still have readable output afterwards.
+///
+/// Returns the task, the completion channel, and the log file path. While this
+/// app run owns the child, the channel still delivers `Done { exit_code }` with
+/// the exact code; after a restart only the PID, the start fingerprint and the
+/// log file remain, and liveness is probed by PID instead.
+pub fn run_command_detached(
+    command: &str,
+    cwd: Option<&str>,
+    log_dir: &std::path::Path,
+) -> Result<(ShellTask, Receiver<ShellEvent>, std::path::PathBuf), String> {
+    let (tx, rx) = mpsc::channel();
+    let (pid_tx, pid_rx) = mpsc::channel();
+    let task_id = helpers::generate_id();
+    let created_at = helpers::unix_now();
+    let cmd_str = command.to_string();
+    let cmd_for_task = cmd_str.clone();
+    let cwd = cwd.map(|s| s.to_string());
+
+    fsutil::create_dir_all(log_dir)
+        .map_err(|e| format!("Failed to create log directory: {}", e))?;
+    let log_path = log_dir.join(format!("{}.log", task_id));
+    let log_for_thread = log_path.clone();
+
+    std::thread::spawn(move || {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_command_detached_inner(&cmd_str, cwd.as_deref(), &log_for_thread, &tx, &pid_tx);
+        }));
+    });
+
+    // Receive the child PID once the os process is spawned. Spawn failures
+    // report through the event channel, so a timeout here just means no PID.
+    let pid = pid_rx.recv_timeout(std::time::Duration::from_secs(5)).ok();
+
+    let task = ShellTask {
+        id: task_id,
+        command: cmd_for_task,
+        output: String::new(),
+        status: ShellStatus::Running,
+        created_at,
+        pid,
+    };
+
+    Ok((task, rx, log_path))
+}
+
+fn run_command_detached_inner(
+    command: &str,
+    cwd: Option<&str>,
+    log_path: &std::path::Path,
+    tx: &std::sync::mpsc::Sender<ShellEvent>,
+    pid_tx: &std::sync::mpsc::Sender<u32>,
+) {
+    let mut bat_path_to_clean = None;
+    // One shared append-mode handle: stdout and stderr are interleaved into the
+    // same log file, which is what the manager tails for live output.
+    let log_file = match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+    {
+        Ok(f) => f,
+        Err(e) => {
+            let _ = tx.send(ShellEvent::SpawnError(format!(
+                "Failed to open process log file: {}",
+                e
+            )));
+            return;
+        }
+    };
+    let log_out = match log_file.try_clone() {
+        Ok(f) => f,
+        Err(e) => {
+            let _ = tx.send(ShellEvent::SpawnError(format!(
+                "Failed to duplicate process log handle: {}",
+                e
+            )));
+            return;
+        }
+    };
+
+    let result = if cfg!(target_os = "windows") {
+        // Stage the script beside the log file rather than in the temp dir: the
+        // app's exit-time temp-file sweep would otherwise delete a script that a
+        // detached child is still reading. Session deletion removes the dir.
+        let bat_path = log_path.with_extension("cmd");
+        let script = if command.contains('\n') {
+            let mut s = String::with_capacity(command.len() + 32);
+            for line in command.lines() {
+                let trimmed = line.trim_end();
+                if !trimmed.is_empty() {
+                    s.push_str(trimmed);
+                    s.push_str("\r\n");
+                }
+            }
+            s
+        } else {
+            command.to_string()
+        };
+        if let Err(e) = autocode_core::utils::fsutil::write_cmd_script(&bat_path, &script) {
+            let _ = tx.send(ShellEvent::SpawnError(format!(
+                "Failed to write command script: {}",
+                e
+            )));
+            return;
+        }
+        bat_path_to_clean = Some(bat_path.clone());
+        let bat_str = bat_path.to_string_lossy().to_string();
+        let mut cmd = Command::new("cmd");
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            // A new process group plus DETACHED_PROCESS keeps the child off the
+            // app's console so it is not signalled when the app closes.
+            const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+            const DETACHED_PROCESS: u32 = 0x00000008;
+            cmd.creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
+        }
+        cmd.args(["/C", &bat_str]);
+        if let Some(ref d) = cwd {
+            cmd.current_dir(d);
+        }
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::from(log_out))
+            .stderr(Stdio::from(log_file))
+            .spawn()
+    } else {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", command]);
+        if let Some(ref d) = cwd {
+            cmd.current_dir(d);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            // Own process group: terminal/session signals meant for the app do
+            // not reach the background child.
+            cmd.process_group(0);
+        }
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::from(log_out))
+            .stderr(Stdio::from(log_file))
+            .spawn()
+    };
+
+    match result {
+        Err(e) => {
+            let _ = tx.send(ShellEvent::SpawnError(e.to_string()));
+        }
+        Ok(mut child) => {
+            let _ = pid_tx.send(child.id());
+            // Nothing to drain: the child writes straight to the log file. Just
+            // wait so this app run still learns the exact exit code.
+            let exit_code = child.wait().map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
+            let _ = tx.send(ShellEvent::Done { exit_code });
+        }
+    }
+
+    // Remove the script now that the child is gone. If the app exits first the
+    // child keeps running and the script stays with its log, until the session
+    // (and its process dir) is deleted.
+    if let Some(p) = bat_path_to_clean {
+        let _ = fsutil::remove_file(&p);
+    }
+}
+
 fn run_command_inner(
     command: &str,
     cwd: Option<&str>,

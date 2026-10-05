@@ -28,6 +28,7 @@ mod errors;
 mod looping;
 mod polling;
 pub mod processes;
+mod procinfo;
 mod runtime;
 mod session;
 mod session_ops;

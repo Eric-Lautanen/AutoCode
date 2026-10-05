@@ -2,9 +2,8 @@
 //
 // Batches are partitioned into conflict groups: calls sharing a mutated path
 // (writes/patches/deletes/renames -- or a rename's from/to pair) serialize in
-// one group, reads and independent web/skill tools always parallelize, and
-// verify_proof groups on its shared attempts.jsonl log. Groups run on
-// std::thread::scope workers (at most 4); each worker owns a fresh
+// one group, reads and independent web/skill tools always parallelize. Groups
+// run on std::thread::scope workers (at most 4); each worker owns a fresh
 // LruPathCache which is returned to the caller for merge-back so the
 // runtime-owned cache keeps its cross-batch reuse property.
 
@@ -73,8 +72,6 @@ fn conflict_keys(tc: &ToolCall) -> Vec<String> {
             keys.extend(path_key(&args["to"]));
             keys
         }
-        // All verifier attempts append to the same attempts.jsonl log.
-        "verify_proof" => vec![normalize_key("proofs/attempts.jsonl")],
         // Every call mutates the one global process registry: serialize them so
         // a start/status/kill sequence inside a batch runs in the order the
         // model wrote it.
@@ -377,17 +374,6 @@ mod tests {
         let groups = group_batch(&calls);
         // The rename's from/to span both write groups: all three merge.
         assert_eq!(groups, vec![vec![0, 1, 2], vec![3]]);
-    }
-
-    #[test]
-    fn verify_proof_shares_attempts_log() {
-        let calls = vec![
-            call("verify_proof", r#"{"statement":"a","proof_code":"b"}"#),
-            call("verify_proof", r#"{"statement":"c","proof_code":"d"}"#),
-            call("web_search", r#"{"query":"q"}"#),
-        ];
-        let groups = group_batch(&calls);
-        assert_eq!(groups, vec![vec![0, 1], vec![2]]);
     }
 
     #[test]
