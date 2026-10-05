@@ -996,8 +996,9 @@ pub(crate) fn pump_probe_jobs(settings: &mut SettingsState, state: &mut AppState
     any_running
 }
 
-/// Backfill a successfully probed model into the provider: saved_models,
-/// models_config, and select it when this is the provider's first model.
+/// Backfill a successfully probed model into the provider: saved_models, the
+/// per-model config, and the live provider when this model is the one in use
+/// (or the provider had none yet).
 fn apply_probed_model(state: &mut AppState, label: &str, model_id: &str) {
     let Some(p) = state.providers.get_mut(label) else {
         return;
@@ -1008,6 +1009,15 @@ fn apply_probed_model(state: &mut AppState, label: &str, model_id: &str) {
     }
     // The probe registered the manifest in the probed registry; copy it into
     // the per-model config so the providers.json file on disk carries it.
+    //
+    // Only the *learned* fields come from the probe. The sampling knobs and the
+    // handoff threshold belong to the user's provider, so they are inherited
+    // here exactly as every other `ModelEntry` in the codebase builds them (the
+    // model-row default in this file, and both branches of
+    // `convert_from_providers`). Hardcoding them reset a provider's temperature,
+    // top-p, penalties and handoff threshold the moment a model was probed,
+    // because `fill_from_config` copies this entry straight back onto the
+    // provider.
     if let Some(pm) = autocode_core::helpers::probed::lookup(&p.kind, model_id) {
         let entry = autocode_core::storage::provider_file::ModelEntry {
             id: model_id.to_string(),
@@ -1020,20 +1030,26 @@ fn apply_probed_model(state: &mut AppState, label: &str, model_id: &str) {
             requests_per_hour: pm.requests_per_hour,
             thinking_overrides: pm.thinking_overrides.clone(),
             supports_vision: pm.supports_vision,
-            handoff_percent: 80,
-            temperature: 0.2,
-            top_p: 1.0,
-            frequency_penalty: 0.0,
-            presence_penalty: 0.0,
+            handoff_percent: p.handoff_percent,
+            temperature: p.temperature,
+            top_p: p.top_p,
+            frequency_penalty: p.frequency_penalty,
+            presence_penalty: p.presence_penalty,
             loop_aggressiveness: autocode_core::state::LoopAggressiveness::default(),
         };
         p.models_config
             .get_or_insert_with(std::collections::HashMap::new)
             .insert(model_id.to_string(), entry);
     }
-    // Select the model automatically if this provider has no active model.
+    // Put the learned values to work now rather than at the next launch. If this
+    // model is the one already in use, the context window the app is running on
+    // is exactly what the probe just corrected — re-probing it and seeing
+    // nothing change until a restart is the bug. A provider with no model yet
+    // adopts this one.
     if p.model.is_empty() {
         p.model = model_id.to_string();
+        p.fill_from_config();
+    } else if p.model == model_id {
         p.fill_from_config();
     }
 }
@@ -1044,5 +1060,111 @@ fn apply_probed_model(state: &mut AppState, label: &str, model_id: &str) {
 pub(crate) fn persist_providers(state: &AppState) {
     if let Err(e) = autocode_core::storage::provider_file::save_providers_file(&state.providers) {
         eprintln!("[settings] Failed to save providers file: {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use autocode_core::state::{ApiProvider, ModelManifest, ProviderKind};
+
+    /// A manifest shaped like a probe result: only the learned fields carry
+    /// information, which is exactly what `apply_probed_model` should copy.
+    fn learned(context_window: u32, max_output_tokens: u32) -> ModelManifest {
+        ModelManifest {
+            context_window,
+            max_output_tokens,
+            max_output_tokens_thinking: None,
+            thinking_api: "off".into(),
+            reasoning_efforts: Vec::new(),
+            supports_cache_control: false,
+            requests_per_hour: None,
+            thinking_overrides: std::collections::HashMap::new(),
+            supports_vision: false,
+        }
+    }
+
+    /// A provider whose sampling settings differ from every `ModelEntry`
+    /// default, so a reset back to those defaults is visible.
+    fn configured_provider(kind: &ProviderKind) -> ApiProvider {
+        let mut p = ApiProvider::new(kind.clone());
+        p.temperature = 0.7;
+        p.top_p = 0.9;
+        p.frequency_penalty = 0.4;
+        p.presence_penalty = 0.3;
+        p.handoff_percent = 55;
+        p
+    }
+
+    /// Probing a model adds what the probe learned and nothing else. The
+    /// sampling knobs and handoff threshold are the user's provider settings —
+    /// hardcoding them here reset a configured provider the moment a model was
+    /// probed, because `fill_from_config` copies the entry straight back onto
+    /// the provider.
+    #[test]
+    fn a_probed_model_inherits_the_providers_sampling_settings() {
+        let kind = ProviderKind::new("probe-test-inherit");
+        let mut state = AppState::default();
+        state
+            .providers
+            .insert("lab".into(), configured_provider(&kind));
+
+        autocode_core::helpers::probed::insert(&kind, "learned-model", learned(200_000, 8_192));
+        apply_probed_model(&mut state, "lab", "learned-model");
+
+        let p = state.providers.get("lab").expect("provider");
+        let cfg = p
+            .models_config
+            .as_ref()
+            .and_then(|m| m.get("learned-model"))
+            .cloned()
+            .expect("the probed model gets a per-model config");
+        assert_eq!(
+            cfg.temperature, 0.7,
+            "the provider's temperature is not the probe's to change"
+        );
+        assert_eq!(cfg.top_p, 0.9);
+        assert_eq!(cfg.frequency_penalty, 0.4);
+        assert_eq!(cfg.presence_penalty, 0.3);
+        assert_eq!(cfg.handoff_percent, 55);
+        assert_eq!(
+            cfg.context_window, 200_000,
+            "the learned window is recorded"
+        );
+        assert_eq!(cfg.max_output_tokens, 8_192);
+        assert_eq!(
+            p.model, "learned-model",
+            "a provider with no model adopts the probed one"
+        );
+        assert_eq!(
+            p.max_context_tokens, 200_000,
+            "and runs on the learned window immediately"
+        );
+    }
+
+    /// Re-probing the model that is already in use must correct the running
+    /// provider: the context window is the reason it was probed again.
+    #[test]
+    fn re_probing_the_active_model_refreshes_it_immediately() {
+        let kind = ProviderKind::new("probe-test-active");
+        let mut state = AppState::default();
+        let mut p = configured_provider(&kind);
+        p.model = "in-use".to_string();
+        p.max_context_tokens = 8_000; // a stale guess, e.g. the safe default
+        state.providers.insert("lab".into(), p);
+
+        autocode_core::helpers::probed::insert(&kind, "in-use", learned(1_000_000, 32_000));
+        apply_probed_model(&mut state, "lab", "in-use");
+
+        let p = state.providers.get("lab").expect("provider");
+        assert_eq!(
+            p.max_context_tokens, 1_000_000,
+            "the live provider is corrected now, not at the next launch"
+        );
+        assert_eq!(p.max_output_tokens, 32_000);
+        assert_eq!(
+            p.temperature, 0.7,
+            "refreshing the learned values must not reset the user's sampling setting"
+        );
     }
 }
