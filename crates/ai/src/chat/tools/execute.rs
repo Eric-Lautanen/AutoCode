@@ -590,11 +590,7 @@ pub fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
                          --- tip ---\n\
                          Re-read the file with read_file and copy the exact text for old_text.",
                         path.display(),
-                        if old_text.len() > 500 {
-                            format!("{}... ({} chars total)", &old_text[..500], old_text.len())
-                        } else {
-                            old_text.to_string()
-                        },
+                        preview_old_text(&old_text),
                         nearby,
                     )
                 }
@@ -1052,9 +1048,38 @@ pub fn execute_tool_with_cache(ctx: ToolExecCtx<'_>) -> String {
     }
 }
 
+/// Shorten `old_text` for an error message.
+///
+/// The text is arbitrary file content, so the cut has to land on a char
+/// boundary; slicing at a fixed byte offset panics on multibyte characters.
+fn preview_old_text(old_text: &str) -> String {
+    const LIMIT: usize = 500;
+    if old_text.len() <= LIMIT {
+        return old_text.to_string();
+    }
+    let cut = old_text.floor_char_boundary(LIMIT);
+    format!("{}... ({} bytes total)", &old_text[..cut], old_text.len())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::resolve_github_url;
+    use super::{preview_old_text, resolve_github_url};
+
+    #[test]
+    fn preview_old_text_truncates_multibyte_content_without_panicking() {
+        // 3 bytes per char, so byte 500 lands mid-character: a plain byte
+        // slice at the limit would panic here.
+        let long = "あ".repeat(200);
+        assert!(long.len() > 500 && long.len().is_multiple_of(3) && !500usize.is_multiple_of(3));
+        let preview = preview_old_text(&long);
+        assert!(preview.ends_with(&format!("... ({} bytes total)", long.len())));
+        assert!(preview.starts_with('あ'));
+    }
+
+    #[test]
+    fn preview_old_text_keeps_short_content_intact() {
+        assert_eq!(preview_old_text("alpha\nbeta"), "alpha\nbeta");
+    }
 
     #[test]
     fn resolve_github_repo_root() {
