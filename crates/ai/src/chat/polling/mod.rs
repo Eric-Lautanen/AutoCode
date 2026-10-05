@@ -111,6 +111,23 @@ pub fn update_runtime(state: &mut AppState, runtime: &mut ChatRuntime) -> bool {
     // turn. What "settled" means is `ChatRuntime::unsettled_reason` — one named
     // predicate, shared with the loop diagnostic, so a queue that is being held
     // open can never be an invisible mystery again.
+    // A delivery whose dispatch was abandoned must not pin the queue forever.
+    // `delivery_undispatched` is cleared the moment a request actually reaches
+    // the provider, and `start_completion` deliberately keeps it while it arms a
+    // retry timer — but when it gives up (no provider configured, context
+    // refused) it returns with the token still set, and nothing else ever clears
+    // it. Every later follow-up and process notice then waited for the life of
+    // the runtime: silently, and looking exactly like "the queue never fires".
+    // With nothing in flight and no timer armed the token is a leftover, so drop
+    // it and let the queue advance.
+    if runtime.delivery_undispatched
+        && runtime.pending_start == 0
+        && runtime.stream_rx.is_none()
+        && runtime.retry_after.is_none()
+    {
+        runtime.delivery_undispatched = false;
+    }
+
     if runtime.turn_settled()
         && !runtime.queued_messages.is_empty()
         && let Some(sid) = runtime.active_session_id.clone()
@@ -812,6 +829,51 @@ mod tests {
     /// batch passing through the stream leaves several "in-flight" markers
     /// behind one at a time, and any one of them left set would hold the queue
     /// open forever.
+    /// A delivery whose dispatch was abandoned must not pin the queue forever.
+    ///
+    /// `delivery_undispatched` is set by every delivery and cleared by an actual
+    /// dispatch (or a stop). When `start_completion` gives up instead — no
+    /// provider configured, context refused — the token used to stay set, and
+    /// nothing else ever cleared it: every later follow-up and process notice
+    /// waited silently for the life of the runtime.
+    #[test]
+    fn an_abandoned_dispatch_releases_the_queue() {
+        let (mut state, mut runtimes, sid) = fixture();
+        runtimes.get_mut(&sid).expect("runtime").active_session_id = Some(sid.clone());
+        queue_message(
+            &mut state,
+            &mut runtimes,
+            "queued follow-up".into(),
+            Vec::new(),
+        );
+        // The shape of an abandoned dispatch: nothing in flight, no timer armed,
+        // no deferred start left — only the leftover token.
+        {
+            let rt = runtimes.get_mut(&sid).expect("runtime");
+            rt.delivery_undispatched = true;
+            rt.pending_start = 0;
+            rt.retry_after = None;
+        }
+        assert_eq!(
+            runtimes[&sid].unsettled_reason(),
+            Some("delivery-unsent"),
+            "the leftover token is what holds the queue"
+        );
+
+        pump(&mut state, &mut runtimes, &sid);
+
+        assert!(
+            runtimes[&sid].queued_messages.is_empty(),
+            "the queue must advance instead of waiting forever"
+        );
+        assert!(
+            user_texts(&state, &sid)
+                .iter()
+                .any(|t| t.starts_with("queued follow-up")),
+            "and the follow-up is delivered as its own turn"
+        );
+    }
+
     #[test]
     fn a_queued_message_survives_a_tool_calling_turn() {
         use crate::provider::{CompletionStream, ProviderEvent, ToolCall};

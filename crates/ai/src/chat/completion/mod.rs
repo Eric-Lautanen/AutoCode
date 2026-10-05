@@ -759,6 +759,18 @@ pub fn auto_continue(
     auto_continue_impl(state, runtime, response, truncated)
 }
 
+/// Does a follow-up waiting in the queue outrank an automated "keep going"
+/// nudge?
+///
+/// Yes while anything is queued and the response was *not* cut short. A routine
+/// "tasks remain" nudge only continues the model's own agenda, so it must yield
+/// the turn boundary to a real follow-up; a truncated response (or text that
+/// promises more) still finishes first, because that sentence is part of the
+/// same turn.
+fn follow_up_outranks_nudge(queued: usize, cut_short: bool) -> bool {
+    queued > 0 && !cut_short
+}
+
 /// Send a "continue" message when there are incomplete tasks, the response
 /// was cut off by the output token limit, or the text itself signals the
 /// model meant to keep going.
@@ -803,6 +815,20 @@ fn auto_continue_impl(
     if !has_todo_incomplete && !has_project_tasks_incomplete && !cut_short {
         // The model produced a complete response — break any silent-drop loop.
         runtime.continue_streak = 0;
+        return;
+    }
+    // A follow-up already waiting in the queue outranks a routine "keep going"
+    // nudge.
+    //
+    // The queue — a message the user typed mid-turn, or a finished background
+    // process's result — can only go out once this runtime settles, and a nudge
+    // keeps it busy for another whole request. Nudging first therefore held the
+    // queue behind up to `max_chain` autonomous continuations: minutes of the
+    // model working on its own, which is exactly the "the queue isn't firing at
+    // the end of the turn" a user sees. Returning here without arming anything
+    // *is* the delivery: `turn_settled()` becomes true and the pump drains the
+    // front of the queue at this boundary.
+    if follow_up_outranks_nudge(runtime.queued_messages.len(), cut_short) {
         return;
     }
     // When mid-stream reasoning was salvaged and re-injected as a user message,
@@ -920,6 +946,55 @@ mod tests {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// The yield rule, pinned: a follow-up waiting in the queue takes the turn
+    /// boundary, while a response that was cut short keeps its continuation.
+    #[test]
+    fn a_queued_follow_up_outranks_a_routine_nudge_but_not_a_cut_short_turn() {
+        assert!(
+            follow_up_outranks_nudge(1, false),
+            "a waiting follow-up must take the boundary instead of being nudged past"
+        );
+        assert!(
+            !follow_up_outranks_nudge(0, false),
+            "with nothing queued the model is nudged as usual"
+        );
+        assert!(
+            !follow_up_outranks_nudge(1, true),
+            "a cut-off response finishes its own sentence first"
+        );
+    }
+
+    /// The same rule seen through the real entry point: a follow-up in the queue
+    /// does not stop a truncated turn from resuming, and it stays queued for the
+    /// next boundary rather than being dropped.
+    #[test]
+    fn a_cut_short_turn_still_continues_with_a_follow_up_queued() {
+        let (mut state, sid, mut runtime) = agent_session();
+        runtime.queued_messages.push(QueuedMessage {
+            text: "queued while you were working".into(),
+            attachments: Vec::new(),
+            kind: QueuedKind::User,
+        });
+
+        auto_continue(
+            &mut state,
+            &mut runtime,
+            "I read half of parser.rs and",
+            true,
+        );
+
+        assert_eq!(
+            continue_nudges(&state, &sid).len(),
+            1,
+            "a truncated response still resumes"
+        );
+        assert_eq!(
+            runtime.queued_messages.len(),
+            1,
+            "and the follow-up waits for the next boundary instead of vanishing"
+        );
     }
 
     /// A sub-agent can never hand off, so gating "keep going" on handoff left
