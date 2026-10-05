@@ -238,42 +238,50 @@ fn render_process(ui: &mut egui::Ui, p: &BackgroundProcess) {
             let item_w = ui.available_width();
             ui.set_min_width(item_w);
             ui.set_max_width(item_w);
-            // Lay out the trailing controls first so they reserve their width;
-            // only then does the label get the leftover space and truncate.
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if p.status == ProcessStatus::Running
-                    && ui
-                        .add(
-                            egui::Button::new(
-                                RichText::new("Kill").size(10.5).color(Palette::ERROR),
+            // `ui.horizontal` bounds this row to its content height. A bare
+            // `with_layout(right_to_left(..))` directly on the card body makes
+            // egui expand the row to the full available height (cross-aligned
+            // widgets fill the frame and center vertically), which stretched
+            // the whole card whenever the window was resized tall.
+            ui.horizontal(|ui| {
+                // Lay out the trailing controls first so they reserve their
+                // width; only then does the label get the leftover space and
+                // truncate.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if p.status == ProcessStatus::Running
+                        && ui
+                            .add(
+                                egui::Button::new(
+                                    RichText::new("Kill").size(10.5).color(Palette::ERROR),
+                                )
+                                .fill(Color32::TRANSPARENT)
+                                .stroke(Stroke::NONE)
+                                .min_size(Vec2::new(30.0, 18.0)),
                             )
-                            .fill(Color32::TRANSPARENT)
-                            .stroke(Stroke::NONE)
-                            .min_size(Vec2::new(30.0, 18.0)),
-                        )
-                        .on_hover_text("Terminate this process")
-                        .clicked()
-                {
-                    processes::request_kill(&p.id);
-                    ui.ctx().request_repaint();
-                }
-                let elapsed = p.elapsed_secs();
-                ui.label(
-                    RichText::new(format_elapsed(elapsed))
-                        .size(10.0)
-                        .color(Palette::TEXT_MUTED),
-                );
-                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    ui.label(RichText::new(icon).size(12.0).color(color));
-                    ui.add_space(2.0);
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(&p.label)
-                                .size(12.0)
-                                .color(Palette::TEXT_PRIMARY),
-                        )
-                        .truncate(),
+                            .on_hover_text("Terminate this process")
+                            .clicked()
+                    {
+                        processes::request_kill(&p.id);
+                        ui.ctx().request_repaint();
+                    }
+                    let elapsed = p.elapsed_secs();
+                    ui.label(
+                        RichText::new(format_elapsed(elapsed))
+                            .size(10.0)
+                            .color(Palette::TEXT_MUTED),
                     );
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.label(RichText::new(icon).size(12.0).color(color));
+                        ui.add_space(2.0);
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new(&p.label)
+                                    .size(12.0)
+                                    .color(Palette::TEXT_PRIMARY),
+                            )
+                            .truncate(),
+                        );
+                    });
                 });
             });
             ui.add_space(2.0);
