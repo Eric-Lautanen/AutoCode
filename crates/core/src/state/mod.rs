@@ -15,7 +15,7 @@ pub use app_state::{
     DEFAULT_HANDOFF_TRIGGER_PROMPT, DEFAULT_LOOP_WARNING_PROMPT, DEFAULT_SYSTEM_PROMPT,
 };
 pub use chat::{Attachment, AttachmentKind, ChatMessage, Role, ToolMeta};
-pub use manifest::{ModelManifest, ProviderManifest};
+pub use manifest::{ModelManifest, ProbeSpec, ProviderManifest};
 pub use project::Project;
 pub use provider::{ApiProvider, LoopAggressiveness, ProviderKind, ThinkingApi};
 pub use secret::SecretString;

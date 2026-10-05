@@ -5,6 +5,7 @@
 mod client;
 pub(crate) mod http;
 mod permits;
+pub mod probe;
 mod rate_limit;
 mod tool_defs;
 mod types;
@@ -12,6 +13,7 @@ mod web;
 
 // Re-export public API
 pub use client::{ProviderClient, count_input_tokens, fetch_models};
+pub use probe::{FetchedModel, ProbeHandle, ProbeStage, ProbeUpdate, probe_model};
 pub use rate_limit::{api_rate_limit_record, api_rate_limit_reset, api_rate_limit_wait_ms};
 pub use tool_defs::{ToolDefOptions, tool_definitions};
 pub use types::{

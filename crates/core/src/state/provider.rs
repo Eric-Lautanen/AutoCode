@@ -26,7 +26,7 @@ impl Serialize for ProviderKind {
             "openai-compatible" => {
                 serializer.serialize_unit_variant("ProviderKind", 2, "OpenAiCompatible")
             }
-            "opencode-go" => serializer.serialize_unit_variant("ProviderKind", 3, "OpenCodeGo"),
+            "opencode" => serializer.serialize_unit_variant("ProviderKind", 3, "OpenCodeGo"),
             other => serializer.collect_str(other),
         }
     }
@@ -79,7 +79,7 @@ impl ProviderKind {
         match s {
             "NvidiaNim" => return Self("nvidia-nim".into()),
             "OpenAiCompatible" => return Self("openai-compatible".into()),
-            "OpenCodeGo" => return Self("opencode-go".into()),
+            "OpenCodeGo" => return Self("opencode".into()),
             _ => {}
         }
         Self(s.to_string())
@@ -299,6 +299,9 @@ impl ApiProvider {
         let base_url = provider_manifest(&kind)
             .map(|m| m.base_url.clone())
             .unwrap_or_default();
+        // The registry carries no baked models; a provider starts with no
+        // model selected. The user picks one from the fetched list and the
+        // probe fills in real values before first use.
         let default_model = provider_manifest(&kind)
             .map(|m| m.default_model.clone())
             .unwrap_or_default();

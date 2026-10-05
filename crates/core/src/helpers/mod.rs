@@ -1,5 +1,6 @@
 pub mod id;
 pub mod paths;
+pub mod probed;
 pub mod regex;
 pub mod sanitize;
 pub mod serde_defaults;
@@ -32,6 +33,7 @@ pub use serde_defaults::{
     default_use_headless_chrome, default_web_rate_limit_ms, deserialize_secret, serialize_secret,
 };
 
+pub use probed as probed_registry;
 pub use utils::{
     budget_fraction, manifest, model_manifest, model_or_safe, model_supports_vision, panic_msg,
     parse_thinking_api, provider_ids, provider_manifest, reasoning_efforts_for_provider,

@@ -4,7 +4,7 @@ use autocode_ai::provider;
 use autocode_core::state::{AppState, ThinkingApi};
 use egui::{CollapsingHeader, Frame, Grid, Margin, RichText, ScrollArea, TextEdit};
 
-use super::state::SettingsState;
+use super::state::{ProbeJob, SettingsState};
 
 pub fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut SettingsState) {
     helpers::section_heading(ui, "API Providers");
@@ -73,6 +73,10 @@ pub fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Se
     let mut set_active_key: Option<(String, String)> = None;
     let mut disable_switch_key: Option<String> = None;
     let mut pending_rename: Option<(String, String)> = None;
+    // Deferred probe launches: (provider label, model id). Collected while
+    // iterating provider cards (which borrow state.providers mutably) and
+    // spawned after the loop, following the file's deferred-action pattern.
+    let mut pending_probes: Vec<(String, String)> = Vec::new();
 
     let card_max_w = ui.available_width();
     for key in keys {
@@ -276,24 +280,61 @@ pub fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Se
                                     }
                                 ui.end_row();
                             });
-                            // Fetch button.
+                            // Fetch button — async: spawns a worker thread and
+                            // polls the channel every frame, so the UI stays
+                            // responsive while the request is in flight.
                             ui.add_space(4.0);
+                            let fetching = settings
+                                .fetch_status
+                                .get(&key)
+                                .map(|s| s == "Fetching...")
+                                .unwrap_or(false);
                             let p_clone = p.clone();
                             let key_for_fetch = key.clone();
                             if ui
-                                .button("Fetch")
+                                .add_enabled(
+                                    !fetching,
+                                    egui::Button::new("Fetch"),
+                                )
                                 .on_hover_text("Fetch available models from API")
                                 .clicked()
                             {
-                                let models = provider::fetch_models(&p_clone);
-                                let status = format!("{} models", models.len());
-                                settings.fetched_models.insert(key_for_fetch.clone(), models);
-                                settings.fetch_status.insert(key_for_fetch, status);
+                                settings.fetch_status.insert(key.clone(), "Fetching...".into());
+                                let (tx, rx) = std::sync::mpsc::channel::<Vec<String>>();
+                                let worker_cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                                let _ = std::thread::Builder::new()
+                                    .name("model-fetch".into())
+                                    .spawn(move || {
+                                        let models = if worker_cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                                            Vec::new()
+                                        } else {
+                                            provider::fetch_models(&p_clone)
+                                        };
+                                        let _ = tx.send(models);
+                                    });
+                                settings.fetch_jobs.insert(key_for_fetch, rx);
+                            }
+                            if let Some(status) = settings.fetch_status.get(&key) {
+                                let (text, color) = if status == "Fetching..." {
+                                    (status.clone(), Palette::WARNING)
+                                } else if status.contains("failed") {
+                                    (status.clone(), Palette::ERROR)
+                                } else {
+                                    (status.clone(), Palette::SUCCESS)
+                                };
+                                ui.label(
+                                    RichText::new(text)
+                                        .size(10.0)
+                                        .color(color),
+                                );
                             }
                             // Fetched model list.
                             if let Some(models) = settings.fetched_models.get(&key)
                                 && !models.is_empty()
                             {
+                                // Clone the list out so the UI closure can
+                                // borrow `settings` mutably (filter box).
+                                let models: Vec<String> = models.clone();
                                 ui.add_space(4.0);
                                 Frame::NONE
                                     .fill(Palette::BG_BASE)
@@ -305,6 +346,30 @@ pub fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Se
                                                 .size(10.5).color(Palette::TEXT_MUTED).strong(),
                                         );
                                         ui.add_space(2.0);
+                                        // Filter box.
+                                        ui.horizontal(|ui| {
+                                            let mut filter = settings
+                                                .model_filter
+                                                .get(&key)
+                                                .cloned()
+                                                .unwrap_or_default();
+                                            let resp = ui.add(
+                                                TextEdit::singleline(&mut filter)
+                                                    .id(egui::Id::new(("model_filter", &key)))
+                                                    .hint_text("filter models...")
+                                                    .desired_width(220.0),
+                                            );
+                                            if resp.changed() {
+                                                settings.model_filter.insert(key.clone(), filter);
+                                            }
+                                        });
+                                        ui.add_space(2.0);
+                                        let filter_text = settings
+                                            .model_filter
+                                            .get(&key)
+                                            .cloned()
+                                            .unwrap_or_default()
+                                            .to_lowercase();
                                         let (_, rect) = ui.allocate_space(egui::vec2(ui.available_size().x, 300.0));
                                         let mut scroll_ui = ui.new_child(
                                             egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()),
@@ -313,9 +378,21 @@ pub fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Se
                                             .id_salt(format!("fetch_scroll_{}", &key))
                                             .max_height(300.0)
                                             .show(&mut scroll_ui, |ui| {
-                                                for m in models.iter() {
+                                                for m in models.iter().filter(|m| {
+                                                    filter_text.is_empty()
+                                                        || m.to_lowercase().contains(&filter_text)
+                                                }) {
                                                     let is_saved = p.saved_models.contains(m);
                                                     let is_active = p.model == *m;
+                                                    let probe_active = settings
+                                                        .probe_jobs
+                                                        .iter()
+                                                        .any(|j| j.provider_label == key && j.model_id == *m);
+                                                    let probe_result_key = format!("{}\u{1f}{}", key, m);
+                                                    let probe_result = settings
+                                                        .probe_results
+                                                        .get(&probe_result_key)
+                                                        .cloned();
                                                     ui.horizontal(|ui| {
                                                         ui.label(
                                                             RichText::new(m)
@@ -324,34 +401,18 @@ pub fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Se
                                                                 .monospace(),
                                                         );
                                                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                                            if is_saved {
+                                                            if probe_active {
+                                                                ui.label(
+                                                                    RichText::new("Probing...")
+                                                                        .size(9.5).color(Palette::WARNING),
+                                                                );
+                                                            } else if is_saved {
                                                                 ui.label(
                                                                     RichText::new("Saved")
                                                                         .size(9.5).color(Palette::TEXT_MUTED),
                                                                 );
-                                                            } else if ui.small_button("+ Add").clicked() {
-                                                                p.saved_models.push(m.clone());
-                                                                let defs = autocode_core::helpers::model_or_safe(&p.kind, m);
-                                                                let entry = autocode_core::storage::provider_file::ModelEntry {
-                                                                    id: m.clone(),
-                                                                    context_window: defs.context_window,
-                                                                    max_output_tokens: defs.max_output_tokens,
-                                                                    max_output_tokens_thinking: defs.max_output_tokens_thinking,
-                                                                    thinking_api: defs.thinking_api.clone(),
-                                                                    reasoning_efforts: defs.reasoning_efforts.clone(),
-                                                                    supports_cache_control: defs.supports_cache_control,
-                                                                    requests_per_hour: defs.requests_per_hour,
-                                                                    thinking_overrides: defs.thinking_overrides.clone(),
-                                                                    supports_vision: defs.supports_vision,
-                                                                    handoff_percent: p.handoff_percent,
-                                                                    temperature: p.temperature,
-                                                                    top_p: p.top_p,
-                                                                    frequency_penalty: p.frequency_penalty,
-                                                                    presence_penalty: p.presence_penalty,
-                                                                    loop_aggressiveness: autocode_core::state::LoopAggressiveness::default(),
-                                                                };
-                                                                let cm = p.models_config.get_or_insert_with(std::collections::HashMap::new);
-                                                                 cm.insert(m.clone(), entry);
+                                                            } else if ui.small_button("+ Probe & Add").clicked() {
+                                                                pending_probes.push((key.clone(), m.clone()));
                                                             }
                                                             if ui.small_button("Select").clicked() {
                                                                 p.model = m.clone();
@@ -362,6 +423,34 @@ pub fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Se
                                                             }
                                                         });
                                                     });
+                                                    // Inline progress bar for this model's probe.
+                                                    if probe_active
+                                                        && let Some(job) = settings
+                                                            .probe_jobs
+                                                            .iter()
+                                                            .find(|j| j.provider_label == key && j.model_id == *m)
+                                                    {
+                                                        let frac = job.progress_fraction();
+                                                        let bar = egui::ProgressBar::new(frac)
+                                                            .show_percentage()
+                                                            .desired_height(14.0);
+                                                        ui.add(bar);
+                                                        ui.label(
+                                                            RichText::new(job.status_text())
+                                                                .size(9.5)
+                                                                .color(Palette::TEXT_MUTED),
+                                                        );
+                                                    } else if let Some((ok, summary)) = probe_result {
+                                                        ui.label(
+                                                            RichText::new(format!(
+                                                                "{} — {}",
+                                                                if ok { "OK" } else { "FAILED" },
+                                                                summary
+                                                            ))
+                                                            .size(9.5)
+                                                            .color(if ok { Palette::SUCCESS } else { Palette::ERROR }),
+                                                        );
+                                                    }
                                                 }
                                             });
                                     });
@@ -735,6 +824,12 @@ pub fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Se
         });
     }
 
+    // Launch any probes requested inside the card loop (deferred because the
+    // loop borrows state.providers mutably).
+    for (label, model) in pending_probes {
+        start_probe(settings, state, &label, &model);
+    }
+
     if let Some((old_key, new_key)) = pending_rename
         && old_key != new_key
         && !state.providers.contains_key(&new_key)
@@ -788,5 +883,166 @@ pub fn show_providers(ui: &mut egui::Ui, state: &mut AppState, settings: &mut Se
                 sess.model = model;
             }
         }
+    }
+}
+
+// -- Probe plumbing --------------------------------------------------------------
+
+/// Launch a background probe for one model on one provider and remember the
+/// pending state so the UI can render a progress bar. Called from the
+/// "+ Probe & Add" button; the result is applied when the worker reports Done.
+pub(crate) fn start_probe(
+    settings: &mut SettingsState,
+    state: &mut AppState,
+    provider_label: &str,
+    model_id: &str,
+) {
+    let Some(p) = state.providers.get(provider_label) else {
+        return;
+    };
+    if p.api_key.as_str().is_empty() {
+        settings.probe_results.insert(
+            format!("{}\u{1f}{}", provider_label, model_id),
+            (false, "No API key set for this provider".into()),
+        );
+        return;
+    }
+    let Some(spec) =
+        autocode_core::helpers::provider_manifest(&p.kind).and_then(|m| m.probe.clone())
+    else {
+        settings.probe_results.insert(
+            format!("{}\u{1f}{}", provider_label, model_id),
+            (false, "Provider has no probe config".into()),
+        );
+        return;
+    };
+    let handle = autocode_ai::provider::probe::probe_model(p.clone(), model_id.to_string(), spec);
+    settings.probe_jobs.push(ProbeJob::new(
+        provider_label.to_string(),
+        model_id.to_string(),
+        handle,
+    ));
+    // Clear any previous result for this model while it re-probes.
+    settings
+        .probe_results
+        .remove(&format!("{}\u{1f}{}", provider_label, model_id));
+}
+
+/// Poll in-flight probe jobs and fetch jobs. Returns true if anything is
+/// still running (App::update keeps repainting while true). Runs every frame
+/// even when the settings window is closed so probes complete regardless.
+pub(crate) fn pump_probe_jobs(settings: &mut SettingsState, state: &mut AppState) -> bool {
+    let mut any_running = false;
+
+    // Model-list fetch jobs. A disconnected channel (worker gone) counts as
+    // a failed fetch so the job never leaks.
+    let done_fetches: Vec<String> = settings
+        .fetch_jobs
+        .iter()
+        .filter_map(|(label, rx)| match rx.try_recv() {
+            Ok(models) => Some((label.clone(), models)),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Some((label.clone(), Vec::new())),
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+        })
+        .flat_map(|(label, models)| {
+            if models.is_empty() {
+                settings.fetch_status.insert(
+                    label.clone(),
+                    "Fetch failed — check key/URL, see logs".into(),
+                );
+            } else {
+                settings
+                    .fetch_status
+                    .insert(label.clone(), format!("{} models", models.len()));
+                settings.fetched_models.insert(label.clone(), models);
+            }
+            Some(label)
+        })
+        .collect();
+    for label in done_fetches {
+        settings.fetch_jobs.remove(&label);
+    }
+    any_running |= !settings.fetch_jobs.is_empty();
+
+    // Model probes: drain updates, split finished jobs out for result
+    // handling. Finished handles drop here, which cancels any worker still
+    // parked on a socket read.
+    let mut running: Vec<ProbeJob> = Vec::new();
+    let mut finished: Vec<ProbeJob> = Vec::new();
+    for mut job in std::mem::take(&mut settings.probe_jobs) {
+        if job.pump() {
+            finished.push(job);
+        } else {
+            running.push(job);
+        }
+    }
+    settings.probe_jobs = running;
+    for job in finished {
+        let label = job.provider_label.clone();
+        let model = job.model_id.clone();
+        let ok = job.succeeded();
+        let summary = job.summary();
+        settings
+            .probe_results
+            .insert(format!("{}\u{1f}{}", label, model), (ok, summary));
+        if ok {
+            apply_probed_model(state, &label, &model);
+            // Persist immediately so a crash can't lose the probed model.
+            persist_providers(state);
+        }
+    }
+    any_running |= !settings.probe_jobs.is_empty();
+
+    any_running
+}
+
+/// Backfill a successfully probed model into the provider: saved_models,
+/// models_config, and select it when this is the provider's first model.
+fn apply_probed_model(state: &mut AppState, label: &str, model_id: &str) {
+    let Some(p) = state.providers.get_mut(label) else {
+        return;
+    };
+    if !p.saved_models.iter().any(|m| m == model_id) {
+        p.saved_models.push(model_id.to_string());
+        p.saved_models.sort();
+    }
+    // The probe registered the manifest in the probed registry; copy it into
+    // the per-model config so the providers.json file on disk carries it.
+    if let Some(pm) = autocode_core::helpers::probed::lookup(&p.kind, model_id) {
+        let entry = autocode_core::storage::provider_file::ModelEntry {
+            id: model_id.to_string(),
+            context_window: pm.context_window,
+            max_output_tokens: pm.max_output_tokens,
+            max_output_tokens_thinking: pm.max_output_tokens_thinking,
+            thinking_api: pm.thinking_api.clone(),
+            reasoning_efforts: pm.reasoning_efforts.clone(),
+            supports_cache_control: pm.supports_cache_control,
+            requests_per_hour: pm.requests_per_hour,
+            thinking_overrides: pm.thinking_overrides.clone(),
+            supports_vision: pm.supports_vision,
+            handoff_percent: 80,
+            temperature: 0.2,
+            top_p: 1.0,
+            frequency_penalty: 0.0,
+            presence_penalty: 0.0,
+            loop_aggressiveness: autocode_core::state::LoopAggressiveness::default(),
+        };
+        p.models_config
+            .get_or_insert_with(std::collections::HashMap::new)
+            .insert(model_id.to_string(), entry);
+    }
+    // Select the model automatically if this provider has no active model.
+    if p.model.is_empty() {
+        p.model = model_id.to_string();
+        p.fill_from_config();
+    }
+}
+
+/// Persist providers + probe results to AutoCode_data/providers.json and
+/// fold probed manifests into the on-disk file. Called on window close and
+/// after every completed probe.
+pub(crate) fn persist_providers(state: &AppState) {
+    if let Err(e) = autocode_core::storage::provider_file::save_providers_file(&state.providers) {
+        eprintln!("[settings] Failed to save providers file: {e}");
     }
 }

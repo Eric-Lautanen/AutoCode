@@ -38,7 +38,7 @@ ultimate_egui.md    |2892  egui/eframe reference notes
 ```
 assets/icon.icns              |  —   macOS app icon
 assets/icon.ico               |  —   Windows app icon
-assets/providers.json         | 190  Bundled provider configs (seeded on first launch)
+assets/providers.json         | 159  Generic provider registry: endpoints + probe specs, NO models (models are probed at runtime)
 assets/screenshot.png         |  —   README screenshot
 assets/linux/icon-16.png      |  —
 assets/linux/icon-32.png      |  —
@@ -49,7 +49,7 @@ assets/linux/icon-256.png     |  —
 assets/linux/icon-512.png     |  —
 ```
 
-## `crates/ai/` — AI Provider & Chat Orchestration (38 files, 14,626 Rust lines)
+## `crates/ai/` — AI Provider & Chat Orchestration (39 files, 18,427 Rust lines)
 
 ```
 crates/ai/Cargo.toml                          |  12
@@ -87,6 +87,7 @@ crates/ai/src/provider/mod.rs                   |  21
 crates/ai/src/provider/client.rs               | 484  request build, permit-gated pool
 crates/ai/src/provider/http.rs                 |1130  hand-rolled HTTP + SSE parser; text/parts request bodies
 crates/ai/src/provider/permits.rs              |  62  RAII request-concurrency gate (cap 16, cancel-aware)
+crates/ai/src/provider/probe.rs                |2771  automated model capability probe (context incl. tiered 1M→100K live testing, output, thinking, vision; per-spec timeouts, cold-start retry, unclean-close salvage, crawl progress)
 crates/ai/src/provider/rate_limit.rs           |  68
 crates/ai/src/provider/tool_defs.rs            | 119  26 tool definitions (+ agent-restricted profile)
 crates/ai/src/provider/types.rs                 | 165  `ContentPart`, `ApiMessage.parts`
@@ -102,14 +103,15 @@ crates/autocode/resources/app.rc               |   1   Windows resource (icon) m
 crates/autocode/src/main.rs                    |   9   `eframe::run` entry point
 ```
 
-## `crates/core/` — Shared Types, State, Storage, Utils (35 files, 8,473 Rust lines)
+## `crates/core/` — Shared Types, State, Storage, Utils (36 files, 8,541 Rust lines)
 
 ```
 crates/core/Cargo.toml                          |   8
 crates/core/src/lib.rs                          |  14
-crates/core/src/helpers/mod.rs                   |  40
+crates/core/src/helpers/mod.rs                  |  42
 crates/core/src/helpers/id.rs                    |  40
 crates/core/src/helpers/paths.rs                | 296
+crates/core/src/helpers/probed.rs                |  62  runtime-learned model registry (probe results patch the manifest)
 crates/core/src/helpers/regex.rs                | 382
 crates/core/src/helpers/sanitize.rs             |  56
 crates/core/src/helpers/serde_defaults.rs       |  95
@@ -118,9 +120,9 @@ crates/core/src/state/mod.rs                    |  23
 crates/core/src/state/access_log.rs             |  73  FileAccessLog — turn-window working-set tracker
 crates/core/src/state/app_state.rs             |1081  session/project/agent registry; load sweep; prune
 crates/core/src/state/chat.rs                   | 127  ChatMessage, Attachment types
-crates/core/src/state/manifest.rs               |  58  ModelManifest (`supports_vision`)
+crates/core/src/state/manifest.rs               | 116  ProviderManifest + ProbeSpec (`supports_vision` on ModelManifest)
 crates/core/src/state/project.rs                |  11
-crates/core/src/state/provider.rs              | 496
+crates/core/src/state/provider.rs              | 499
 crates/core/src/state/secret.rs                 |  66  SecretString
 crates/core/src/state/session.rs               | 250  Session, AgentMeta, storage_override
 crates/core/src/state/todo.rs                   | 152  ProjectMeta (+ `PersistedProcess` records)
@@ -167,7 +169,7 @@ crates/fs/src/helpers/glob_match.rs              |  74
 crates/fs/src/helpers/levenshtein.rs            |  25
 ```
 
-## `crates/ui/` — Desktop UI (egui/eframe) (50 files, 9,600 Rust lines)
+## `crates/ui/` — Desktop UI (egui/eframe) (50 files, 10,243 Rust lines)
 
 ```
 crates/ui/Cargo.toml                            |  15
@@ -202,14 +204,13 @@ crates/ui/src/helpers/todo.rs                   |  12
 crates/ui/src/helpers/tool_result.rs            | 143
 crates/ui/src/helpers/ui_id.rs                  | 179
 crates/ui/src/helpers/widgets.rs                |  51
-crates/ui/src/processes/mod.rs                  | 391  background-process window (status, output, kill, restored)
-crates/ui/src/settings/mod.rs                   |  11
+crates/ui/src/processes/mod.rs                  | 391  background-process window (status, output, kill, restored)crates/ui/src/settings/mod.rs                  |  12
 crates/ui/src/settings/about.rs                 | 223
 crates/ui/src/settings/projects.rs              | 209
 crates/ui/src/settings/prompt.rs                | 176
-crates/ui/src/settings/providers.rs             | 792  provider/model editor, per-model LRU aggressiveness
+crates/ui/src/settings/providers.rs            |1048  provider/model editor, probe progress bars, per-model LRU aggressiveness
 crates/ui/src/settings/session.rs               |  90
-crates/ui/src/settings/state.rs                 |  47
+crates/ui/src/settings/state.rs                 | 116  settings UI state + probe job tracking
 crates/ui/src/settings/timeouts.rs              | 165
 crates/ui/src/settings/window.rs                | 230  borderless window pattern (reused by agent windows)
 crates/ui/src/tasks/mod.rs                       |   5
@@ -309,11 +310,11 @@ skills/writing_tests.md                          | 233
 
 | Area | Files | Lines | Role |
 |------|-------|-------|------|
-| `crates/ai/` | 38 | 14,626 | AI provider clients, chat orchestration, parallel tool dispatch, sub-agents, background processes, HTTP/SSE, web scraping, LRU looping |
+| `crates/ai/` | 39 | 18,427 | AI provider clients, chat orchestration, parallel tool dispatch, sub-agents, background processes, HTTP/SSE, web scraping, LRU looping |
 | `crates/autocode/` | 2 | 13 | Windows binary entry point, icon embedding |
-| `crates/core/` | 34 | 8,473 | State types, persistence, helpers, tokenizer, sysinfo, HTML extraction, FileAccessLog, attachments |
+| `crates/core/` | 36 | 8,541 | State types, persistence, helpers, tokenizer, sysinfo, HTML extraction, FileAccessLog, attachments |
 | `crates/fs/` | 17 | 2,697 | File explorer, shell executor, git status, skill loader |
-| `crates/ui/` | 50 | 9,600 | egui panels — chat, settings, explorer, toolbar, agent windows, attachments, todo windows, background-process window |
+| `crates/ui/` | 50 | 10,243 | egui panels — chat, settings, explorer, toolbar, agent windows, attachments, todo windows, background-process window |
 | **Crate subtotal (Rust)** | **140** | **32,834** | 5 crates (146 files incl. manifests) |
 | `skills/` | 76 | 20,094 | Skill markdown files bundled with the binary |
 | `assets/` | 11 | — | Icons, screenshot, bundled `providers.json` |

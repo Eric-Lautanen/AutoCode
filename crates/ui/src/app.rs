@@ -526,6 +526,13 @@ impl eframe::App for AutocodeApp {
             ctx.request_repaint_after(delay);
         }
 
+        // Probe & model-fetch jobs: poll every frame even while the settings
+        // window is closed, and keep the repaint loop ticking while any probe
+        // is in flight so progress bars animate.
+        if settings::pump_probe_jobs(&mut self.settings, &mut self.state) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+
         if let Some(rx) = &self.folder_picker
             && let Ok(maybe_path) = rx.try_recv()
         {

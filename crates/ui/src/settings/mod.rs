@@ -7,5 +7,6 @@ mod state;
 mod timeouts;
 mod window;
 
+pub(crate) use providers::pump_probe_jobs;
 pub use state::SettingsState;
 pub use window::show_window;

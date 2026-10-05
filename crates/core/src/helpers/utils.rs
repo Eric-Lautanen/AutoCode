@@ -124,6 +124,7 @@ fn merge_manifest(
                 model_prefix_strip: None,
                 models_endpoint: None,
                 chat_endpoint: None,
+                probe: None,
             });
 
         manifest_entry.label = label;
@@ -141,6 +142,11 @@ pub fn provider_manifest(kind: &ProviderKind) -> Option<&'static crate::state::P
 }
 
 pub fn model_manifest(kind: &ProviderKind, model: &str) -> Option<&'static ModelManifest> {
+    // Probe-learned definitions win: a model probed this session must be
+    // visible immediately even though it is not in the OnceLock manifest.
+    if let Some(p) = crate::helpers::probed::lookup(kind, model) {
+        return Some(p);
+    }
     let prov = manifest().providers.get(kind.manifest_id())?;
     let clean = prov
         .model_prefix_strip
