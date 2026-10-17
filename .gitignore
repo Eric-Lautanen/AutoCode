@@ -48,4 +48,3 @@ build/
 
 # --- Local agent / tooling state (not part of the project) ---
 .workbuddy-ai/
-.freebuff/
